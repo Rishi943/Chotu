@@ -102,6 +102,8 @@ async def obstacle_poller(pi_client: PiClient, estop_event: asyncio.Event) -> No
 async def brain_loop():
     """Main agent loop. Waits for user input, runs LLM, dispatches tools."""
     print(f"Chotu brain started (Mode {MODE}, model: {BRAIN_MODEL})")
+    if MODE == "C":
+        print("WARNING: Mode C (WebSocket controller) is not implemented — falling back to Mode A behaviour.")
     print(f"Pi bridge: {PI_HOST}")
 
     health = await pi.health()
@@ -129,6 +131,14 @@ async def brain_loop():
         print()
 
 
+async def _run_one(tc):
+    name = tc.function.name
+    args_json = tc.function.arguments
+    dbg(f"dispatching {name}({args_json})")
+    result = await dispatch_tool(dispatch_map, name, args_json)
+    return tc, name, args_json, result
+
+
 async def _process(user_input: str):
     """One full LLM activation: call → tool loop → final response."""
     messages = build_messages(user_input)
@@ -154,8 +164,6 @@ async def _process(user_input: str):
 
     # --- Tool call loop ---
     iterations = 0
-    # Collect deferred vision messages to append AFTER all tool results in this turn
-    deferred_vision: list[dict] = []
 
     while response.choices[0].message.tool_calls and iterations < MAX_TOOL_ITERATIONS:
         assistant_msg = response.choices[0].message
@@ -165,13 +173,6 @@ async def _process(user_input: str):
         messages.append(msg_dict)
 
         deferred_vision = []
-
-        async def _run_one(tc):
-            name = tc.function.name
-            args_json = tc.function.arguments
-            dbg(f"dispatching {name}({args_json})")
-            result = await dispatch_tool(dispatch_map, name, args_json)
-            return tc, name, args_json, result
 
         # Dispatch all tool calls in parallel. gather preserves order.
         results = await asyncio.gather(*[_run_one(tc) for tc in assistant_msg.tool_calls])

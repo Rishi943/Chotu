@@ -8,3 +8,11 @@ __pycache__/
 docs/
 CHOTU.md
 CHOTU_final.md
+
+# Model files — add to models/ but don't commit binaries
+models/*.gguf
+models/*.onnx
+models/*.pt
+models/*.bin
+models/*.safetensors
+!models/.gitkeep

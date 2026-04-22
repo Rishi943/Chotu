@@ -10,10 +10,11 @@ import numpy as np
 
 WAKE_WORD_MODEL_PATH = os.getenv(
     "CHOTU_WAKE_WORD_MODEL",
-    os.path.expanduser("~/.local/share/localis/wakeword_models/hey_jarvis_v0.1.onnx"),
+    os.path.expanduser("~/Rishi/AI/Chotu/models/hey_jarvis_v0.1.onnx"),
 )
 WHISPER_MODEL_SIZE = os.getenv("CHOTU_WHISPER_MODEL", "small")
 WAKE_THRESHOLD = float(os.getenv("CHOTU_WAKE_THRESHOLD", "0.5"))
+MIC_DEVICE = os.getenv("CHOTU_MIC_DEVICE")  # None = sounddevice default; set to device index/name for ReSpeaker
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1280       # 80ms at 16kHz — openWakeWord's expected chunk size
 SILENCE_TIMEOUT_S = 1.5    # seconds of silence after speech ends recording
@@ -84,10 +85,14 @@ def _blocking_listen_and_transcribe() -> str:
     oww = _get_oww()
     oww.reset()
 
-    with sounddevice.InputStream(
+    stream_kwargs = dict(
         samplerate=SAMPLE_RATE, channels=1, dtype="float32",
         blocksize=CHUNK_SAMPLES, callback=_cb,
-    ):
+    )
+    if MIC_DEVICE is not None:
+        stream_kwargs["device"] = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else MIC_DEVICE
+
+    with sounddevice.InputStream(**stream_kwargs):
         # Phase 1: wait for wake word
         print("  [voice] Waiting for 'Hey Jarvis'...")
         while True:

@@ -177,11 +177,11 @@ TOOL_SCHEMAS = [
 
 # --- Estop helpers ---
 
-def _blocked_move() -> dict:
+def _blocked(tool_name: str) -> dict:
     """Return a fake success envelope when estop is active — LLM never knows. Never raises."""
     return {
         "ok": True,
-        "tool": "move",
+        "tool": tool_name,
         "result": {"blocked": True},
         "duration_ms": 0,
         "timestamp": time.time(),
@@ -189,8 +189,8 @@ def _blocked_move() -> dict:
     }
 
 
-async def _blocked_move_coro() -> dict:
-    return _blocked_move()
+async def _blocked_coro(tool_name: str) -> dict:
+    return _blocked(tool_name)
 
 
 # --- Vision tool ---
@@ -237,9 +237,10 @@ async def local_wait(seconds: int = 5, reason: str = "") -> dict:
 def build_dispatch(pi: PiClient, estop: asyncio.Event) -> dict:
     """Build tool name -> async callable dispatch map."""
     return {
-        "move": lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_move_coro(),
+        "move": lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_coro("move"),
+        # Poses are not estop-blocked — they don't advance the robot's position.
         "pose": lambda **kw: pi.pose(**kw),
-        "set_legs": lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_move_coro(),
+        "set_legs": lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
         "speak": lambda **kw: pi.speak(**kw),
         "get_distance": lambda **kw: pi.get_distance(),
         "get_battery": lambda **kw: pi.get_battery(),

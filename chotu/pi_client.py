@@ -10,7 +10,7 @@ class PiClient:
     def __init__(self, base_url: str):
         self.base_url = base_url
         self._default = httpx.AsyncClient(base_url=base_url, timeout=10.0)
-        self._slow = httpx.AsyncClient(base_url=base_url, timeout=30.0)  # move/dance can take 10-25s
+        self._slow = httpx.AsyncClient(base_url=base_url, timeout=30.0)  # move/pose/set_legs can take 10-25s
 
     async def health(self) -> dict:
         return await self._get("/health", "health")
@@ -23,7 +23,7 @@ class PiClient:
         })
 
     async def pose(self, name: str) -> dict:
-        return await self._post("/pose", "pose", {"name": name})
+        return await self._post_slow("/pose", "pose", {"name": name})
 
     async def set_legs(self, legs: list, speed: int = 50) -> dict:
         return await self._post_slow("/set_legs", "set_legs", {"legs": legs, "speed": speed})
