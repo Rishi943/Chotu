@@ -173,11 +173,14 @@ async def speak(req: SpeakRequest):
     start = time.time()
     logging.info(f"POST /speak  text={req.text!r}")
     try:
-        subprocess.run(
-            ["espeak", "-v", "en", req.text],
-            check=True,
-            timeout=30,
-            capture_output=True,
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["espeak", "-v", "en", req.text],
+                check=True,
+                timeout=30,
+            ),
         )
         result = _envelope("speak", {"text": req.text, "played": True}, start)
         logging.info(f"  speak ok ({result['duration_ms']}ms)")
