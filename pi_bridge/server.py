@@ -7,9 +7,12 @@ Requires sudo for GPIO / robot_hat access.
 
 import asyncio
 import base64
+import logging
 import subprocess
 import time
 from contextlib import asynccontextmanager
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 import cv2
 import robot_hat
@@ -92,25 +95,30 @@ class SpeakRequest(BaseModel):
 @app.get("/health")
 async def health():
     start = time.time()
+    logging.info("GET /health")
     return _envelope("health", {"status": "ok"}, start)
 
 
 @app.post("/move")
 async def move(req: MoveRequest):
     start = time.time()
+    logging.info(f"POST /move  direction={req.direction} steps={req.steps} speed={req.speed}")
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None,
             lambda: crawler.do_action(req.direction, req.steps, req.speed),
         )
-        return _envelope("move", {
+        result = _envelope("move", {
             "direction": req.direction,
             "steps_requested": req.steps,
             "steps_completed": req.steps,
             "halted_early": False,
         }, start)
+        logging.info(f"  move ok ({result['duration_ms']}ms)")
+        return result
     except Exception as e:
+        logging.error(f"  move error: {e}")
         return _envelope("move", {
             "direction": req.direction,
             "steps_requested": req.steps,
@@ -122,21 +130,23 @@ async def move(req: MoveRequest):
 @app.post("/pose")
 async def pose(req: PoseRequest):
     start = time.time()
+    logging.info(f"POST /pose  name={req.name}")
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: crawler.do_action(req.name))
         held_ms = int((time.time() - start) * 1000)
-        return _envelope("pose", {
-            "pose": req.name,
-            "held_ms": held_ms,
-        }, start)
+        result = _envelope("pose", {"pose": req.name, "held_ms": held_ms}, start)
+        logging.info(f"  pose ok ({held_ms}ms)")
+        return result
     except Exception as e:
+        logging.error(f"  pose error: {e}")
         return _envelope("pose", {"pose": req.name, "held_ms": 0}, start, str(e))
 
 
 @app.post("/speak")
 async def speak(req: SpeakRequest):
     start = time.time()
+    logging.info(f"POST /speak  text={req.text!r}")
     try:
         subprocess.run(
             ["espeak", "-v", "en", req.text],
@@ -144,54 +154,60 @@ async def speak(req: SpeakRequest):
             timeout=30,
             capture_output=True,
         )
-        return _envelope("speak", {
-            "text": req.text,
-            "played": True,
-        }, start)
+        result = _envelope("speak", {"text": req.text, "played": True}, start)
+        logging.info(f"  speak ok ({result['duration_ms']}ms)")
+        return result
     except Exception as e:
+        logging.error(f"  speak error: {e}")
         return _envelope("speak", {"text": req.text, "played": False}, start, str(e))
 
 
 @app.get("/distance")
 async def distance():
     start = time.time()
+    logging.info("GET /distance")
     try:
         cm = float(us.read())
         reliable = 2.0 <= cm <= 300.0
-        return _envelope("get_distance", {
-            "cm": round(cm, 1),
-            "reliable": reliable,
-        }, start)
+        result = _envelope("get_distance", {"cm": round(cm, 1), "reliable": reliable}, start)
+        logging.info(f"  distance={cm}cm reliable={reliable}")
+        return result
     except Exception as e:
+        logging.error(f"  distance error: {e}")
         return _envelope("get_distance", {"cm": 0, "reliable": False}, start, str(e))
 
 
 @app.post("/capture")
 async def capture():
     start = time.time()
+    logging.info("POST /capture")
     try:
         frame = Vilib.img
         if frame is None:
+            logging.warning("  capture: no frame available")
             return _envelope("capture", {}, start, "no frame available from camera")
         _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         image_b64 = base64.b64encode(buf).decode()
+        kb = len(image_b64) * 3 // 4 // 1024
+        logging.info(f"  capture ok (~{kb}KB, {int((time.time()-start)*1000)}ms)")
         return _envelope("capture", {"image_base64": image_b64}, start)
     except Exception as e:
+        logging.error(f"  capture error: {e}")
         return _envelope("capture", {}, start, str(e))
 
 
 @app.get("/battery")
 async def battery():
     start = time.time()
+    logging.info("GET /battery")
     try:
         voltage = _read_battery_voltage()
         percent = _voltage_to_percent(voltage)
-        return _envelope("battery", {
-            "voltage": voltage,
-            "percent": percent,
-            "charging": False,
-        }, start)
+        result = _envelope("battery", {"voltage": voltage, "percent": percent, "charging": False}, start)
+        logging.info(f"  battery {voltage}V {percent}%")
+        return result
     except Exception as e:
+        logging.error(f"  battery error: {e}")
         return _envelope("battery", {}, start, str(e))
 
 

@@ -4,7 +4,7 @@
 def build_system_prompt(mode: str = "A") -> str:
     """Build the full system prompt with mode injected."""
     mode_desc = MODE_DESCRIPTIONS.get(mode, MODE_DESCRIPTIONS["A"])
-    return SYSTEM_PROMPT_TEMPLATE.format(mode_description=mode_desc)
+    return SYSTEM_PROMPT_TEMPLATE.replace("{mode_description}", mode_desc)
 
 
 MODE_DESCRIPTIONS = {

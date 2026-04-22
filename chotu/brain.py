@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import traceback
 from collections import deque
 
 from dotenv import load_dotenv
@@ -23,12 +24,13 @@ BRAIN_KEY = os.getenv("CHOTU_BRAIN_KEY", "not-needed")
 BRAIN_MODEL = os.getenv("CHOTU_BRAIN_MODEL", "qwen3.5-4b")
 MODE = os.getenv("CHOTU_MODE", "A")
 MAX_TOOL_ITERATIONS = 10
+DEBUG = os.getenv("CHOTU_DEBUG", "0") == "1"
 
 
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
-llm = AsyncOpenAI(base_url=BRAIN_URL, api_key=BRAIN_KEY)
+llm = AsyncOpenAI(base_url=BRAIN_URL, api_key=BRAIN_KEY, timeout=60.0)
 dispatch_map = build_dispatch(pi)
 memory: deque = deque(maxlen=15)
 input_queue: asyncio.Queue = asyncio.Queue()
@@ -39,35 +41,29 @@ input_queue: asyncio.Queue = asyncio.Queue()
 def build_messages(user_input: str) -> list[dict]:
     """Build the full message list for the LLM from memory + new input."""
     messages = [{"role": "system", "content": build_system_prompt(MODE)}]
-
-    # Replay memory as conversation history
     for entry in memory:
         messages.append(entry)
-
-    # Add new user input
     messages.append({"role": "user", "content": user_input})
-
     return messages
 
 
 # --- Terminal output ---
 
+def dbg(msg: str):
+    if DEBUG:
+        print(f"  [dbg] {msg}")
+
 def print_tool_call(name: str, args: dict, result: dict):
-    """Pretty-print a tool call and its result."""
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
     ok = result.get("ok", False)
     ms = result.get("duration_ms", 0)
     status = "ok" if ok else f"FAIL: {result.get('error', '?')}"
     print(f"  [{name}] {args_str} -> {status} ({ms}ms)")
 
-
 def print_speak(text: str):
-    """Highlight speak output."""
     print(f'  [speaks] "{text}"')
 
-
 def print_monologue(text: str):
-    """Print inner monologue."""
     if text and text.strip():
         print(f"  [thinks] {text.strip()}")
 
@@ -79,13 +75,12 @@ async def brain_loop():
     print(f"Chotu brain started (Mode {MODE}, model: {BRAIN_MODEL})")
     print(f"Pi bridge: {PI_HOST}")
 
-    # Health check
     health = await pi.health()
     if health.get("ok"):
         print("Pi bridge: connected")
     else:
         print(f"Pi bridge: NOT reachable ({health.get('error', '?')})")
-        print("  Tools will return error envelopes. Continuing anyway.\n")
+        print("  Tools will return error envelopes. Continuing anyway.")
 
     print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
 
@@ -96,8 +91,103 @@ async def brain_loop():
 
         print(f"\n--- Chotu thinking ---")
 
-        messages = build_messages(user_input)
+        try:
+            await _process(user_input)
+        except Exception as e:
+            print(f"  [brain error] {e}")
+            traceback.print_exc()
 
+        print()
+
+
+async def _process(user_input: str):
+    """One full LLM activation: call → tool loop → final response."""
+    messages = build_messages(user_input)
+
+    dbg(f"sending {len(messages)} messages to LLM")
+    try:
+        response = await llm.chat.completions.create(
+            model=BRAIN_MODEL,
+            messages=messages,
+            tools=TOOL_SCHEMAS,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+    except Exception as e:
+        print(f"  LLM error: {e}")
+        return
+
+    if not response.choices:
+        print("  LLM error: empty choices in response")
+        return
+
+    dbg(f"LLM responded: tool_calls={bool(response.choices[0].message.tool_calls)}, "
+        f"content={bool(response.choices[0].message.content)}")
+
+    # --- Tool call loop ---
+    iterations = 0
+    # Collect deferred vision messages to append AFTER all tool results in this turn
+    deferred_vision: list[dict] = []
+
+    while response.choices[0].message.tool_calls and iterations < MAX_TOOL_ITERATIONS:
+        assistant_msg = response.choices[0].message
+
+        # Serialise assistant message, strip None fields (some llama.cpp builds reject them)
+        msg_dict = {k: v for k, v in assistant_msg.model_dump().items() if v is not None}
+        messages.append(msg_dict)
+
+        deferred_vision = []
+
+        for tool_call in assistant_msg.tool_calls:
+            name = tool_call.function.name
+            args_json = tool_call.function.arguments
+
+            dbg(f"dispatching {name}({args_json})")
+            result = await dispatch_tool(dispatch_map, name, args_json)
+
+            try:
+                args = json.loads(args_json) if args_json else {}
+            except json.JSONDecodeError:
+                args = {"_raw": args_json}
+            print_tool_call(name, args, result)
+
+            if name == "speak" and result.get("ok"):
+                print_speak(args.get("text", ""))
+
+            # capture_vision: append tool ack now, defer the image user-message
+            # until after ALL tool results — avoids invalid tool-after-user ordering
+            if name == "capture_vision" and result.get("ok"):
+                image_b64 = result["result"].get("image_base64", "")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": "Camera snapshot taken.",
+                })
+                if image_b64:
+                    deferred_vision.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                            },
+                            {
+                                "type": "text",
+                                "text": "This is your current camera view. Describe what you observe.",
+                            },
+                        ],
+                    })
+            else:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(result),
+                })
+
+        # Append vision images after all tool results for this turn
+        for msg in deferred_vision:
+            messages.append(msg)
+
+        dbg(f"follow-up LLM call (iteration {iterations + 1})")
         try:
             response = await llm.chat.completions.create(
                 model=BRAIN_MODEL,
@@ -106,97 +196,25 @@ async def brain_loop():
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
         except Exception as e:
-            print(f"  LLM error: {e}")
-            continue
+            print(f"  LLM error on follow-up: {e}")
+            return
 
-        # Tool call loop
-        iterations = 0
-        while response.choices[0].message.tool_calls and iterations < MAX_TOOL_ITERATIONS:
-            assistant_msg = response.choices[0].message
+        if not response.choices:
+            print("  LLM error: empty choices on follow-up")
+            return
 
-            # Add assistant message (with tool calls) to messages.
-            # Exclude None-valued fields that some llama.cpp builds reject.
-            msg_dict = {k: v for k, v in assistant_msg.model_dump().items() if v is not None}
-            messages.append(msg_dict)
+        dbg(f"follow-up responded: tool_calls={bool(response.choices[0].message.tool_calls)}")
+        iterations += 1
 
-            for tool_call in assistant_msg.tool_calls:
-                name = tool_call.function.name
-                args_json = tool_call.function.arguments
+    if iterations >= MAX_TOOL_ITERATIONS:
+        print("  [safety] Tool call limit reached, stopping.")
 
-                # Dispatch
-                result = await dispatch_tool(dispatch_map, name, args_json)
+    final_text = response.choices[0].message.content
+    print_monologue(final_text)
 
-                # Print to terminal
-                try:
-                    args = json.loads(args_json) if args_json else {}
-                except json.JSONDecodeError:
-                    args = {"_raw": args_json}
-                print_tool_call(name, args, result)
-
-                # Highlight speak calls
-                if name == "speak" and result.get("ok"):
-                    print_speak(args.get("text", ""))
-
-                # Add tool result to messages.
-                # capture_vision: feed the raw image directly into the LLM context
-                # so Qwen3.5 (multimodal) can analyse it natively.
-                if name == "capture_vision" and result.get("ok"):
-                    image_b64 = result["result"].get("image_base64", "")
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": "Camera snapshot taken. Image follows in next message.",
-                    })
-                    if image_b64:
-                        messages.append({
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                                },
-                                {
-                                    "type": "text",
-                                    "text": "This is your current camera view. What do you observe?",
-                                },
-                            ],
-                        })
-                else:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(result),
-                    })
-
-            # Next LLM turn
-            try:
-                response = await llm.chat.completions.create(
-                    model=BRAIN_MODEL,
-                    messages=messages,
-                    tools=TOOL_SCHEMAS,
-                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-                )
-            except Exception as e:
-                print(f"  LLM error on follow-up: {e}")
-                break
-
-            iterations += 1
-
-        if iterations >= MAX_TOOL_ITERATIONS:
-            print("  [safety] Tool call limit reached, stopping.")
-
-        # Final text response = inner monologue
-        final_text = response.choices[0].message.content
-        print_monologue(final_text)
-
-        # Save to memory: user input and final assistant text.
-        # Tool call details are within-activation context.
-        # Between activations, the LLM only needs to know what was said.
-        memory.append({"role": "user", "content": user_input})
-        if final_text:
-            memory.append({"role": "assistant", "content": final_text})
-
-        print()  # blank line between interactions
+    memory.append({"role": "user", "content": user_input})
+    if final_text:
+        memory.append({"role": "assistant", "content": final_text})
 
 
 # --- Input loop ---
@@ -220,9 +238,14 @@ async def main():
 
     try:
         await asyncio.gather(brain_task, input_task)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass
+    except Exception as e:
+        print(f"\n[fatal] Unhandled exception: {e}")
+        traceback.print_exc()
     finally:
+        brain_task.cancel()
+        input_task.cancel()
         print("\nChotu shutting down. Bye!")
 
 
