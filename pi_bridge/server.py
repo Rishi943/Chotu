@@ -44,6 +44,7 @@ ERIDIAN_MAP = {
     "confused":     "curious.wav",
     "excited":      "amaze.wav",
     "delighted":    "amaze.wav",
+    "happy":        "amaze.wav",
     "affectionate": "affectionate.wav",
     "alarmed":      "alarmed.wav",
     "speak":        "speak.wav",
