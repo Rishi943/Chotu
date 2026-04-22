@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 from chotu.pi_client import PiClient
 from chotu.system_prompt import build_system_prompt
 from chotu.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
+from chotu.voice import listen_and_transcribe
 
 
 # --- Config ---
@@ -23,17 +24,20 @@ BRAIN_URL = os.getenv("CHOTU_BRAIN_URL", "http://localhost:8080/v1")
 BRAIN_KEY = os.getenv("CHOTU_BRAIN_KEY", "not-needed")
 BRAIN_MODEL = os.getenv("CHOTU_BRAIN_MODEL", "qwen3.5-4b")
 MODE = os.getenv("CHOTU_MODE", "A")
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 20
 DEBUG = os.getenv("CHOTU_DEBUG", "0") == "1"
+VOICE_ENABLED = os.getenv("CHOTU_VOICE", "0") == "1"
 
 
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
 llm = AsyncOpenAI(base_url=BRAIN_URL, api_key=BRAIN_KEY, timeout=60.0)
-dispatch_map = build_dispatch(pi)
 memory: deque = deque(maxlen=15)
 input_queue: asyncio.Queue = asyncio.Queue()
+OBSTACLE_CM = 15
+estop: asyncio.Event = asyncio.Event()
+dispatch_map = build_dispatch(pi, estop)
 
 
 # --- Message building ---
@@ -66,6 +70,28 @@ def print_speak(text: str):
 def print_monologue(text: str):
     if text and text.strip():
         print(f"  [thinks] {text.strip()}")
+
+
+# --- Obstacle poller ---
+
+async def obstacle_poller(pi_client: PiClient, estop_event: asyncio.Event) -> None:
+    """Poll distance sensor every 200ms. Set estop_event when obstacle < OBSTACLE_CM."""
+    while True:
+        result = await pi_client.get_distance()
+        if result.get("ok"):
+            cm = result.get("result", {}).get("cm", 9999)
+            if cm <= 0:
+                pass  # sensor returned invalid reading (e.g. -1.0), ignore
+            elif cm < OBSTACLE_CM:
+                if not estop_event.is_set():
+                    dbg(f"[estop] obstacle at {cm:.1f}cm — movement blocked")
+                estop_event.set()
+            else:
+                if estop_event.is_set():
+                    dbg(f"[estop] clear ({cm:.1f}cm)")
+                estop_event.clear()
+
+        await asyncio.sleep(0.2)
 
 
 # --- Brain loop ---
@@ -137,13 +163,17 @@ async def _process(user_input: str):
 
         deferred_vision = []
 
-        for tool_call in assistant_msg.tool_calls:
-            name = tool_call.function.name
-            args_json = tool_call.function.arguments
-
+        async def _run_one(tc):
+            name = tc.function.name
+            args_json = tc.function.arguments
             dbg(f"dispatching {name}({args_json})")
             result = await dispatch_tool(dispatch_map, name, args_json)
+            return tc, name, args_json, result
 
+        # Dispatch all tool calls in parallel. gather preserves order.
+        results = await asyncio.gather(*[_run_one(tc) for tc in assistant_msg.tool_calls])
+
+        for tool_call, name, args_json, result in results:
             try:
                 args = json.loads(args_json) if args_json else {}
             except json.JSONDecodeError:
@@ -229,15 +259,28 @@ async def input_loop():
             break
 
 
+async def voice_loop():
+    """Wait for wake word, transcribe, push result to input_queue."""
+    print("  [voice] Voice input active — say 'Hey Jarvis' to speak to Chotu.")
+    while True:
+        text = await listen_and_transcribe()
+        if text.strip():
+            input_queue.put_nowait(text)
+
+
 # --- Main ---
 
 async def main():
-    """Start brain and input loops."""
+    """Start brain, input, and obstacle poller loops."""
     brain_task = asyncio.create_task(brain_loop())
-    input_task = asyncio.create_task(input_loop())
+    if VOICE_ENABLED:
+        input_task = asyncio.create_task(voice_loop())
+    else:
+        input_task = asyncio.create_task(input_loop())
+    poller_task = asyncio.create_task(obstacle_poller(pi, estop))
 
     try:
-        await asyncio.gather(brain_task, input_task)
+        await asyncio.gather(brain_task, input_task, poller_task)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     except Exception as e:
@@ -246,7 +289,13 @@ async def main():
     finally:
         brain_task.cancel()
         input_task.cancel()
-        print("\nChotu shutting down. Bye!")
+        poller_task.cancel()
+        print("\nChotu sitting down...")
+        try:
+            await asyncio.wait_for(pi.pose("sit"), timeout=5.0)
+        except Exception:
+            pass
+        print("Chotu shutting down. Bye!")
 
 
 if __name__ == "__main__":

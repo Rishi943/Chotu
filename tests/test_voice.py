@@ -126,3 +126,32 @@ def test_blocking_listen_transcribes(monkeypatch):
 
     result = v._blocking_listen_and_transcribe()
     assert result == "hello chotu"
+
+
+@pytest.mark.asyncio
+async def test_voice_loop_pushes_to_queue(monkeypatch):
+    """voice_loop() should push transcribed text into input_queue."""
+    import asyncio
+    import chotu.brain as brain
+
+    call_count = {"n": 0}
+
+    async def fake_listen():
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return "walk forward"
+        await asyncio.sleep(999)
+
+    monkeypatch.setattr("chotu.brain.listen_and_transcribe", fake_listen)
+    monkeypatch.setattr(brain, "input_queue", asyncio.Queue())
+
+    task = asyncio.create_task(brain.voice_loop())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert not brain.input_queue.empty()
+    assert brain.input_queue.get_nowait() == "walk forward"
