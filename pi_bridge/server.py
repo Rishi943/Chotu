@@ -88,6 +88,11 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class SetLegsRequest(BaseModel):
+    legs: list[list[float]]  # 4 × [x, y, z] in mm
+    speed: int = 50
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -141,6 +146,26 @@ async def pose(req: PoseRequest):
     except Exception as e:
         logging.error(f"  pose error: {e}")
         return _envelope("pose", {"pose": req.name, "held_ms": 0}, start, str(e))
+
+
+@app.post("/set_legs")
+async def set_legs(req: SetLegsRequest):
+    start = time.time()
+    logging.info(f"POST /set_legs  legs={req.legs} speed={req.speed}")
+    try:
+        if len(req.legs) != 4 or any(len(leg) != 3 for leg in req.legs):
+            raise ValueError("legs must be 4 × [x, y, z]")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: crawler.do_step(req.legs, req.speed),
+        )
+        result = _envelope("set_legs", {"legs": req.legs, "speed": req.speed}, start)
+        logging.info(f"  set_legs ok ({result['duration_ms']}ms)")
+        return result
+    except Exception as e:
+        logging.error(f"  set_legs error: {e}")
+        return _envelope("set_legs", {"legs": req.legs, "speed": req.speed}, start, str(e))
 
 
 @app.post("/speak")

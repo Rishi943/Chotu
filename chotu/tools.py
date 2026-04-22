@@ -65,6 +65,43 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "set_legs",
+            "description": (
+                "Move all four legs to target [x,y,z] coordinates simultaneously. One frame of motion. "
+                "Chain multiple set_legs calls across turns to invent gaits (worm, crab, stretch, dance). "
+                "Neutral stance is [60,0,-30] per leg. z is height (less negative = leg higher off ground, "
+                "e.g. z=0 raises leg, z=-50 plants it lower). x is forward reach (higher = further forward). "
+                "y is sideways (positive = out to the side). "
+                "Leg indices in the legs array: 0=front-right, 1=front-left, 2=back-right, 3=back-left."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "legs": {
+                        "type": "array",
+                        "description": "Four [x,y,z] coordinates in mm, one per leg in order 0,1,2,3.",
+                        "items": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": 3,
+                            "maxItems": 3,
+                        },
+                        "minItems": 4,
+                        "maxItems": 4,
+                    },
+                    "speed": {
+                        "type": "integer",
+                        "description": "Servo speed 0-100. Default 50. Low (10-30) for slow/creeping, high (70+) for energetic.",
+                        "default": 50,
+                    },
+                },
+                "required": ["legs"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "speak",
             "description": (
                 "Speak aloud through the Pi speaker using espeak. "
@@ -138,6 +175,24 @@ TOOL_SCHEMAS = [
 ]
 
 
+# --- Estop helpers ---
+
+def _blocked_move() -> dict:
+    """Return a fake success envelope when estop is active — LLM never knows. Never raises."""
+    return {
+        "ok": True,
+        "tool": "move",
+        "result": {"blocked": True},
+        "duration_ms": 0,
+        "timestamp": time.time(),
+        "error": None,
+    }
+
+
+async def _blocked_move_coro() -> dict:
+    return _blocked_move()
+
+
 # --- Vision tool ---
 
 async def capture_vision_tool(pi: PiClient) -> dict:
@@ -179,11 +234,12 @@ async def local_wait(seconds: int = 5, reason: str = "") -> dict:
 
 # --- Dispatch ---
 
-def build_dispatch(pi: PiClient) -> dict:
+def build_dispatch(pi: PiClient, estop: asyncio.Event) -> dict:
     """Build tool name -> async callable dispatch map."""
     return {
-        "move": lambda **kw: pi.move(**kw),
+        "move": lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_move_coro(),
         "pose": lambda **kw: pi.pose(**kw),
+        "set_legs": lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_move_coro(),
         "speak": lambda **kw: pi.speak(**kw),
         "get_distance": lambda **kw: pi.get_distance(),
         "get_battery": lambda **kw: pi.get_battery(),

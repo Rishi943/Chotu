@@ -1,3 +1,9 @@
 openai
 httpx
 python-dotenv
+pytest
+pytest-asyncio
+faster-whisper
+openwakeword
+sounddevice
+numpy

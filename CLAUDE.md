@@ -32,7 +32,7 @@ Key points:
 - Start Pi bridge: `ssh chotu@chotu.local` then `sudo ~/chotu-bridge/.venv/bin/python3 ~/chotu-bridge/server.py`
 - Start brain: `source .venv/bin/activate && python3 -m chotu.brain`
 - Debug mode: `CHOTU_DEBUG=1 python3 -m chotu.brain`
-- Start llama-server first: `llama-server -m /home/rishi/.local/share/localis/models/Qwen3.5-4B-Q4_K_M.gguf --port 8080 -ngl 99`
+- Start llama-server first: `llama-server -m /home/rishi/.local/share/localis/models/Qwen3.5-4B-Q4_K_M.gguf --mmproj /home/rishi/.local/share/localis/models/mmproj-BF16.gguf --port 8080 -ngl 99 -c 8192 --parallel 1`
 
 ## Laptop Code (`chotu/`)
 
@@ -45,9 +45,11 @@ Key points:
 
 ## Pi Bridge (`~/chotu-bridge/server.py`)
 
-Single-file FastAPI server. Endpoints: `/move`, `/pose`, `/speak`, `/distance`, `/capture`, `/battery`, `/health`. All return the standard envelope.
+Single-file FastAPI server. Endpoints: `/move`, `/pose`, `/set_legs`, `/speak`, `/distance`, `/capture`, `/battery`, `/health`. All return the standard envelope.
 
 **`/dance` was removed** — `do_action("dance")` runs an infinite loop on the PiCrawler and cannot be reliably bounded.
+
+**`/set_legs`** — takes `{legs: [[x,y,z]×4], speed}` and calls `crawler.do_step(legs, speed)` in a thread executor. Lets the LLM invent custom poses and gaits frame-by-frame.
 
 ## Conventions
 
@@ -78,23 +80,71 @@ Note: venv must use `--system-site-packages` so it can see picrawler/vilib/robot
 - **Vision**: Qwen3.5 is multimodal. For `capture_vision`, the JPEG is injected as a multimodal `user` message deferred until AFTER all tool results in the same turn — inserting it mid-loop creates an invalid tool→user→tool sequence that llama-server rejects
 - **system_prompt.py**: use `.replace("{mode_description}", ...)` not `.format()` — the template contains JSON examples with `{...}` that confuse str.format()
 
-## Tools (6 active)
+## Tools (8 active)
 
 | Tool | Side | Notes |
 |---|---|---|
 | `move(direction, steps, speed)` | Pi | direction: forward/backward/turn left/turn right |
 | `pose(name)` | Pi | stand/sit/wave/push up/look up/look down/look left/look right |
-| `speak(text)` | Pi | espeak TTS, broken English only |
+| `set_legs(legs, speed)` | Pi | Four `[x,y,z]` coords. Neutral `[60,0,-30]`. z=height, x=reach, y=sideways. Leg indices: 0=FR, 1=FL, 2=BR, 3=BL. Chain calls for gaits. |
+| `speak(text)` | Pi | espeak TTS, Rocky broken English only |
 | `get_distance()` | Pi | ultrasonic, returns cm |
 | `get_battery()` | Pi | voltage + percent |
-| `capture_vision()` | Pi+laptop | Pi captures JPEG; laptop injects it into LLM context |
+| `capture_vision()` | Pi+laptop | Pi captures JPEG; laptop injects as deferred user-message after all tool results |
 | `wait(seconds, reason)` | laptop | local asyncio.sleep |
 
-## Phase Status
+**Parallel dispatch:** `brain.py` uses `asyncio.gather()` so multiple tool calls in one LLM turn fire concurrently (e.g. `move` + `speak` run together). Order is preserved for message construction. `MAX_TOOL_ITERATIONS = 20` to leave room for chained `set_legs` gaits.
 
-- **Phase 1 (complete):** Text chat → LLM → physical movement. Pi bridge, laptop agent, tool dispatch, system prompt, end-to-end wiring.
-- **Next — Task 10:** Obstacle reflex — asyncio task polling `get_distance()` every 200ms, `estop` event blocks movement tools when obstacle < threshold.
-- **Next — Task 11:** Mode B heartbeat — 5-second autonomous tick, vilib tag events fed into brain.
+## Personality (current state)
+
+Chotu is a small curious creature — not a robot, never self-labels. Voice modeled on Rocky from *Project Hail Mary*: no articles, short fragments, "question?" suffix, repetition ("amaze amaze amaze"), addresses people as "friend". Emotional range is restricted to four: curiosity, wonder, excitement, confusion. No grumpiness or sarcasm.
+
+Key prompt sections (in `chotu/system_prompt.py`):
+- Section 5 explicitly deflects "are you a robot?" — Chotu says "not know word" rather than confirming
+- Section 7 documents the leg coordinate system for `set_legs`
+- Section 10 **STOP RULES** — hard caps per request type (conversational = 1 speak, physical = 1 tool + 1 speak, gait = 4-6 frames total). Without these the model loops pathologically.
+
+## Dry-run harness
+
+`scripts/dry_run.py` — runs the real brain loop against llama-server but fakes every Pi response. Use when the Pi is unplugged/charging to evaluate personality and tool-call behavior in isolation.
+
+```bash
+python -m scripts.dry_run                       # interactive
+python -m scripts.dry_run "walk and say hi"     # one-shot
+```
+
+Prints tool calls with args, speak text, and final inner monologue. No Pi traffic, no movement.
+
+## Done
+
+- Phase 1 — chat → LLM → movement, full end-to-end wiring
+- Obstacle reflex — `obstacle_poller` polls distance every 200ms; `estop` event blocks movement tools at <15cm
+- `set_legs` — per-leg coordinate control wired through Pi bridge, pi_client, tools schema, and dispatch
+- Parallel tool dispatch in `brain.py` (move + speak fire concurrently)
+- Personality rewrite — Rocky voice, creature identity, four-emotion range, explicit STOP rules
+- Dry-run harness for offline prompt evaluation
+
+## What to do next
+
+- **Pi-side obstacle check for `set_legs`** — current estop only gates `move` in the brain dispatch; `set_legs` is also gated but a low-z sequence could still drag the body. Consider Pi-side z-safety floor.
+- **Mode B heartbeat** — 5-second autonomous tick, vilib tag events fed into the brain loop as user-role messages. Currently Mode B is plumbed into the system prompt but no actual heartbeat task is running.
+- **Voice input** — ReSpeaker mic + local STT (whisper.cpp). Currently input is terminal-only.
+- **Runtime verification on real Pi** after charging — walk this battery against the physical robot:
+  - `"walk forward 2 steps and say hi"` — observe parallel `move` + `speak`
+  - `"stretch"` — single `set_legs` frame
+  - `"be a worm"` — 4-6 chained `set_legs` frames, stops cleanly
+  - `"are you a robot?"` — deflects, does not self-label
+  - `"how are you feeling?"` — single `speak`, no chain
+- **Memory persistence** — current `memory` is a `deque(maxlen=15)` in-process; lost on restart. Phase gate says no SQLite yet, but a simple jsonl append log would survive restarts.
+- **Token budget monitoring** — system prompt is ~9.3KB (~1450 words). Tool schemas add more. Log total prompt tokens per turn to catch context bloat.
+
+## PiCrawler Physical Dimensions
+
+- Body length: ~15cm (front to back)
+- Weight: ~960g
+- Legs: 4 × 3-servo legs (12 servos total), aluminum alloy frame
+- Ultrasonic sensor: mounted front-center
+- **Safe obstacle stop threshold: 15cm** — robot body length, gives ~0cm margin at trigger point; tune up if it clips obstacles
 
 ## Rules
 

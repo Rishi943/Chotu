@@ -25,6 +25,9 @@ class PiClient:
     async def pose(self, name: str) -> dict:
         return await self._post("/pose", "pose", {"name": name})
 
+    async def set_legs(self, legs: list, speed: int = 50) -> dict:
+        return await self._post_slow("/set_legs", "set_legs", {"legs": legs, "speed": speed})
+
     async def speak(self, text: str) -> dict:
         return await self._post("/speak", "speak", {"text": text})
 
