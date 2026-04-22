@@ -12,7 +12,6 @@ from openai import AsyncOpenAI
 from chotu.pi_client import PiClient
 from chotu.system_prompt import build_system_prompt
 from chotu.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
-from chotu.voice import listen_and_transcribe
 
 
 # --- Config ---
@@ -27,6 +26,10 @@ MODE = os.getenv("CHOTU_MODE", "A")
 MAX_TOOL_ITERATIONS = 20
 DEBUG = os.getenv("CHOTU_DEBUG", "0") == "1"
 VOICE_ENABLED = os.getenv("CHOTU_VOICE", "0") == "1"
+
+listen_and_transcribe = None  # replaced below when VOICE_ENABLED
+if VOICE_ENABLED:
+    from chotu.voice import listen_and_transcribe
 
 
 # --- Globals ---
@@ -263,7 +266,12 @@ async def voice_loop():
     """Wait for wake word, transcribe, push result to input_queue."""
     print("  [voice] Voice input active — say 'Hey Jarvis' to speak to Chotu.")
     while True:
-        text = await listen_and_transcribe()
+        try:
+            text = await listen_and_transcribe()
+        except Exception as e:
+            print(f"  [voice error] {e}")
+            await asyncio.sleep(1.0)
+            continue
         if text.strip():
             input_queue.put_nowait(text)
 

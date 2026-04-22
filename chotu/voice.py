@@ -3,6 +3,7 @@
 import asyncio
 import os
 import queue
+import threading
 import numpy as np
 
 # --- Config ---
@@ -36,8 +37,6 @@ def _is_speech(chunk: np.ndarray, threshold: float = ENERGY_SILENCE) -> bool:
 
 
 # --- Lazy model singletons ---
-
-import threading
 
 WhisperModel = None  # set on first use by _get_whisper
 OWWModel = None      # set on first use by _get_oww
