@@ -18,10 +18,11 @@ def test_audio_to_int16_range():
 
 def test_audio_to_int16_clips_over_range():
     from chotu.voice import _audio_to_int16
-    # Values slightly outside [-1, 1] shouldn't crash (clip to int16 bounds)
     chunk = np.array([1.5, -1.5], dtype=np.float32)
     result = _audio_to_int16(chunk)
     assert result.dtype == np.int16
+    assert result[0] == 32767
+    assert result[1] == -32768
 
 
 def test_is_speech_loud_chunk():
@@ -42,3 +43,8 @@ def test_is_speech_custom_threshold():
     chunk = np.full(1280, 0.05, dtype=np.float32)
     assert _is_speech(chunk, threshold=0.1) is False
     assert _is_speech(chunk, threshold=0.01) is True
+
+
+def test_is_speech_empty_chunk():
+    from chotu.voice import _is_speech
+    assert _is_speech(np.array([], dtype=np.float32)) is False

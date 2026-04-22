@@ -30,4 +30,6 @@ def _audio_to_int16(chunk: np.ndarray) -> np.ndarray:
 
 def _is_speech(chunk: np.ndarray, threshold: float = ENERGY_SILENCE) -> bool:
     """Return True if RMS energy of chunk exceeds threshold."""
+    if chunk.size == 0:
+        return False
     return float(np.sqrt(np.mean(chunk ** 2))) > threshold
