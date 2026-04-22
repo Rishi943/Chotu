@@ -20,7 +20,8 @@ Key points:
   - Thinking mode must be disabled: pass `extra_body={"chat_template_kwargs": {"enable_thinking": False}}` on every LLM call
 - Pi bridge: FastAPI + uvicorn on port 7000, started with `sudo` (GPIO requirement)
 - HTTP client (laptop→Pi): `httpx` async (not `requests`)
-- TTS: `espeak` via `robot_hat` on Pi
+- TTS: `espeak` on Pi — runs in thread executor (non-blocking). **Do not add `capture_output=True`** — that silences the speaker by redirecting audio to a pipe.
+- Voice input (laptop): `openWakeWord` (ONNX, hey_jarvis model) + `faster-whisper` (small, CPU int8). Wake word model at `~/Rishi/AI/Chotu/models/hey_jarvis_v0.1.onnx`. Set `CHOTU_MIC_DEVICE` to override default mic.
 
 ## Development Setup
 
@@ -30,7 +31,8 @@ Key points:
 - Pi hostname resolves as `chotu.local` via mDNS when Avahi is working; fall back to IP in `.env`
 - Pi access is SSH only
 - Start Pi bridge: `ssh chotu@chotu.local` then `sudo ~/chotu-bridge/.venv/bin/python3 ~/chotu-bridge/server.py`
-- Start brain: `source .venv/bin/activate && python3 -m chotu.brain`
+- Start brain (terminal input): `source .venv/bin/activate && python3 -m chotu.brain`
+- Start brain (voice input): `CHOTU_VOICE=1 python3 -m chotu.brain`
 - Debug mode: `CHOTU_DEBUG=1 python3 -m chotu.brain`
 - Start llama-server first: `llama-server -m /home/rishi/.local/share/localis/models/Qwen3.5-4B-Q4_K_M.gguf --mmproj /home/rishi/.local/share/localis/models/mmproj-BF16.gguf --port 8080 -ngl 99 -c 8192 --parallel 1`
 
@@ -38,10 +40,11 @@ Key points:
 
 | File | Purpose |
 |---|---|
-| `brain.py` | Main agent loop — LLM tool call cycle, memory buffer, terminal input |
+| `brain.py` | Main agent loop — LLM tool call cycle, memory buffer, terminal/voice input |
 | `pi_client.py` | Async httpx wrapper for every Pi bridge endpoint |
 | `tools.py` | OpenAI tool schemas + dispatch map + `capture_vision_tool` |
 | `system_prompt.py` | Chotu's personality, speech rules, tool docs, examples |
+| `voice.py` | Wake word detection (openWakeWord) + Whisper STT; enabled via `CHOTU_VOICE=1` |
 
 ## Pi Bridge (`~/chotu-bridge/server.py`)
 
@@ -123,13 +126,14 @@ Prints tool calls with args, speak text, and final inner monologue. No Pi traffi
 - Parallel tool dispatch in `brain.py` (move + speak fire concurrently)
 - Personality rewrite — Rocky voice, creature identity, four-emotion range, explicit STOP rules
 - Dry-run harness for offline prompt evaluation
+- Voice input — wake word (hey_jarvis) + Whisper STT, enabled via `CHOTU_VOICE=1`
+- speak bug fixed — removed `capture_output=True` from espeak subprocess; now runs in executor
 
 ## What to do next
 
-- **Pi-side obstacle check for `set_legs`** — current estop only gates `move` in the brain dispatch; `set_legs` is also gated but a low-z sequence could still drag the body. Consider Pi-side z-safety floor.
+- **Train "hey chotu" wake word** — collect ~30 recordings, use openWakeWord training script. hey_jarvis is the current placeholder.
 - **Mode B heartbeat** — 5-second autonomous tick, vilib tag events fed into the brain loop as user-role messages. Currently Mode B is plumbed into the system prompt but no actual heartbeat task is running.
-- **Voice input** — ReSpeaker mic + local STT (whisper.cpp). Currently input is terminal-only.
-- **Runtime verification on real Pi** after charging — walk this battery against the physical robot:
+- **Runtime verification on real Pi** after charging — walk this checklist against the physical robot:
   - `"walk forward 2 steps and say hi"` — observe parallel `move` + `speak`
   - `"stretch"` — single `set_legs` frame
   - `"be a worm"` — 4-6 chained `set_legs` frames, stops cleanly
@@ -149,6 +153,7 @@ Prints tool calls with args, speak text, and final inner monologue. No Pi traffi
 ## Rules
 
 - Do not add frameworks not listed in CHOTU.md without asking
-- Do not design around the ReSpeaker mic (not yet ordered)
+- Do not design around the ReSpeaker mic (not yet ordered) — voice input currently uses laptop default mic
+- Do not train "hey chotu" wake word until pipeline is verified working end-to-end with hey_jarvis
 - Do not add SQLite/persistence until a later phase
 - Cloud LLMs (Claude, Gemini) are fallback only, never default
