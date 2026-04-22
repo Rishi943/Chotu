@@ -3,15 +3,16 @@
 import asyncio
 import json
 import os
+import time
 import traceback
 from collections import deque
 
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
 
+from chotu.llm_client import LLMClient
 from chotu.pi_client import PiClient
 from chotu.system_prompt import build_system_prompt
-from chotu.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
+from chotu.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
 
 
 # --- Config ---
@@ -19,15 +20,14 @@ from chotu.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
 load_dotenv()
 
 PI_HOST = os.getenv("PI_HOST", "http://chotu.local:7000")
-BRAIN_URL = os.getenv("CHOTU_BRAIN_URL", "http://localhost:8080/v1")
-BRAIN_KEY = os.getenv("CHOTU_BRAIN_KEY", "not-needed")
-BRAIN_MODEL = os.getenv("CHOTU_BRAIN_MODEL", "qwen3.5-4b")
 MODE = os.getenv("CHOTU_MODE", "A")
 MAX_TOOL_ITERATIONS = 20
 DEBUG = os.getenv("CHOTU_DEBUG", "0") == "1"
+MUTE = os.getenv("CHOTU_MUTE", "0") == "1"
+TICK_INTERVAL = int(os.getenv("CHOTU_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("CHOTU_VOICE", "0") == "1"
 
-listen_and_transcribe = None  # replaced below when VOICE_ENABLED
+listen_and_transcribe = None
 if VOICE_ENABLED:
     from chotu.voice import listen_and_transcribe
 
@@ -35,19 +35,95 @@ if VOICE_ENABLED:
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
-llm = AsyncOpenAI(base_url=BRAIN_URL, api_key=BRAIN_KEY, timeout=60.0)
+llm_client = LLMClient()
 memory: deque = deque(maxlen=15)
 input_queue: asyncio.Queue = asyncio.Queue()
 OBSTACLE_CM = 15
 estop: asyncio.Event = asyncio.Event()
+object_map: dict = {}  # populated by scan_environment_tool; injected into context each turn
+
+
+# --- Mute no-op ---
+
+async def _muted_speak(**kw) -> dict:
+    return {
+        "ok": True, "tool": "speak",
+        "result": {"text": kw.get("text", ""), "played": False, "muted": True},
+        "duration_ms": 0, "timestamp": time.time(), "error": None,
+    }
+
+
+# --- Dispatch map ---
+
 dispatch_map = build_dispatch(pi, estop)
+if MUTE:
+    dispatch_map["speak"] = lambda **kw: _muted_speak(**kw)
+
+
+# --- scan_environment (local tool, not a Pi endpoint) ---
+
+async def _describe_objects(image_b64: str) -> list[str]:
+    """Mini LLM call to identify objects in a single image."""
+    try:
+        response = await llm_client.chat_complete(
+            messages=[{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                {"type": "text", "text": "List visible objects. Comma-separated, one line, no articles. Be brief."},
+            ]}],
+            tools=[],
+        )
+        text = response.choices[0].message.content or ""
+        return [o.strip() for o in text.split(",") if o.strip()]
+    except Exception:
+        return []
+
+
+async def scan_environment_tool(segments: int = 8) -> dict:
+    """360° sweep: rotate, photograph, identify objects at each position."""
+    global object_map
+    start = time.time()
+    all_labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    labels = all_labels[:max(1, min(segments, 8))]
+    entries = []
+
+    for i, direction in enumerate(labels):
+        if i > 0:
+            turn = await pi.move("turn right", steps=1, speed=50)
+            if not turn.get("ok"):
+                break
+
+        capture = await capture_vision_tool(pi)
+        image_b64 = capture.get("result", {}).get("image_base64", "")
+        objects = await _describe_objects(image_b64) if image_b64 else []
+        entries.append({"direction": direction, "objects": objects})
+
+    # Store map globally for context injection
+    object_map = {e["direction"]: e["objects"] for e in entries}
+
+    notable = [(e["direction"], obj) for e in entries for obj in e["objects"]]
+    if notable:
+        summary = "Found: " + ", ".join(f"{obj} ({d})" for d, obj in notable)
+    else:
+        summary = "No objects identified."
+
+    ms = int((time.time() - start) * 1000)
+    return {
+        "ok": True, "tool": "scan_environment",
+        "result": {"map": entries, "summary": summary},
+        "duration_ms": ms, "timestamp": time.time(), "error": None,
+    }
+
+
+dispatch_map["scan_environment"] = lambda **kw: scan_environment_tool(**kw)
 
 
 # --- Message building ---
 
 def build_messages(user_input: str) -> list[dict]:
-    """Build the full message list for the LLM from memory + new input."""
-    messages = [{"role": "system", "content": build_system_prompt(MODE)}]
+    sp = build_system_prompt(MODE)
+    if object_map:
+        sp += f"\n\n# Object map (from last scan)\n{json.dumps(object_map, indent=2)}"
+    messages = [{"role": "system", "content": sp}]
     for entry in memory:
         messages.append(entry)
     messages.append({"role": "user", "content": user_input})
@@ -67,8 +143,9 @@ def print_tool_call(name: str, args: dict, result: dict):
     status = "ok" if ok else f"FAIL: {result.get('error', '?')}"
     print(f"  [{name}] {args_str} -> {status} ({ms}ms)")
 
-def print_speak(text: str):
-    print(f'  [speaks] "{text}"')
+def print_speak(text: str, muted: bool = False):
+    label = "muted" if muted else "speaks"
+    print(f'  [{label}] "{text}"')
 
 def print_monologue(text: str):
     if text and text.strip():
@@ -78,13 +155,12 @@ def print_monologue(text: str):
 # --- Obstacle poller ---
 
 async def obstacle_poller(pi_client: PiClient, estop_event: asyncio.Event) -> None:
-    """Poll distance sensor every 200ms. Set estop_event when obstacle < OBSTACLE_CM."""
     while True:
         result = await pi_client.get_distance()
         if result.get("ok"):
             cm = result.get("result", {}).get("cm", 9999)
             if cm <= 0:
-                pass  # sensor returned invalid reading (e.g. -1.0), ignore
+                pass
             elif cm < OBSTACLE_CM:
                 if not estop_event.is_set():
                     dbg(f"[estop] obstacle at {cm:.1f}cm — movement blocked")
@@ -93,17 +169,33 @@ async def obstacle_poller(pi_client: PiClient, estop_event: asyncio.Event) -> No
                 if estop_event.is_set():
                     dbg(f"[estop] clear ({cm:.1f}cm)")
                 estop_event.clear()
-
         await asyncio.sleep(0.2)
+
+
+# --- Mode B heartbeat ---
+
+async def mode_b_tick() -> None:
+    """Autonomous tick loop. Fires every TICK_INTERVAL seconds when MODE=B."""
+    await asyncio.sleep(3.0)  # startup delay
+    while True:
+        await asyncio.sleep(TICK_INTERVAL)
+        if not input_queue.empty():
+            continue  # LLM still processing — don't pile up
+        result = await pi.get_distance()
+        if result.get("ok"):
+            cm = result.get("result", {}).get("cm", -1)
+            msg = f"[autonomous tick] distance: {cm:.1f}cm. Decide what to do."
+        else:
+            msg = "[autonomous tick] Sensor unavailable. Decide what to do."
+        input_queue.put_nowait(msg)
 
 
 # --- Brain loop ---
 
 async def brain_loop():
-    """Main agent loop. Waits for user input, runs LLM, dispatches tools."""
-    print(f"Chotu brain started (Mode {MODE}, model: {BRAIN_MODEL})")
-    if MODE == "C":
-        print("WARNING: Mode C (WebSocket controller) is not implemented — falling back to Mode A behaviour.")
+    print(f"Chotu brain started (Mode {MODE}, model: {llm_client.model}, provider: {llm_client.provider})")
+    if MUTE:
+        print("  [mute] Audio disabled — speak() calls logged but not sent to Pi.")
     print(f"Pi bridge: {PI_HOST}")
 
     health = await pi.health()
@@ -119,15 +211,12 @@ async def brain_loop():
         user_input = await input_queue.get()
         if not user_input.strip():
             continue
-
         print(f"\n--- Chotu thinking ---")
-
         try:
             await _process(user_input)
         except Exception as e:
             print(f"  [brain error] {e}")
             traceback.print_exc()
-
         print()
 
 
@@ -140,41 +229,25 @@ async def _run_one(tc):
 
 
 async def _process(user_input: str):
-    """One full LLM activation: call → tool loop → final response."""
     messages = build_messages(user_input)
-
     dbg(f"sending {len(messages)} messages to LLM")
+
     try:
-        response = await llm.chat.completions.create(
-            model=BRAIN_MODEL,
-            messages=messages,
-            tools=TOOL_SCHEMAS,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        )
+        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
     except Exception as e:
         print(f"  LLM error: {e}")
         return
 
     if not response.choices:
-        print("  LLM error: empty choices in response")
+        print("  LLM error: empty choices")
         return
 
-    dbg(f"LLM responded: tool_calls={bool(response.choices[0].message.tool_calls)}, "
-        f"content={bool(response.choices[0].message.content)}")
-
-    # --- Tool call loop ---
     iterations = 0
-
     while response.choices[0].message.tool_calls and iterations < MAX_TOOL_ITERATIONS:
         assistant_msg = response.choices[0].message
-
-        # Serialise assistant message, strip None fields (some llama.cpp builds reject them)
-        msg_dict = {k: v for k, v in assistant_msg.model_dump().items() if v is not None}
-        messages.append(msg_dict)
+        messages.append(llm_client.format_assistant_message(response))
 
         deferred_vision = []
-
-        # Dispatch all tool calls in parallel. gather preserves order.
         results = await asyncio.gather(*[_run_one(tc) for tc in assistant_msg.tool_calls])
 
         for tool_call, name, args_json, result in results:
@@ -182,53 +255,33 @@ async def _process(user_input: str):
                 args = json.loads(args_json) if args_json else {}
             except json.JSONDecodeError:
                 args = {"_raw": args_json}
+
             print_tool_call(name, args, result)
 
             if name == "speak" and result.get("ok"):
-                print_speak(args.get("text", ""))
+                muted = result.get("result", {}).get("muted", False)
+                print_speak(args.get("text", ""), muted=muted)
 
-            # capture_vision: append tool ack now, defer the image user-message
-            # until after ALL tool results — avoids invalid tool-after-user ordering
             if name == "capture_vision" and result.get("ok"):
                 image_b64 = result["result"].get("image_base64", "")
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": "Camera snapshot taken.",
-                })
+                messages.append(llm_client.format_tool_result(tool_call.id, "Camera snapshot taken."))
                 if image_b64:
                     deferred_vision.append({
                         "role": "user",
                         "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                            },
-                            {
-                                "type": "text",
-                                "text": "This is your current camera view. Describe what you observe.",
-                            },
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                            {"type": "text", "text": "This is your current camera view. Describe what you observe."},
                         ],
                     })
             else:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(result),
-                })
+                messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
 
-        # Append vision images after all tool results for this turn
         for msg in deferred_vision:
             messages.append(msg)
 
         dbg(f"follow-up LLM call (iteration {iterations + 1})")
         try:
-            response = await llm.chat.completions.create(
-                model=BRAIN_MODEL,
-                messages=messages,
-                tools=TOOL_SCHEMAS,
-                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-            )
+            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
         except Exception as e:
             print(f"  LLM error on follow-up: {e}")
             return
@@ -237,7 +290,6 @@ async def _process(user_input: str):
             print("  LLM error: empty choices on follow-up")
             return
 
-        dbg(f"follow-up responded: tool_calls={bool(response.choices[0].message.tool_calls)}")
         iterations += 1
 
     if iterations >= MAX_TOOL_ITERATIONS:
@@ -251,10 +303,9 @@ async def _process(user_input: str):
         memory.append({"role": "assistant", "content": final_text})
 
 
-# --- Input loop ---
+# --- Input loops ---
 
 async def input_loop():
-    """Read terminal input in a thread, push to queue."""
     while True:
         try:
             text = await asyncio.to_thread(input, "you> ")
@@ -264,7 +315,6 @@ async def input_loop():
 
 
 async def voice_loop():
-    """Wait for wake word, transcribe, push result to input_queue."""
     print("  [voice] Voice input active — say 'Hey Jarvis' to speak to Chotu.")
     while True:
         try:
@@ -280,25 +330,24 @@ async def voice_loop():
 # --- Main ---
 
 async def main():
-    """Start brain, input, and obstacle poller loops."""
     brain_task = asyncio.create_task(brain_loop())
-    if VOICE_ENABLED:
-        input_task = asyncio.create_task(voice_loop())
-    else:
-        input_task = asyncio.create_task(input_loop())
+    input_task = asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop())
     poller_task = asyncio.create_task(obstacle_poller(pi, estop))
+    tasks = [brain_task, input_task, poller_task]
+
+    if MODE == "B":
+        tasks.append(asyncio.create_task(mode_b_tick()))
 
     try:
-        await asyncio.gather(brain_task, input_task, poller_task)
+        await asyncio.gather(*tasks)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     except Exception as e:
         print(f"\n[fatal] Unhandled exception: {e}")
         traceback.print_exc()
     finally:
-        brain_task.cancel()
-        input_task.cancel()
-        poller_task.cancel()
+        for t in tasks:
+            t.cancel()
         print("\nChotu sitting down...")
         try:
             await asyncio.wait_for(pi.pose("sit"), timeout=5.0)
