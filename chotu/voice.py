@@ -37,26 +37,38 @@ def _is_speech(chunk: np.ndarray, threshold: float = ENERGY_SILENCE) -> bool:
 
 # --- Lazy model singletons ---
 
+import threading
+
+WhisperModel = None  # set on first use by _get_whisper
+OWWModel = None      # set on first use by _get_oww
+
+_whisper_lock = threading.Lock()
+_oww_lock = threading.Lock()
+
 _whisper_model = None
 _oww_model = None
 
-# Top-level aliases so tests can monkeypatch without triggering real imports
-from faster_whisper import WhisperModel
-from openwakeword.model import Model as OWWModel
-
 
 def _get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
-        print("  [voice] Loading Whisper (first call, may take a moment)...")
-        _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+    global _whisper_model, WhisperModel
+    with _whisper_lock:
+        if WhisperModel is None:
+            from faster_whisper import WhisperModel as _WM
+            WhisperModel = _WM
+        if _whisper_model is None:
+            print("  [voice] Loading Whisper (first call, may take a moment)...")
+            _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
     return _whisper_model
 
 
 def _get_oww():
-    global _oww_model
-    if _oww_model is None:
-        _oww_model = OWWModel(wakeword_models=[WAKE_WORD_MODEL_PATH], inference_framework="onnx")
+    global _oww_model, OWWModel
+    with _oww_lock:
+        if OWWModel is None:
+            from openwakeword.model import Model as _OWW
+            OWWModel = _OWW
+        if _oww_model is None:
+            _oww_model = OWWModel(wakeword_models=[WAKE_WORD_MODEL_PATH], inference_framework="onnx")
     return _oww_model
 
 
@@ -80,7 +92,10 @@ def _blocking_listen_and_transcribe() -> str:
         # Phase 1: wait for wake word
         print("  [voice] Waiting for 'Hey Jarvis'...")
         while True:
-            chunk = audio_q.get()
+            try:
+                chunk = audio_q.get(timeout=5.0)
+            except queue.Empty:
+                continue
             scores = oww.predict(_audio_to_int16(chunk))
             if max(scores.values()) >= WAKE_THRESHOLD:
                 print("  [voice] Wake word! Speak now...")
@@ -94,7 +109,10 @@ def _blocking_listen_and_transcribe() -> str:
         has_speech = False
 
         for _ in range(max_chunks):
-            chunk = audio_q.get()
+            try:
+                chunk = audio_q.get(timeout=5.0)
+            except queue.Empty:
+                break
             recorded.append(chunk)
             if _is_speech(chunk):
                 has_speech = True

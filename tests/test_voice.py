@@ -113,7 +113,7 @@ def test_blocking_listen_transcribes(monkeypatch):
             score = 0.9 if call_count["n"] >= 4 else 0.0
             return {"hey_jarvis": score}
 
-    v._oww_model = FakeOWW()
+    monkeypatch.setattr(v, "_oww_model", FakeOWW())
 
     class FakeSeg:
         text = " hello chotu"
@@ -122,10 +122,7 @@ def test_blocking_listen_transcribes(monkeypatch):
         def transcribe(self, audio, **kw):
             return [FakeSeg()], None
 
-    v._whisper_model = FakeWhisper()
+    monkeypatch.setattr(v, "_whisper_model", FakeWhisper())
 
     result = v._blocking_listen_and_transcribe()
     assert result == "hello chotu"
-
-    v._oww_model = None
-    v._whisper_model = None
