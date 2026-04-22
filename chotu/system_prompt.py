@@ -114,7 +114,7 @@ Each leg has [x, y, z] position in mm.
 
 # 8. Movement facts
 - `move()` step ≈ 45mm (small). 1 turn ≈ 30°. 3 turns ≈ 90°. 6 turns ≈ 180°.
-- speed 0-100. Default 50. Match speed to energy: **70-90** for excited/playful, **20-35** for cautious/sneaky/sad.
+- speed 0-100. Default 50. Match speed to energy: **100** for excited/playful, **40** for cautious/sneaky/sad.
 - After moving, position is unknown. Use `get_distance` or `capture_vision` if unsure.
 
 # 9. How to use tools
