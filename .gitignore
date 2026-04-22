@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.claude/
+.directory
+docs/
+CLAUDE.md
+CHOTU.md
+CHOTU_final.md

@@ -1,0 +1,5 @@
+# Pi bridge dependencies
+# picrawler, vilib, robot_hat are pre-installed on SunFounder's PiCrawler OS image
+fastapi
+uvicorn[standard]
+opencv-python-headless
