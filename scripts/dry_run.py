@@ -57,8 +57,6 @@ def fake_result(tool: str, args: dict) -> dict:
     if tool == "capture_vision":
         # No image in dry run — simulate the ack only; skip the deferred image.
         return {**base, "result": {"image_base64": "", "format": "jpeg"}}
-    if tool == "speak_eridian":
-        return {**base, "result": {"emotion": args.get("emotion", ""), "file": f"{args.get('emotion', '')}.wav"}}
     if tool == "wait":
         return {**base, "result": {"waited_seconds": args.get("seconds", 1), "reason": args.get("reason", "")}}
     return {**base, "ok": False, "result": {}, "error": f"unknown tool: {tool}"}
@@ -68,8 +66,6 @@ def print_tool_call(name: str, args: dict, result: dict):
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
     status = "ok" if result.get("ok") else f"FAIL: {result.get('error')}"
     print(f"  [{name}] {args_str} -> {status}")
-    if name == "speak_eridian" and result.get("ok"):
-        print(f'    \x1b[33m[eridian]\x1b[0m ~{args.get("emotion", "")}~')
     if name == "speak" and result.get("ok"):
         print(f'    \x1b[36m[speaks]\x1b[0m "{args.get("text", "")}"')
 

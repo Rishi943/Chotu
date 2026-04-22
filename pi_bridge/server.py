@@ -13,7 +13,6 @@ import subprocess
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -23,7 +22,7 @@ import robot_hat
 from fastapi import FastAPI
 from pydantic import BaseModel
 from picrawler import Picrawler
-from robot_hat import Music, Ultrasonic, Pin, ADC
+from robot_hat import Ultrasonic, Pin, ADC
 from vilib import Vilib
 
 # ---------------------------------------------------------------------------
@@ -36,19 +35,7 @@ time.sleep(0.2)
 crawler = Picrawler()
 us = Ultrasonic(Pin("D2"), Pin("D3"))
 _bat_adc = ADC("A4")
-_music = Music()  # initializes pygame.mixer; used for all audio output
-
-ERIDIAN_DIR = Path("/home/chotu/chotu-bridge/sounds/eridian")
-ERIDIAN_MAP = {
-    "curious":      "curious.wav",
-    "confused":     "curious.wav",
-    "excited":      "amaze.wav",
-    "delighted":    "amaze.wav",
-    "happy":        "amaze.wav",
-    "affectionate": "affectionate.wav",
-    "alarmed":      "alarmed.wav",
-    "speak":        "speak.wav",
-}
+pygame.mixer.init()  # must run before speak uses pygame.mixer.Sound
 
 
 def _read_battery_voltage() -> float:
@@ -103,10 +90,6 @@ class PoseRequest(BaseModel):
 
 class SpeakRequest(BaseModel):
     text: str
-
-
-class SpeakEridianRequest(BaseModel):
-    emotion: str
 
 
 class SetLegsRequest(BaseModel):
@@ -217,22 +200,6 @@ async def speak(req: SpeakRequest):
     except Exception as e:
         logging.error(f"  speak error: {e}")
         return _envelope("speak", {"text": req.text, "played": False}, start, str(e))
-
-
-@app.post("/speak_eridian")
-async def speak_eridian(req: SpeakEridianRequest):
-    start = time.time()
-    logging.info(f"POST /speak_eridian  emotion={req.emotion}")
-    filename = ERIDIAN_MAP.get(req.emotion)
-    if not filename:
-        return _envelope("speak_eridian", {}, start, f"unknown emotion: {req.emotion}")
-    wav_path = ERIDIAN_DIR / filename
-    if not wav_path.exists():
-        return _envelope("speak_eridian", {}, start, f"file not found: {wav_path}")
-    # Fire and forget — launch playback in background, return immediately
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, lambda: pygame.mixer.Sound(str(wav_path)).play())
-    return _envelope("speak_eridian", {"emotion": req.emotion, "file": filename}, start)
 
 
 @app.get("/distance")

@@ -31,9 +31,6 @@ class PiClient:
     async def speak(self, text: str) -> dict:
         return await self._post("/speak", "speak", {"text": text})
 
-    async def speak_eridian(self, emotion: str) -> dict:
-        return await self._post("/speak_eridian", "speak_eridian", {"emotion": emotion})
-
     async def get_distance(self) -> dict:
         return await self._get("/distance", "get_distance")
 
