@@ -102,6 +102,28 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "speak_eridian",
+            "description": (
+                "Play a short Eridian emotional sound — your non-verbal voice. "
+                "Call this BEFORE or alongside speak(). It is your raw feeling before translation. "
+                "Exception: pure physical actions with no words, skip it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "emotion": {
+                        "type": "string",
+                        "enum": ["curious", "confused", "excited", "delighted", "affectionate", "alarmed", "speak"],
+                        "description": "Closest emotion to what you feel right now.",
+                    },
+                },
+                "required": ["emotion"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "speak",
             "description": (
                 "Speak aloud through the Pi speaker using espeak. "
@@ -241,6 +263,7 @@ def build_dispatch(pi: PiClient, estop: asyncio.Event) -> dict:
         # Poses are not estop-blocked — they don't advance the robot's position.
         "pose": lambda **kw: pi.pose(**kw),
         "set_legs": lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
+        "speak_eridian": lambda **kw: pi.speak_eridian(**kw),
         "speak": lambda **kw: pi.speak(**kw),
         "get_distance": lambda **kw: pi.get_distance(),
         "get_battery": lambda **kw: pi.get_battery(),
