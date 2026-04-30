@@ -123,7 +123,6 @@ async def scan_environment_tool() -> dict:
     # Replace map atomically — any partial scan still overwrites the previous one.
     object_map.clear()
     object_map.update(entries)
-    object_map["_scan_id"] = object_map.get("_scan_id", 0) + 1
     object_map["_timestamp"] = time.time()  # kept for the 60s freshness gate in build_messages
 
     notable = [(key, obj) for key, objs in entries.items() for obj in objs]
