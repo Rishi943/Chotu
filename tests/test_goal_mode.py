@@ -1,6 +1,3 @@
-import pytest
-
-
 def test_build_goal_prompt_injects_goal():
     from chotu.system_prompt import build_goal_prompt
     prompt = build_goal_prompt("find the blue bottle")
