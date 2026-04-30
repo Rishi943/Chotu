@@ -29,6 +29,7 @@ import cv2
 import pygame
 import robot_hat
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from picrawler import Picrawler
 from robot_hat import Ultrasonic, Pin, ADC
@@ -390,6 +391,32 @@ async def trick(req: TrickRequest):
     except Exception as e:
         logging.error(f"  trick error: {e}")
         return _envelope("trick", {"name": req.name}, start, str(e))
+
+
+# ---------------------------------------------------------------------------
+# MJPEG streaming
+# ---------------------------------------------------------------------------
+
+async def _mjpeg_frames():
+    while True:
+        frame = Vilib.img
+        if frame is not None:
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                    + buf.tobytes()
+                    + b"\r\n"
+                )
+        await asyncio.sleep(0.05)
+
+
+@app.get("/stream")
+async def stream():
+    return StreamingResponse(
+        _mjpeg_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 # ---------------------------------------------------------------------------

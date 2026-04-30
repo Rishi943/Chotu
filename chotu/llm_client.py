@@ -92,10 +92,10 @@ class LLMClient:
         if self._anthropic_client:
             await self._anthropic_client.close()
 
-    async def chat_complete(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
+    async def chat_complete(self, messages: list[dict], tools: list[dict], thinking: bool = False) -> LLMResponse:
         """Send messages + tools to the configured provider. Returns normalised response."""
         if self.provider == "local":
-            return await self._local_complete(messages, tools)
+            return await self._local_complete(messages, tools, thinking=thinking)
         return await self._claude_complete(messages, tools)
 
     def format_assistant_message(self, response: LLMResponse) -> dict:
@@ -149,11 +149,11 @@ class LLMClient:
     # Local (llama-server) backend
     # -----------------------------------------------------------------------
 
-    async def _local_complete(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
+    async def _local_complete(self, messages: list[dict], tools: list[dict], thinking: bool = False) -> LLMResponse:
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
-            "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": thinking}},
         }
         if tools:
             kwargs["tools"] = tools

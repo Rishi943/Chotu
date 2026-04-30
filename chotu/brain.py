@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 import traceback
 from collections import deque
@@ -41,6 +42,13 @@ input_queue: asyncio.Queue = asyncio.Queue()
 OBSTACLE_CM = 15
 estop: asyncio.Event = asyncio.Event()
 object_map: dict = {}  # populated by scan_environment_tool; injected into context each turn
+
+gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+gallery_store: list[dict] = []
+thinking_enabled: bool = False
+_active_goal_task: asyncio.Task | None = None
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
 # --- Mute no-op ---
@@ -177,6 +185,24 @@ def build_messages(user_input: str) -> list[dict]:
     return messages
 
 
+# --- GUI event emitter ---
+
+def _emit(event: dict) -> None:
+    try:
+        gui_event_queue.put_nowait(event)
+    except asyncio.QueueFull:
+        pass
+
+
+def _extract_think_blocks(text: str | None) -> tuple[str | None, list[str]]:
+    """Strip <think>...</think> blocks from text. Returns (clean_text, [think_texts])."""
+    if not text:
+        return text, []
+    blocks = _THINK_RE.findall(text)
+    clean = _THINK_RE.sub("", text).strip() or None
+    return clean, blocks
+
+
 # --- Terminal output ---
 
 def dbg(msg: str):
@@ -189,14 +215,19 @@ def print_tool_call(name: str, args: dict, result: dict):
     ms = result.get("duration_ms", 0)
     status = "ok" if ok else f"FAIL: {result.get('error', '?')}"
     print(f"  [{name}] {args_str} -> {status} ({ms}ms)")
+    _emit({"type": "tool_call", "tool": name, "args": args, "ok": ok, "ms": ms,
+           "error": result.get("error")})
 
 def print_speak(text: str, muted: bool = False):
     label = "muted" if muted else "speaks"
     print(f'  [{label}] "{text}"')
+    if not muted:
+        _emit({"type": "speak", "text": text})
 
 def print_monologue(text: str):
     if text and text.strip():
         print(f"  [thinks] {text.strip()}")
+        _emit({"type": "monologue", "text": text.strip()})
 
 
 # --- Obstacle poller ---
@@ -262,6 +293,7 @@ async def run_goal(goal_str: str) -> dict:
     from chotu.tools import _goal_complete_result
     from chotu.system_prompt import build_goal_prompt
 
+    _emit({"type": "user", "text": f"[goal] {goal_str}"})
     print(f"\n[goal] Starting: {goal_str}")
     goal_complete_event.clear()
 
@@ -286,7 +318,7 @@ async def run_goal(goal_str: str) -> dict:
         dbg(f"[goal] outer iteration {iterations + 1}, state: {state_str}")
 
         try:
-            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
         except Exception as e:
             print(f"  [goal] LLM error: {e}")
             break
@@ -294,6 +326,18 @@ async def run_goal(goal_str: str) -> dict:
         if not response.choices:
             print("  [goal] LLM returned empty choices")
             break
+
+        # Strip think blocks and emit them
+        if response.choices:
+            content = response.choices[0].message.content
+            clean_content, think_blocks = _extract_think_blocks(content)
+            for block in think_blocks:
+                block = block.strip()
+                if block:
+                    print(f"  [think] {block[:120]}...")
+                    _emit({"type": "think", "text": block})
+            if think_blocks and response.choices[0].message.content != clean_content:
+                response.choices[0].message.content = clean_content
 
         speaks_fired = 0
         set_legs_fired = 0
@@ -368,6 +412,10 @@ async def run_goal(goal_str: str) -> dict:
                                 {"type": "text", "text": "This is your current camera view. Describe what you observe, then continue toward your goal."},
                             ],
                         })
+                        if len(gallery_store) >= 50:
+                            gallery_store.pop(0)
+                        gallery_store.append({"label": "capture", "image_b64": image_b64, "ts": time.time()})
+                        _emit({"type": "image", "label": "capture", "image_b64": image_b64})
                 else:
                     messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
 
@@ -384,13 +432,25 @@ async def run_goal(goal_str: str) -> dict:
                 break
 
             try:
-                response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+                response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
             except Exception as e:
                 print(f"  [goal] LLM follow-up error: {e}")
                 break
 
             if not response.choices:
                 break
+
+            # Strip think blocks and emit them
+            if response.choices:
+                content = response.choices[0].message.content
+                clean_content, think_blocks = _extract_think_blocks(content)
+                for block in think_blocks:
+                    block = block.strip()
+                    if block:
+                        print(f"  [think] {block[:120]}...")
+                        _emit({"type": "think", "text": block})
+                if think_blocks and response.choices[0].message.content != clean_content:
+                    response.choices[0].message.content = clean_content
 
             inner_iterations += 1
 
@@ -480,11 +540,12 @@ def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
 
 
 async def _process(user_input: str):
+    _emit({"type": "user", "text": user_input})
     messages = build_messages(user_input)
     dbg(f"sending {len(messages)} messages to LLM")
 
     try:
-        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
     except Exception as e:
         print(f"  LLM error: {e}")
         return
@@ -492,6 +553,18 @@ async def _process(user_input: str):
     if not response.choices:
         print("  LLM error: empty choices")
         return
+
+    # Strip think blocks and emit them
+    if response.choices:
+        content = response.choices[0].message.content
+        clean_content, think_blocks = _extract_think_blocks(content)
+        for block in think_blocks:
+            block = block.strip()
+            if block:
+                print(f"  [think] {block[:120]}...")
+                _emit({"type": "think", "text": block})
+        if think_blocks and response.choices[0].message.content != clean_content:
+            response.choices[0].message.content = clean_content
 
     # Per-turn hard caps — enforced in code regardless of model behaviour
     speaks_fired = 0
@@ -566,6 +639,10 @@ async def _process(user_input: str):
                             {"type": "text", "text": "This is your current camera view. Describe what you observe."},
                         ],
                     })
+                    if len(gallery_store) >= 50:
+                        gallery_store.pop(0)
+                    gallery_store.append({"label": "capture", "image_b64": image_b64, "ts": time.time()})
+                    _emit({"type": "image", "label": "capture", "image_b64": image_b64})
             else:
                 messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
 
@@ -578,7 +655,7 @@ async def _process(user_input: str):
 
         dbg(f"follow-up LLM call (iteration {iterations + 1})")
         try:
-            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
         except Exception as e:
             print(f"  LLM error on follow-up: {e}")
             return
@@ -586,6 +663,18 @@ async def _process(user_input: str):
         if not response.choices:
             print("  LLM error: empty choices on follow-up")
             return
+
+        # Strip think blocks and emit them
+        if response.choices:
+            content = response.choices[0].message.content
+            clean_content, think_blocks = _extract_think_blocks(content)
+            for block in think_blocks:
+                block = block.strip()
+                if block:
+                    print(f"  [think] {block[:120]}...")
+                    _emit({"type": "think", "text": block})
+            if think_blocks and response.choices[0].message.content != clean_content:
+                response.choices[0].message.content = clean_content
 
         iterations += 1
 
@@ -624,6 +713,20 @@ async def goal_runner_task(initial_goal: str) -> None:
                 continue
         except EOFError:
             break
+
+
+async def set_mode(mode: str, goal_text: str | None = None) -> None:
+    global _active_goal_task
+    if mode == "goal" and goal_text:
+        if _active_goal_task and not _active_goal_task.done():
+            _active_goal_task.cancel()
+        _active_goal_task = asyncio.create_task(goal_runner_task(goal_text))
+        _emit({"type": "mode", "mode": "goal"})
+    elif mode == "reactive":
+        if _active_goal_task and not _active_goal_task.done():
+            _active_goal_task.cancel()
+            _active_goal_task = None
+        _emit({"type": "mode", "mode": "reactive"})
 
 
 # --- Input loops ---
@@ -666,9 +769,11 @@ async def main(goal: str | None = None):
         print(f"Pi bridge: NOT reachable ({health.get('error', '?')})")
         print("  Tools will return error envelopes. Continuing anyway.")
 
+    from chotu import gui_server
     tasks = [
         asyncio.create_task(obstacle_poller(pi, estop)),
         asyncio.create_task(battery_monitor()),
+        asyncio.create_task(gui_server.run_gui_server()),
     ]
 
     if goal:
