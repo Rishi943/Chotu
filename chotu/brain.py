@@ -118,6 +118,15 @@ async def scan_environment_tool(segments: int = 8) -> dict:
 dispatch_map["scan_environment"] = lambda **kw: scan_environment_tool(**kw)
 
 
+# --- Goal mode state ---
+
+goal_complete_event: asyncio.Event = asyncio.Event()
+MAX_GOAL_ITERATIONS = int(os.getenv("CHOTU_GOAL_ITERATIONS", "40"))
+
+from chotu.tools import set_goal_complete_event
+set_goal_complete_event(goal_complete_event)
+
+
 # --- Message building ---
 
 def build_messages(user_input: str) -> list[dict]:
@@ -209,6 +218,162 @@ def _compress_vision_in_history(messages: list[dict]) -> None:
         text_parts = [b["text"] for b in msg["content"] if b.get("type") == "text"]
         caption = " ".join(text_parts) or "[camera image]"
         messages[idx] = {"role": "user", "content": f"[vision compressed: {caption[:120]}]"}
+
+
+async def run_goal(goal_str: str) -> dict:
+    """Pursue a single goal until goal_complete() is called or max iterations hit.
+    Standalone — does not use memory deque, input_queue, or _process()."""
+    from chotu.tools import _goal_complete_result
+    from chotu.system_prompt import build_goal_prompt
+
+    print(f"\n[goal] Starting: {goal_str}")
+    goal_complete_event.clear()
+
+    messages = [{"role": "system", "content": build_goal_prompt(goal_str)}]
+    iterations = 0
+    MAX_INNER = 12
+
+    while iterations < MAX_GOAL_ITERATIONS:
+        if goal_complete_event.is_set():
+            break
+
+        state_str = await build_state_string()
+
+        map_injection = ""
+        if object_map and (time.time() - object_map.get("_timestamp", 0)) < 60:
+            clean_map = {k: v for k, v in object_map.items() if k != "_timestamp"}
+            map_injection = f"\n\n[object map — from recent scan]\n{json.dumps(clean_map)}"
+
+        turn_label = "Begin pursuing your goal." if iterations == 0 else "Continue pursuing your goal."
+        messages.append({"role": "user", "content": f"[state]\n{state_str}{map_injection}\n\n{turn_label}"})
+
+        dbg(f"[goal] outer iteration {iterations + 1}, state: {state_str}")
+
+        try:
+            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+        except Exception as e:
+            print(f"  [goal] LLM error: {e}")
+            break
+
+        if not response.choices:
+            print("  [goal] LLM returned empty choices")
+            break
+
+        speaks_fired = 0
+        set_legs_fired = 0
+        waits_fired = 0
+        failed_tools: set[str] = set()
+        deferred_vision: list[dict] = []
+        inner_iterations = 0
+
+        while response.choices[0].message.tool_calls and inner_iterations < MAX_INNER:
+            if goal_complete_event.is_set():
+                break
+
+            assistant_msg = response.choices[0].message
+            messages.append(llm_client.format_assistant_message(response))
+
+            to_dispatch = []
+            suppressed = []
+
+            for tc in assistant_msg.tool_calls:
+                name = tc.function.name
+                if goal_complete_event.is_set():
+                    suppressed.append(_suppressed(tc.id, name, "goal already complete"))
+                elif name == "speak" and speaks_fired >= 1:
+                    suppressed.append(_suppressed(tc.id, name, "1 speak per turn max"))
+                elif name == "set_legs" and set_legs_fired >= 12:
+                    suppressed.append(_suppressed(tc.id, name, "12 set_legs per turn max"))
+                elif name == "wait" and waits_fired >= 1:
+                    suppressed.append(_suppressed(tc.id, name, "1 wait per turn max"))
+                elif name in failed_tools:
+                    suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
+                else:
+                    if name == "speak":    speaks_fired += 1
+                    if name == "set_legs": set_legs_fired += 1
+                    if name == "wait":     waits_fired += 1
+                    to_dispatch.append(tc)
+
+            dispatched = await asyncio.gather(*[_run_one(tc) for tc in to_dispatch])
+
+            all_results = (
+                [(tc, name, result) for tc, name, _, result in dispatched] +
+                [(None, name, result) for _, name, result in suppressed]
+            )
+
+            for tool_call, name, result in all_results:
+                suppressed_call = tool_call is None
+                args_json = tool_call.function.arguments if tool_call else "{}"
+                try:
+                    args = json.loads(args_json) if args_json else {}
+                except json.JSONDecodeError:
+                    args = {"_raw": args_json}
+
+                if not suppressed_call:
+                    print_tool_call(name, args, result)
+
+                if not result.get("ok"):
+                    failed_tools.add(name)
+
+                if name == "speak" and not suppressed_call and result.get("ok"):
+                    print_speak(args.get("text", ""), muted=result.get("result", {}).get("muted", False))
+
+                if suppressed_call:
+                    continue
+
+                if name == "capture_vision" and result.get("ok"):
+                    image_b64 = result["result"].get("image_base64", "")
+                    messages.append(llm_client.format_tool_result(tool_call.id, "Camera snapshot taken."))
+                    if image_b64:
+                        deferred_vision.append({
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                                {"type": "text", "text": "This is your current camera view. Describe what you observe, then continue toward your goal."},
+                            ],
+                        })
+                else:
+                    messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
+
+            for tool_id, name, result in suppressed:
+                messages.append(llm_client.format_tool_result(tool_id, json.dumps(result)))
+
+            for msg in deferred_vision:
+                messages.append(msg)
+            deferred_vision.clear()
+
+            _compress_vision_in_history(messages)
+
+            if goal_complete_event.is_set():
+                break
+
+            try:
+                response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+            except Exception as e:
+                print(f"  [goal] LLM follow-up error: {e}")
+                break
+
+            if not response.choices:
+                break
+
+            inner_iterations += 1
+
+        final_text = response.choices[0].message.content
+        print_monologue(final_text)
+
+        if goal_complete_event.is_set():
+            break
+
+        iterations += 1
+
+    if goal_complete_event.is_set():
+        outcome = dict(_goal_complete_result)
+        print(f"\n[goal] Complete: {outcome['outcome']} (success={outcome['success']})")
+    else:
+        outcome = {"outcome": "max iterations reached", "success": False}
+        print(f"\n[goal] Gave up after {MAX_GOAL_ITERATIONS} outer iterations.")
+
+    return outcome
 
 
 # --- Battery monitor ---
