@@ -703,7 +703,7 @@ async def goal_runner_task(initial_goal: str) -> None:
             break
 
 
-def set_mode(mode: str, goal_text: str | None = None) -> None:
+async def set_mode(mode: str, goal_text: str | None = None) -> None:
     global _active_goal_task
     if mode == "goal" and goal_text:
         if _active_goal_task and not _active_goal_task.done():

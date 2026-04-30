@@ -68,7 +68,7 @@ async def mode(request: Request):
     body = await request.json()
     mode_str = body.get("mode", "reactive")
     goal_text = body.get("goal_text")
-    brain.set_mode(mode_str, goal_text)
+    await brain.set_mode(mode_str, goal_text)
     return JSONResponse({"ok": True})
 
 

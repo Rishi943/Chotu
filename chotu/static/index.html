@@ -655,29 +655,29 @@
   }
 
   function loadGallery() {
-    // Flush any SSE images that arrived while tab was inactive
-    if (pendingGalleryImages.length > 0) {
-      var batch = pendingGalleryImages.splice(0);
-      batch.forEach(addGalleryItem);
-    }
-
-    // If already loaded from a prior click, don't re-fetch (SSE keeps it live)
     if (galleryLoaded) return;
     galleryLoaded = true;
 
-    fetch('/gallery').then(function(r) {
-      return r.json();
-    }).then(function(images) {
-      if (!Array.isArray(images) || images.length === 0) return;
-      var grid = document.getElementById('gallery-grid');
-      var empty = document.getElementById('gallery-empty');
-      if (empty) empty.remove();
-      images.forEach(function(img) {
-        grid.appendChild(makeGalleryItem(img.label, img.image_b64));
+    if (pendingGalleryImages.length > 0) {
+      // SSE has already delivered images — just flush them, no fetch needed
+      var batch = pendingGalleryImages.splice(0);
+      batch.forEach(addGalleryItem);
+    } else {
+      // No SSE images yet — fetch from server
+      fetch('/gallery').then(function(r) {
+        return r.json();
+      }).then(function(images) {
+        if (!Array.isArray(images) || images.length === 0) return;
+        var grid = document.getElementById('gallery-grid');
+        var empty = document.getElementById('gallery-empty');
+        if (empty) empty.remove();
+        images.forEach(function(img) {
+          grid.appendChild(makeGalleryItem(img.label, img.image_b64));
+        });
+      }).catch(function() {
+        // Leave "No images yet" placeholder
       });
-    }).catch(function() {
-      // Leave "No images yet" placeholder
-    });
+    }
   }
 </script>
 
