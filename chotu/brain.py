@@ -20,8 +20,8 @@ from chotu.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vis
 load_dotenv()
 
 PI_HOST = os.getenv("PI_HOST", "http://chotu.local:7000")
-MODE = os.getenv("CHOTU_MODE", "A")
-MAX_TOOL_ITERATIONS = 20
+MODE = os.getenv("CHOTU_MODE", "reactive")
+MAX_TOOL_ITERATIONS = 6  # used by _process() in reactive mode
 DEBUG = os.getenv("CHOTU_DEBUG", "0") == "1"
 MUTE = os.getenv("CHOTU_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("CHOTU_TICK_INTERVAL", "5"))
@@ -88,7 +88,7 @@ async def scan_environment_tool(segments: int = 8) -> dict:
 
     for i, direction in enumerate(labels):
         if i > 0:
-            turn = await pi.move("turn right", steps=1, speed=50)
+            turn = await pi.move("turn right", steps=1, speed=80)
             if not turn.get("ok"):
                 break
 
@@ -99,6 +99,7 @@ async def scan_environment_tool(segments: int = 8) -> dict:
 
     # Store map globally for context injection
     object_map = {e["direction"]: e["objects"] for e in entries}
+    object_map["_timestamp"] = time.time()
 
     notable = [(e["direction"], obj) for e in entries for obj in e["objects"]]
     if notable:
@@ -121,8 +122,9 @@ dispatch_map["scan_environment"] = lambda **kw: scan_environment_tool(**kw)
 
 def build_messages(user_input: str) -> list[dict]:
     sp = build_system_prompt(MODE)
-    if object_map:
-        sp += f"\n\n# Object map (from last scan)\n{json.dumps(object_map, indent=2)}"
+    if object_map and (time.time() - object_map.get("_timestamp", 0)) < 60:
+        clean_map = {k: v for k, v in object_map.items() if k != "_timestamp"}
+        sp += f"\n\n# Object map (from last scan)\n{json.dumps(clean_map, indent=2)}"
     messages = [{"role": "system", "content": sp}]
     for entry in memory:
         messages.append(entry)
@@ -172,41 +174,37 @@ async def obstacle_poller(pi_client: PiClient, estop_event: asyncio.Event) -> No
         await asyncio.sleep(0.2)
 
 
-# --- Mode B heartbeat ---
+# --- Battery monitor ---
 
-async def mode_b_tick() -> None:
-    """Autonomous tick loop. Fires every TICK_INTERVAL seconds when MODE=B."""
-    await asyncio.sleep(3.0)  # startup delay
+BATTERY_POLL_INTERVAL = 60  # seconds
+_BATTERY_THRESHOLDS = [
+    (15, "battery critical. fifteen percent. plug in now friend."),
+    (50, "battery fifty percent. halfway gone."),
+    (75, "battery seventy five percent."),
+]
+
+async def battery_monitor() -> None:
+    """Polls battery every 60s and speaks once when crossing 75/50/15% thresholds."""
+    await asyncio.sleep(10.0)  # startup delay
+    fired: set[int] = set()
     while True:
-        await asyncio.sleep(TICK_INTERVAL)
-        if not input_queue.empty():
-            continue  # LLM still processing — don't pile up
-        result = await pi.get_distance()
+        result = await pi.get_battery()
         if result.get("ok"):
-            cm = result.get("result", {}).get("cm", -1)
-            msg = f"[autonomous tick] distance: {cm:.1f}cm. Decide what to do."
-        else:
-            msg = "[autonomous tick] Sensor unavailable. Decide what to do."
-        input_queue.put_nowait(msg)
+            pct = result.get("result", {}).get("percent", 100)
+            for threshold, msg in _BATTERY_THRESHOLDS:
+                if pct <= threshold and threshold not in fired:
+                    fired.add(threshold)
+                    print(f"[battery] {pct:.0f}% — warning at {threshold}%")
+                    if not MUTE:
+                        await pi.speak(msg)
+                    else:
+                        print(f"[battery][muted] {msg}")
+        await asyncio.sleep(BATTERY_POLL_INTERVAL)
 
 
 # --- Brain loop ---
 
 async def brain_loop():
-    print(f"Chotu brain started (Mode {MODE}, model: {llm_client.model}, provider: {llm_client.provider})")
-    if MUTE:
-        print("  [mute] Audio disabled — speak() calls logged but not sent to Pi.")
-    print(f"Pi bridge: {PI_HOST}")
-
-    health = await pi.health()
-    if health.get("ok"):
-        print("Pi bridge: connected")
-    else:
-        print(f"Pi bridge: NOT reachable ({health.get('error', '?')})")
-        print("  Tools will return error envelopes. Continuing anyway.")
-
-    print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
-
     while True:
         user_input = await input_queue.get()
         if not user_input.strip():
@@ -228,6 +226,13 @@ async def _run_one(tc):
     return tc, name, args_json, result
 
 
+def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
+    """Fake ok envelope for a suppressed tool call — model sees success, doesn't retry."""
+    result = {"ok": True, "tool": name, "result": {"suppressed": True}, "duration_ms": 0, "timestamp": time.time(), "error": None}
+    dbg(f"[guard] suppressed {name}: {reason}")
+    return tool_id, name, result
+
+
 async def _process(user_input: str):
     messages = build_messages(user_input)
     dbg(f"sending {len(messages)} messages to LLM")
@@ -242,25 +247,67 @@ async def _process(user_input: str):
         print("  LLM error: empty choices")
         return
 
+    # Per-turn hard caps — enforced in code regardless of model behaviour
+    speaks_fired = 0
+    set_legs_fired = 0
+    waits_fired = 0
+    failed_tools: set[str] = set()
+
     iterations = 0
     while response.choices[0].message.tool_calls and iterations < MAX_TOOL_ITERATIONS:
         assistant_msg = response.choices[0].message
         messages.append(llm_client.format_assistant_message(response))
 
-        deferred_vision = []
-        results = await asyncio.gather(*[_run_one(tc) for tc in assistant_msg.tool_calls])
+        # --- Split: allowed vs suppressed (checked before any Pi traffic) ---
+        # Counters incremented HERE (not after results) so batched same-type calls are caught.
+        to_dispatch = []
+        suppressed = []
+        for tc in assistant_msg.tool_calls:
+            name = tc.function.name
+            if name == "speak" and speaks_fired >= 1:
+                suppressed.append(_suppressed(tc.id, name, "1 speak per turn max"))
+            elif name == "set_legs" and set_legs_fired >= 12:
+                suppressed.append(_suppressed(tc.id, name, "12 set_legs per turn max"))
+            elif name == "wait" and waits_fired >= 1:
+                suppressed.append(_suppressed(tc.id, name, "1 wait per turn max"))
+            elif name in failed_tools:
+                suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
+            else:
+                if name == "speak":   speaks_fired += 1
+                if name == "set_legs": set_legs_fired += 1
+                if name == "wait":    waits_fired += 1
+                to_dispatch.append(tc)
 
-        for tool_call, name, args_json, result in results:
+        deferred_vision = []
+        dispatched = await asyncio.gather(*[_run_one(tc) for tc in to_dispatch])
+
+        # Combine dispatched + suppressed into one pass
+        all_results = [(tc, name, result) for tc, name, _, result in dispatched] + \
+                      [(None, name, result) for _, name, result in suppressed]
+
+        for tool_call, name, result in all_results:
+            suppressed_call = tool_call is None
+            args_json = tool_call.function.arguments if tool_call else "{}"
             try:
                 args = json.loads(args_json) if args_json else {}
             except json.JSONDecodeError:
                 args = {"_raw": args_json}
 
-            print_tool_call(name, args, result)
+            if not suppressed_call:
+                print_tool_call(name, args, result)
 
-            if name == "speak" and result.get("ok"):
+            if not result.get("ok"):
+                failed_tools.add(name)
+
+            if name == "speak" and not suppressed_call and result.get("ok"):
                 muted = result.get("result", {}).get("muted", False)
                 print_speak(args.get("text", ""), muted=muted)
+
+            if tool_call is None:
+                # Suppressed calls still need a tool result in the message history
+                # Find the original tc by matching name from the suppressed list
+                # (already handled: we build messages below using tool_call.id from suppressed tuple)
+                continue
 
             if name == "capture_vision" and result.get("ok"):
                 image_b64 = result["result"].get("image_base64", "")
@@ -275,6 +322,10 @@ async def _process(user_input: str):
                     })
             else:
                 messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
+
+        # Add suppressed tool results to message history (model must see a result for every call it made)
+        for tool_id, name, result in suppressed:
+            messages.append(llm_client.format_tool_result(tool_id, json.dumps(result)))
 
         for msg in deferred_vision:
             messages.append(msg)
@@ -333,10 +384,8 @@ async def main():
     brain_task = asyncio.create_task(brain_loop())
     input_task = asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop())
     poller_task = asyncio.create_task(obstacle_poller(pi, estop))
-    tasks = [brain_task, input_task, poller_task]
-
-    if MODE == "B":
-        tasks.append(asyncio.create_task(mode_b_tick()))
+    battery_task = asyncio.create_task(battery_monitor())
+    tasks = [brain_task, input_task, poller_task, battery_task]
 
     try:
         await asyncio.gather(*tasks)
