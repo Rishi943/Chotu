@@ -7,6 +7,30 @@ import time
 from chotu.pi_client import PiClient
 
 
+# --- goal_complete signal (set by brain.py at startup) ---
+
+_goal_complete_event: asyncio.Event | None = None
+_goal_complete_result: dict = {}
+
+
+def set_goal_complete_event(event: asyncio.Event) -> None:
+    global _goal_complete_event
+    _goal_complete_event = event
+
+
+async def local_goal_complete(outcome: str, success: bool) -> dict:
+    global _goal_complete_result
+    _goal_complete_result.clear()
+    _goal_complete_result.update({"outcome": outcome, "success": success})
+    if _goal_complete_event:
+        _goal_complete_event.set()
+    return {
+        "ok": True, "tool": "goal_complete",
+        "result": {"outcome": outcome, "success": success},
+        "duration_ms": 0, "timestamp": time.time(), "error": None,
+    }
+
+
 # --- OpenAI function-calling tool schemas ---
 
 TOOL_SCHEMAS = [
@@ -16,7 +40,7 @@ TOOL_SCHEMAS = [
             "name": "move",
             "description": (
                 "Walk in a direction. 1 step is about 45mm (1.8 inches). "
-                "1 turn is about 30 degrees. speed 0-100, default 50."
+                "1 turn is about 30 degrees. speed 0-100, default 80."
             ),
             "parameters": {
                 "type": "object",
@@ -33,8 +57,8 @@ TOOL_SCHEMAS = [
                     },
                     "speed": {
                         "type": "integer",
-                        "description": "Servo speed 0-100. Default 50. Higher is faster but jerkier.",
-                        "default": 50,
+                        "description": "Servo speed 0-100. Default 80. Higher is faster but jerkier.",
+                        "default": 80,
                     },
                 },
                 "required": ["direction"],
@@ -56,6 +80,11 @@ TOOL_SCHEMAS = [
                             "look up", "look down", "look left", "look right",
                         ],
                         "description": "Pose name.",
+                    },
+                    "speed": {
+                        "type": "integer",
+                        "description": "Servo speed 0-100. Default 80. Use lower (30-50) for slow/deliberate poses.",
+                        "default": 80,
                     },
                 },
                 "required": ["name"],
@@ -91,8 +120,8 @@ TOOL_SCHEMAS = [
                     },
                     "speed": {
                         "type": "integer",
-                        "description": "Servo speed 0-100. Default 50. Low (10-30) for slow/creeping, high (70+) for energetic.",
-                        "default": 50,
+                        "description": "Servo speed 0-100. Default 80. Low (10-30) for slow/creeping, high (80+) for energetic.",
+                        "default": 80,
                     },
                 },
                 "required": ["legs"],
@@ -172,6 +201,32 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "do_trick",
+            "description": (
+                "Perform a named trick animation. These are pre-choreographed physical routines. "
+                "Use to show off, entertain, or respond to a challenge."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "enum": ["pushup", "twist", "swimming", "handwork"],
+                        "description": "pushup=push-up motion, twist=body twist, swimming=swimming sweep, handwork=raise front legs/wave arms.",
+                    },
+                    "speed": {
+                        "type": "integer",
+                        "description": "Servo speed 0-100. Default 80.",
+                        "default": 80,
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "wait",
             "description": (
                 "Explicitly do nothing for a period. Creates a memory entry so you "
@@ -191,6 +246,64 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_perception",
+            "description": (
+                "Query Vilib's always-on computer vision. Use to actively look for a specific "
+                "color, detect faces, or check for humans. Results include whether the target "
+                "is detected and its x/y position (frame is 320x240, center x=160 y=120). "
+                "x<120 means target is left, x>200 means right, x≈160 means centered."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "color": {
+                        "type": "string",
+                        "enum": ["red", "orange", "yellow", "green", "blue", "purple"],
+                        "description": "Color to search for. Omit if not looking for a color.",
+                    },
+                    "face": {
+                        "type": "boolean",
+                        "description": "Whether to check for faces.",
+                        "default": False,
+                    },
+                    "human": {
+                        "type": "boolean",
+                        "description": "Whether to check for humans.",
+                        "default": False,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "goal_complete",
+            "description": (
+                "Call this when your goal is achieved or impossible. "
+                "For find/locate goals, always call capture_vision() to confirm first. "
+                "Do not take any actions after calling this."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "outcome": {
+                        "type": "string",
+                        "description": "What happened. E.g. 'Found blue bottle near south wall' or 'Gave up — no blue detected after full sweep'.",
+                    },
+                    "success": {
+                        "type": "boolean",
+                        "description": "True if goal achieved, false if gave up.",
+                    },
+                },
+                "required": ["outcome", "success"],
             },
         },
     },
@@ -263,11 +376,14 @@ def build_dispatch(pi: PiClient, estop: asyncio.Event) -> dict:
         # Poses are not estop-blocked — they don't advance the robot's position.
         "pose": lambda **kw: pi.pose(**kw),
         "set_legs": lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
+        "do_trick": lambda **kw: pi.do_trick(**kw),
         "speak": lambda **kw: pi.speak(**kw),
         "get_distance": lambda **kw: pi.get_distance(),
         "get_battery": lambda **kw: pi.get_battery(),
         "capture_vision": lambda **kw: capture_vision_tool(pi),
         "wait": lambda **kw: local_wait(**kw),
+        "get_perception": lambda **kw: pi.get_perception(**kw),
+        "goal_complete":  lambda **kw: local_goal_complete(**kw),
     }
 
 
