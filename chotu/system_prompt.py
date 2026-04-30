@@ -129,7 +129,7 @@ speak("Facing the red cup.")
 [think: clear path. Moving forward.]
 move("forward", 1, 80)
 
-**Mode B tick: "[tick] distance: 22.0cm. Known objects: chair at SW."**
+**Mode B tick: "[tick] distance: 22.0cm. Known objects: chair at back-left."**
 [think: getting close. Taking a look before moving.]
 capture_vision()
 [image: table leg close ahead]
