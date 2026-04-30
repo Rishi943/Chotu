@@ -433,10 +433,6 @@
       <div class="perception-header">Perception / Vilib Tags</div>
       <div class="perception-grid">
         <div class="perception-row">
-          <span class="perception-key">color:</span>
-          <span class="perception-val none" id="perc-color">—</span>
-        </div>
-        <div class="perception-row">
           <span class="perception-key">face:</span>
           <span class="perception-val none" id="perc-face">—</span>
         </div>
@@ -606,15 +602,12 @@
 
       var faceEl = document.getElementById('perc-face');
       var humanEl = document.getElementById('perc-human');
-      var colorEl = document.getElementById('perc-color');
 
       if (!result) {
         faceEl.textContent = '—';
         faceEl.className = 'perception-val none';
         humanEl.textContent = '—';
         humanEl.className = 'perception-val none';
-        colorEl.textContent = '—';
-        colorEl.className = 'perception-val none';
         return;
       }
 
@@ -625,15 +618,6 @@
       var humanDetected = result.human && result.human.detected;
       humanEl.textContent = humanDetected ? 'detected' : 'not detected';
       humanEl.className = 'perception-val' + (humanDetected ? '' : ' none');
-
-      var color = result.color;
-      if (color && color.color) {
-        colorEl.textContent = color.color;
-        colorEl.className = 'perception-val';
-      } else {
-        colorEl.textContent = '— (none targeted)';
-        colorEl.className = 'perception-val none';
-      }
     }).catch(function() {
       // Leave last known values on error — don't blank them
     });

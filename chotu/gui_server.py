@@ -48,7 +48,7 @@ async def gallery():
 async def perception():
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            resp = await client.get(f"{brain.PI_HOST}/perception", params={"face": "true", "human": "true"})
+            resp = await client.post(f"{brain.PI_HOST}/perception", json={"face": True, "human": True})
             return JSONResponse(resp.json())
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
