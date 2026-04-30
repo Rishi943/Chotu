@@ -181,21 +181,14 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "scan_environment",
             "description": (
-                "Perform a 360° sweep: rotate in segments, capture a photo at each position, "
-                "identify objects, and return a structured spatial map. "
-                "Use before 'point at X' tasks or to build awareness of the surroundings."
+                "Perform a 360° sweep in 6 segments. Rotate, photograph, "
+                "identify objects at each segment, return a body-relative "
+                "spatial map (front, front-right, back-right, back, back-left, "
+                "front-left). Use before 'point at X' tasks or to build "
+                "awareness of the surroundings. Robot ends back at its "
+                "starting heading."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "segments": {
-                        "type": "integer",
-                        "description": "Number of rotation segments (4=cardinal, 8=octants). Default 8.",
-                        "default": 8,
-                    },
-                },
-                "required": [],
-            },
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
