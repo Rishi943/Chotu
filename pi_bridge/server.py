@@ -270,39 +270,42 @@ async def battery():
 @app.post("/perception")
 async def perception(req: PerceptionRequest):
     start = time.time()
-    result = {}
+    try:
+        result = {}
 
-    if req.color:
-        if req.color not in VILIB_COLORS:
-            return _envelope("perception", {}, start, f"unsupported color: {req.color}")
-        Vilib.color_detect(req.color)
-        await asyncio.sleep(0.1)
-        p = Vilib.detect_obj_parameter
-        result["color"] = {
-            "target": req.color,
-            "detected": p.get("color_n", 0) > 0,
-            "x": p.get("color_x", 0),
-            "y": p.get("color_y", 0),
-            "size": p.get("color_n", 0),
-        }
+        if req.color:
+            if req.color not in VILIB_COLORS:
+                return _envelope("perception", {}, start, f"unsupported color: {req.color}")
+            Vilib.color_detect(req.color)
+            await asyncio.sleep(0.1)
+            p = Vilib.detect_obj_parameter
+            result["color"] = {
+                "target": req.color,
+                "detected": p.get("color_n", 0) > 0,
+                "x": p.get("color_x", 0),
+                "y": p.get("color_y", 0),
+                "size": p.get("color_n", 0),
+            }
 
-    if req.face:
-        Vilib.face_detect_switch(True)
-        await asyncio.sleep(0.1)
-        p = Vilib.detect_obj_parameter
-        result["face"] = {
-            "detected": p.get("human_n", 0) > 0,
-            "x": p.get("human_x", 0),
-            "y": p.get("human_y", 0),
-        }
+        if req.face:
+            Vilib.face_detect_switch(True)
+            await asyncio.sleep(0.1)
+            p = Vilib.detect_obj_parameter
+            result["face"] = {
+                "detected": p.get("human_n", 0) > 0,
+                "x": p.get("human_x", 0),
+                "y": p.get("human_y", 0),
+            }
 
-    if req.human:
-        p = Vilib.detect_obj_parameter
-        result["human"] = {
-            "detected": p.get("human_n", 0) > 0,
-        }
+        if req.human:
+            p = Vilib.detect_obj_parameter
+            result["human"] = {
+                "detected": p.get("human_n", 0) > 0,
+            }
 
-    return _envelope("perception", result, start)
+        return _envelope("perception", result, start)
+    except Exception as e:
+        return _envelope("perception", {}, start, str(e))
 
 
 # ---------------------------------------------------------------------------
