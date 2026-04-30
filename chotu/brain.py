@@ -62,6 +62,27 @@ if MUTE:
 
 # --- scan_environment (local tool, not a Pi endpoint) ---
 
+SCAN_SEGMENTS = 6
+SCAN_LABELS = [
+    "front", "front-right", "back-right",
+    "back", "back-left", "front-left",
+]
+SCAN_DEGREES = [0, 60, 120, 180, 240, 300]
+TURN_STEPS_PER_SEGMENT = 2  # 6 segments × 2 steps × ~30° = ~360°
+
+
+def _build_map_key(label: str, deg: int) -> str:
+    return f"{label} (+{deg}°)"
+
+
+def _should_invalidate_map_after_turn(name: str, args: dict, result: dict) -> bool:
+    if name != "move":
+        return False
+    if not result.get("ok"):
+        return False
+    return args.get("direction") in ("turn left", "turn right")
+
+
 async def _describe_objects(image_b64: str) -> list[str]:
     """Mini LLM call to identify objects in a single image."""
     try:
@@ -645,11 +666,14 @@ async def main(goal: str | None = None):
     finally:
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await llm_client.close()
         print("\nChotu sitting down...")
         try:
             await asyncio.wait_for(pi.pose("sit"), timeout=5.0)
         except Exception:
             pass
+        await pi.close()
         print("Chotu shutting down. Bye!")
 
 
