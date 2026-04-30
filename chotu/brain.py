@@ -556,6 +556,32 @@ async def _process(user_input: str):
         memory.append({"role": "assistant", "content": final_text})
 
 
+# --- Goal runner ---
+
+async def goal_runner_task(initial_goal: str) -> None:
+    """Run goals sequentially. After each completes, sit and wait for next goal via terminal."""
+    current_goal = initial_goal
+
+    while True:
+        await run_goal(current_goal)
+
+        print("\n[goal] Sitting down. Type next goal or Ctrl+C to quit.")
+        try:
+            await pi.pose("sit")
+        except Exception:
+            pass
+
+        try:
+            next_goal = await asyncio.to_thread(input, "next goal> ")
+            if next_goal.strip():
+                current_goal = next_goal.strip()
+            else:
+                print("[goal] No goal entered. Waiting for input...")
+                continue
+        except EOFError:
+            break
+
+
 # --- Input loops ---
 
 async def input_loop():
@@ -582,12 +608,32 @@ async def voice_loop():
 
 # --- Main ---
 
-async def main():
-    brain_task = asyncio.create_task(brain_loop())
-    input_task = asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop())
-    poller_task = asyncio.create_task(obstacle_poller(pi, estop))
-    battery_task = asyncio.create_task(battery_monitor())
-    tasks = [brain_task, input_task, poller_task, battery_task]
+async def main(goal: str | None = None):
+    mode_label = "autonomous" if goal else MODE
+    print(f"Chotu brain started (mode: {mode_label}, model: {llm_client.model}, provider: {llm_client.provider})")
+    if MUTE:
+        print("  [mute] Audio disabled — speak() calls logged but not sent to Pi.")
+    print(f"Pi bridge: {PI_HOST}")
+
+    health = await pi.health()
+    if health.get("ok"):
+        print("Pi bridge: connected")
+    else:
+        print(f"Pi bridge: NOT reachable ({health.get('error', '?')})")
+        print("  Tools will return error envelopes. Continuing anyway.")
+
+    tasks = [
+        asyncio.create_task(obstacle_poller(pi, estop)),
+        asyncio.create_task(battery_monitor()),
+    ]
+
+    if goal:
+        print(f"Goal: {goal}\n")
+        tasks.append(asyncio.create_task(goal_runner_task(goal)))
+    else:
+        print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
+        tasks.append(asyncio.create_task(brain_loop()))
+        tasks.append(asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop()))
 
     try:
         await asyncio.gather(*tasks)
@@ -608,4 +654,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import argparse
+    parser = argparse.ArgumentParser(description="Chotu brain")
+    parser.add_argument("--goal", type=str, default=None, help="Goal for autonomous mode")
+    args = parser.parse_args()
+    asyncio.run(main(goal=args.goal))

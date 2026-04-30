@@ -32,6 +32,7 @@ Key points:
 - Pi access is SSH only
 - Start Pi bridge: `ssh chotu@chotu.local` then `sudo ~/chotu-bridge/.venv/bin/python3 ~/chotu-bridge/server.py`
 - Start brain (terminal input): `source .venv/bin/activate && python3 -m chotu.brain`
+- Start brain (goal mode): `source .venv/bin/activate && python3 -m chotu.brain --goal "your goal here"`
 - Start brain (voice input): `CHOTU_VOICE=1 python3 -m chotu.brain`
 - Debug mode: `CHOTU_DEBUG=1 python3 -m chotu.brain`
 - Start llama-server first: `llama-server -m /home/rishi/.local/share/localis/models/Qwen3.5-4B-Q4_K_M.gguf --mmproj /home/rishi/.local/share/localis/models/mmproj-BF16.gguf --port 8080 -ngl 99 -c 8192 --parallel 1`
