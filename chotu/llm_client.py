@@ -86,6 +86,12 @@ class LLMClient:
                 f"Unknown CHOTU_LLM_PROVIDER: {self.provider!r}. Use 'local' or 'claude'."
             )
 
+    async def close(self) -> None:
+        if self._openai:
+            await self._openai.close()
+        if self._anthropic_client:
+            await self._anthropic_client.close()
+
     async def chat_complete(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
         """Send messages + tools to the configured provider. Returns normalised response."""
         if self.provider == "local":

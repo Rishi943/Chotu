@@ -89,12 +89,18 @@ async def _describe_objects(image_b64: str) -> list[str]:
         response = await llm_client.chat_complete(
             messages=[{"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                {"type": "text", "text": "List visible objects. Comma-separated, one line, no articles. Be brief."},
+                {"type": "text", "text": (
+                    "List only objects you can clearly see in this image. "
+                    "Maximum 3 items, comma-separated, one line, no articles. "
+                    "If the image is dark, blurry, or nothing is clearly identifiable, respond with exactly: nothing"
+                )},
             ]}],
             tools=[],
         )
-        text = response.choices[0].message.content or ""
-        return [o.strip() for o in text.split(",") if o.strip()]
+        text = (response.choices[0].message.content or "").strip().lower()
+        if text == "nothing" or not text:
+            return []
+        return [o.strip() for o in text.split(",") if o.strip() and o.strip() != "nothing"]
     except Exception:
         return []
 
@@ -102,23 +108,29 @@ async def _describe_objects(image_b64: str) -> list[str]:
 async def scan_environment_tool() -> dict:
     """360° sweep: rotate in 6 segments, photograph each, identify objects.
 
-    After scan, robot is back at its scan-start heading (6 × 2 × ~30° = 360°).
-    The first turn after this call invalidates the object_map.
+    Makes 5 right-turns (SCAN_SEGMENTS-1) then an equal left-turn to return
+    to the original heading. Net rotation ≈ 0 regardless of degrees-per-step.
     """
     global object_map
     start = time.time()
     entries: dict[str, list[str]] = {}
+    turns_made = 0
 
     for i, (label, deg) in enumerate(zip(SCAN_LABELS, SCAN_DEGREES)):
         if i > 0:
             turn = await pi.move("turn right", steps=TURN_STEPS_PER_SEGMENT, speed=80)
             if not turn.get("ok"):
                 break
+            turns_made += 1
 
         capture = await capture_vision_tool(pi)
         image_b64 = capture.get("result", {}).get("image_base64", "")
         objects = await _describe_objects(image_b64) if image_b64 else []
         entries[_build_map_key(label, deg)] = objects
+
+    # Return to original heading by reversing all right-turns.
+    if turns_made > 0:
+        await pi.move("turn left", steps=turns_made * TURN_STEPS_PER_SEGMENT, speed=80)
 
     # Replace map atomically — any partial scan still overwrites the previous one.
     object_map.clear()

@@ -81,8 +81,11 @@ class PiClient:
         except Exception as e:
             return self._error_envelope(tool, e)
 
-    @staticmethod
-    def _error_envelope(tool: str, error: Exception) -> dict:
+    async def close(self) -> None:
+        await self._default.aclose()
+        await self._slow.aclose()
+
+    def _error_envelope(self, tool: str, error: Exception) -> dict:
         return {
             "ok": False,
             "tool": tool,

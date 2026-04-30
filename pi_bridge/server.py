@@ -16,6 +16,15 @@ from contextlib import asynccontextmanager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+# Suppress uvicorn access-log noise for high-frequency poll endpoints.
+class _PollFilter(logging.Filter):
+    _MUTED = {"/distance", "/health", "/battery"}
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(p in msg for p in self._MUTED)
+
+logging.getLogger("uvicorn.access").addFilter(_PollFilter())
+
 import cv2
 import pygame
 import robot_hat
@@ -56,7 +65,6 @@ def _voltage_to_percent(v: float) -> int:
 async def lifespan(app: FastAPI):
     Vilib.camera_start(vflip=False, hflip=False)
     await asyncio.sleep(1)  # camera warm-up
-    Vilib.human_detect(True)
     yield
     Vilib.camera_stop()
 
@@ -120,7 +128,6 @@ class PerceptionRequest(BaseModel):
 @app.get("/health")
 async def health():
     start = time.time()
-    logging.info("GET /health")
     return _envelope("health", {"status": "ok"}, start)
 
 
@@ -221,13 +228,10 @@ async def speak(req: SpeakRequest):
 @app.get("/distance")
 async def distance():
     start = time.time()
-    logging.info("GET /distance")
     try:
         cm = float(us.read())
         reliable = 2.0 <= cm <= 300.0
-        result = _envelope("get_distance", {"cm": round(cm, 1), "reliable": reliable}, start)
-        logging.info(f"  distance={cm}cm reliable={reliable}")
-        return result
+        return _envelope("get_distance", {"cm": round(cm, 1), "reliable": reliable}, start)
     except Exception as e:
         logging.error(f"  distance error: {e}")
         return _envelope("get_distance", {"cm": 0, "reliable": False}, start, str(e))
@@ -236,7 +240,6 @@ async def distance():
 @app.post("/capture")
 async def capture():
     start = time.time()
-    logging.info("POST /capture")
     try:
         frame = Vilib.img
         if frame is None:
@@ -255,13 +258,10 @@ async def capture():
 @app.get("/battery")
 async def battery():
     start = time.time()
-    logging.info("GET /battery")
     try:
         voltage = _read_battery_voltage()
         percent = _voltage_to_percent(voltage)
-        result = _envelope("battery", {"voltage": voltage, "percent": percent, "charging": False}, start)
-        logging.info(f"  battery {voltage}V {percent}%")
-        return result
+        return _envelope("battery", {"voltage": voltage, "percent": percent, "charging": False}, start)
     except Exception as e:
         logging.error(f"  battery error: {e}")
         return _envelope("battery", {}, start, str(e))
