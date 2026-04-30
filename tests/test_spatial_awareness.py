@@ -118,3 +118,18 @@ def test_run_one_preserves_object_map_after_forward(monkeypatch):
     asyncio.run(brain._run_one(tc))
 
     assert "front (+0°)" in brain.object_map, "forward must not clear map"
+
+
+def test_system_prompt_describes_body_relative_labels():
+    from chotu.system_prompt import build_system_prompt
+    p = build_system_prompt("auto")
+    assert "front-right" in p
+    assert "back-left" in p
+    assert "+60°" in p or "+0°" in p
+    assert "map clears the moment you turn" in p
+
+
+def test_system_prompt_no_longer_uses_compass_labels_in_example():
+    from chotu.system_prompt import build_system_prompt
+    p = build_system_prompt("reactive")
+    assert "Red cup north" not in p
