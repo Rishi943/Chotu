@@ -61,3 +61,60 @@ def test_should_invalidate_map_after_turn_false_for_other_tools():
     result = {"ok": True}
     assert _should_invalidate_map_after_turn("speak", {"text": "hi"}, result) is False
     assert _should_invalidate_map_after_turn("capture_vision", {}, result) is False
+
+
+def test_run_one_clears_object_map_after_turn(monkeypatch):
+    """A successful turn dispatched through _run_one must clear object_map."""
+    import asyncio
+    from chotu import brain
+
+    # Seed the map with sentinel data
+    brain.object_map.clear()
+    brain.object_map.update({"front (+0°)": ["bottle"], "_timestamp": 0.0})
+
+    # Stub dispatch_tool so we don't need the Pi
+    async def fake_dispatch(_map, _name, _args_json):
+        return {"ok": True, "tool": "move", "result": {}, "duration_ms": 10,
+                "timestamp": 0, "error": None}
+
+    monkeypatch.setattr(brain, "dispatch_tool", fake_dispatch)
+
+    class FakeFn:
+        def __init__(self, name, args):
+            self.name = name
+            self.arguments = args
+    class FakeTc:
+        def __init__(self, name, args):
+            self.function = FakeFn(name, args)
+
+    tc = FakeTc("move", '{"direction": "turn right", "steps": 2}')
+    asyncio.run(brain._run_one(tc))
+
+    assert brain.object_map == {}, f"map should be cleared, got {brain.object_map}"
+
+
+def test_run_one_preserves_object_map_after_forward(monkeypatch):
+    import asyncio
+    from chotu import brain
+
+    brain.object_map.clear()
+    brain.object_map.update({"front (+0°)": ["bottle"], "_timestamp": 0.0})
+
+    async def fake_dispatch(_map, _name, _args_json):
+        return {"ok": True, "tool": "move", "result": {}, "duration_ms": 10,
+                "timestamp": 0, "error": None}
+
+    monkeypatch.setattr(brain, "dispatch_tool", fake_dispatch)
+
+    class FakeFn:
+        def __init__(self, name, args):
+            self.name = name
+            self.arguments = args
+    class FakeTc:
+        def __init__(self, name, args):
+            self.function = FakeFn(name, args)
+
+    tc = FakeTc("move", '{"direction": "forward", "steps": 1}')
+    asyncio.run(brain._run_one(tc))
+
+    assert "front (+0°)" in brain.object_map, "forward must not clear map"

@@ -449,6 +449,14 @@ async def _run_one(tc):
     args_json = tc.function.arguments
     dbg(f"dispatching {name}({args_json})")
     result = await dispatch_tool(dispatch_map, name, args_json)
+    try:
+        args = json.loads(args_json) if args_json else {}
+    except json.JSONDecodeError:
+        args = {}
+    if _should_invalidate_map_after_turn(name, args, result):
+        if object_map:
+            dbg(f"[map] invalidated after {args.get('direction')}")
+        object_map.clear()
     return tc, name, args_json, result
 
 
