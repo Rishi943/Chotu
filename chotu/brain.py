@@ -99,32 +99,36 @@ async def _describe_objects(image_b64: str) -> list[str]:
         return []
 
 
-async def scan_environment_tool(segments: int = 8) -> dict:
-    """360° sweep: rotate, photograph, identify objects at each position."""
+async def scan_environment_tool() -> dict:
+    """360° sweep: rotate in 6 segments, photograph each, identify objects.
+
+    After scan, robot is back at its scan-start heading (6 × 2 × ~30° = 360°).
+    The first turn after this call invalidates the object_map.
+    """
     global object_map
     start = time.time()
-    all_labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-    labels = all_labels[:max(1, min(segments, 8))]
-    entries = []
+    entries: dict[str, list[str]] = {}
 
-    for i, direction in enumerate(labels):
+    for i, (label, deg) in enumerate(zip(SCAN_LABELS, SCAN_DEGREES)):
         if i > 0:
-            turn = await pi.move("turn right", steps=1, speed=80)
+            turn = await pi.move("turn right", steps=TURN_STEPS_PER_SEGMENT, speed=80)
             if not turn.get("ok"):
                 break
 
         capture = await capture_vision_tool(pi)
         image_b64 = capture.get("result", {}).get("image_base64", "")
         objects = await _describe_objects(image_b64) if image_b64 else []
-        entries.append({"direction": direction, "objects": objects})
+        entries[_build_map_key(label, deg)] = objects
 
-    # Store map globally for context injection
-    object_map = {e["direction"]: e["objects"] for e in entries}
-    object_map["_timestamp"] = time.time()
+    # Replace map atomically — any partial scan still overwrites the previous one.
+    object_map.clear()
+    object_map.update(entries)
+    object_map["_scan_id"] = object_map.get("_scan_id", 0) + 1
+    object_map["_timestamp"] = time.time()  # kept for the 60s freshness gate in build_messages
 
-    notable = [(e["direction"], obj) for e in entries for obj in e["objects"]]
+    notable = [(key, obj) for key, objs in entries.items() for obj in objs]
     if notable:
-        summary = "Found: " + ", ".join(f"{obj} ({d})" for d, obj in notable)
+        summary = "Found: " + ", ".join(f"{obj} ({key})" for key, obj in notable)
     else:
         summary = "No objects identified."
 
@@ -136,7 +140,7 @@ async def scan_environment_tool(segments: int = 8) -> dict:
     }
 
 
-dispatch_map["scan_environment"] = lambda **kw: scan_environment_tool(**kw)
+dispatch_map["scan_environment"] = lambda **kw: scan_environment_tool()
 
 
 # --- Goal mode state ---
