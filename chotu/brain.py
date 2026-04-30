@@ -174,6 +174,43 @@ async def obstacle_poller(pi_client: PiClient, estop_event: asyncio.Event) -> No
         await asyncio.sleep(0.2)
 
 
+# --- Goal mode helpers ---
+
+async def build_state_string() -> str:
+    """Fresh ambient state for each goal iteration: distance, estop, human."""
+    dist_result = await pi.get_distance()
+    dist_str = (
+        f"{dist_result['result']['cm']:.1f}cm"
+        if dist_result.get("ok") else "unknown"
+    )
+    estop_str = "blocked" if estop.is_set() else "clear"
+
+    perception_result = await pi.get_perception(human=True)
+    if perception_result.get("ok"):
+        human = perception_result["result"].get("human", {})
+        human_str = "detected" if human.get("detected") else "not detected"
+    else:
+        human_str = "unknown"
+
+    return f"distance: {dist_str} | estop: {estop_str} | human: {human_str}"
+
+
+def _compress_vision_in_history(messages: list[dict]) -> None:
+    """Replace image_url blocks in older user messages with a text placeholder.
+    Keeps the most recent image intact. Prevents context bloat on long goal runs."""
+    image_indices = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "user"
+        and isinstance(m.get("content"), list)
+        and any(b.get("type") == "image_url" for b in m["content"])
+    ]
+    for idx in image_indices[:-1]:
+        msg = messages[idx]
+        text_parts = [b["text"] for b in msg["content"] if b.get("type") == "text"]
+        caption = " ".join(text_parts) or "[camera image]"
+        messages[idx] = {"role": "user", "content": f"[vision compressed: {caption[:120]}]"}
+
+
 # --- Battery monitor ---
 
 BATTERY_POLL_INTERVAL = 60  # seconds
