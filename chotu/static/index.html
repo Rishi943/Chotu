@@ -98,10 +98,18 @@
       background: #333;
     }
 
-    .event {
-      margin-bottom: 2px;
-    }
+    /* Event row styles */
+    .ev { padding: 2px 0; border-bottom: 1px solid #1a1a1a; word-break: break-word; }
+    .ev-user     { color: #d4d4d4; }
+    .ev-think    { color: #6b9bd2; }
+    .ev-monologue { color: #aaaaaa; font-style: italic; }
+    .ev-speak    { color: #7ec87e; }
+    .ev-tool     { color: #888; }
+    .ev-estop    { color: #e06c75; }
+    .ev-mode     { color: #c678dd; }
 
+    /* Legacy event classes (kept for compatibility) */
+    .event { margin-bottom: 2px; }
     .event-user   { color: #d4d4d4; }
     .event-think  { color: #6b9bd2; }
     .event-tool   { color: #888; }
@@ -147,6 +155,29 @@
       color: #333;
     }
 
+    .gallery-item {
+      border: 1px solid #333;
+      background: #1a1a1a;
+      overflow: hidden;
+    }
+
+    .gallery-label {
+      padding: 4px 6px;
+      color: #666;
+      font-size: 11px;
+      border-top: 1px solid #222;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .gallery-empty {
+      grid-column: 1 / -1;
+      text-align: center;
+      color: #444;
+      padding: 40px 0;
+    }
+
     /* Mode controls */
     .controls-bar {
       border-top: 1px solid #333;
@@ -161,6 +192,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
     }
 
     .controls-label {
@@ -195,6 +227,22 @@
     .checkbox-label input[type="checkbox"] {
       accent-color: #d4d4d4;
       cursor: pointer;
+    }
+
+    #goal-input {
+      flex: 1;
+      background: #0d0d0d;
+      color: #d4d4d4;
+      border: 1px solid #333;
+      font-family: monospace;
+      font-size: 13px;
+      padding: 2px 6px;
+      outline: none;
+      min-width: 0;
+    }
+
+    #goal-input::placeholder {
+      color: #444;
     }
 
     /* Input bar */
@@ -258,6 +306,7 @@
       font-size: 12px;
       position: relative;
       min-height: 0;
+      overflow: hidden;
     }
 
     .camera-label {
@@ -329,33 +378,13 @@
     <!-- Chat panel -->
     <div class="tab-panel active" id="panel-chat">
       <div class="event-log" id="event-log">
-        <div class="event event-user"><span class="event-tag">[user]</span> walk forward and say hi</div>
-        <div class="event event-think"><span class="event-tag">[think]</span> I should move forward and greet. Simple task.</div>
-        <div class="event event-tool"><span class="event-tag">[tool]</span> move(direction: forward, steps: 2) → ok (1240ms)</div>
-        <div class="event event-tool"><span class="event-tag">[tool]</span> speak(text: "Hello! Good see you!") → ok (2100ms)</div>
-        <div class="event event-speak"><span class="event-tag">[speak]</span> "Hello! Good see you!"</div>
       </div>
     </div>
 
     <!-- Gallery panel -->
     <div class="tab-panel" id="panel-gallery">
-      <div class="gallery-grid">
-        <div class="gallery-thumb">
-          <div class="thumb-icon">[ ]</div>
-          <div>front (+0°)</div>
-        </div>
-        <div class="gallery-thumb">
-          <div class="thumb-icon">[ ]</div>
-          <div>front-right (+60°)</div>
-        </div>
-        <div class="gallery-thumb">
-          <div class="thumb-icon">[ ]</div>
-          <div>back-right (+120°)</div>
-        </div>
-        <div class="gallery-thumb">
-          <div class="thumb-icon">[ ]</div>
-          <div>back (+180°)</div>
-        </div>
+      <div class="gallery-grid" id="gallery-grid">
+        <div class="gallery-empty" id="gallery-empty">No images yet</div>
       </div>
     </div>
 
@@ -363,15 +392,15 @@
     <div class="controls-bar">
       <div class="controls-row">
         <span class="controls-label">Mode:</span>
-        <select class="mode-select">
-          <option>reactive</option>
-          <option>autonomous</option>
-          <option>idle</option>
+        <select class="mode-select" id="mode-select">
+          <option value="reactive">reactive</option>
+          <option value="goal">goal</option>
         </select>
+        <input id="goal-input" type="text" placeholder="enter goal..." style="display:none;">
       </div>
       <div class="controls-row">
         <label class="checkbox-label">
-          <input type="checkbox"> thinking
+          <input type="checkbox" id="thinking-checkbox"> thinking
         </label>
       </div>
     </div>
@@ -395,11 +424,8 @@
 
     <!-- Camera feed -->
     <div class="camera-block">
-      <div class="camera-label">
-        CAMERA FEED
-        <br>
-        <span class="url">chotu.local:7000/stream</span>
-      </div>
+      <img id="camera-stream" src="http://chotu.local:7000/stream" alt="camera feed"
+           style="width:100%;height:100%;object-fit:contain;display:block;">
     </div>
 
     <!-- Perception / vilib tags -->
@@ -408,15 +434,15 @@
       <div class="perception-grid">
         <div class="perception-row">
           <span class="perception-key">color:</span>
-          <span class="perception-val none">— (none targeted)</span>
+          <span class="perception-val none" id="perc-color">—</span>
         </div>
         <div class="perception-row">
           <span class="perception-key">face:</span>
-          <span class="perception-val none">not detected</span>
+          <span class="perception-val none" id="perc-face">—</span>
         </div>
         <div class="perception-row">
           <span class="perception-key">human:</span>
-          <span class="perception-val none">not detected</span>
+          <span class="perception-val none" id="perc-human">—</span>
         </div>
       </div>
     </div>
@@ -426,13 +452,22 @@
 </div>
 
 <script>
+  // ── Tab switching ─────────────────────────────────────────
+  var galleryLoaded = false;
+  var pendingGalleryImages = []; // SSE images queued while gallery tab is inactive
+
   function switchTab(name, btn) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
     btn.classList.add('active');
     document.getElementById('panel-' + name).classList.add('active');
+
+    if (name === 'gallery') {
+      loadGallery();
+    }
   }
 
+  // ── Chat input ────────────────────────────────────────────
   function handleKey(e) {
     if (e.key === 'Enter') sendInput();
   }
@@ -441,13 +476,224 @@
     var field = document.getElementById('input-field');
     var text = field.value.trim();
     if (!text) return;
+    field.value = '';
+    fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }).catch(function(err) {
+      appendEvent('ev-tool', '[chat error] ' + err.message);
+    });
+  }
+
+  // ── Append event row ──────────────────────────────────────
+  function appendEvent(cls, text) {
     var log = document.getElementById('event-log');
     var div = document.createElement('div');
-    div.className = 'event event-user';
-    div.textContent = '[user] ' + text;
+    div.className = 'ev ' + cls;
+    div.textContent = text;
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
-    field.value = '';
+  }
+
+  // ── SSE event stream ──────────────────────────────────────
+  var es = new EventSource('/events');
+
+  es.onmessage = function(event) {
+    var data;
+    try {
+      data = JSON.parse(event.data);
+    } catch(e) {
+      return;
+    }
+
+    var type = data.type;
+    if (type === 'ping') return;
+
+    if (type === 'user') {
+      appendEvent('ev-user', '[user] ' + data.text);
+    } else if (type === 'think') {
+      appendEvent('ev-think', '[think] ' + data.text);
+    } else if (type === 'monologue') {
+      appendEvent('ev-monologue', '[thinks] ' + data.text);
+    } else if (type === 'speak') {
+      appendEvent('ev-speak', '[speak] "' + data.text + '"');
+    } else if (type === 'tool_call') {
+      var msg;
+      if (data.ok) {
+        msg = '[' + data.tool + '] ok=' + data.ok + ' ' + data.ms + 'ms';
+      } else {
+        msg = '[' + data.tool + '] ok=false error=' + (data.error || '?');
+      }
+      appendEvent('ev-tool', msg);
+    } else if (type === 'image') {
+      // Add to gallery
+      var item = makeGalleryItem(data.label, data.image_b64);
+      var galleryPanel = document.getElementById('panel-gallery');
+      if (galleryPanel.classList.contains('active')) {
+        addGalleryItem(item);
+      } else {
+        pendingGalleryImages.push(item);
+      }
+    } else if (type === 'estop') {
+      appendEvent('ev-estop', '[estop] ' + data.state + ' at ' + data.cm + 'cm');
+    } else if (type === 'mode') {
+      appendEvent('ev-mode', '[mode] switched to ' + data.mode);
+    }
+  };
+
+  es.onerror = function() {
+    // EventSource auto-reconnects; no action needed
+  };
+
+  // ── Mode dropdown ─────────────────────────────────────────
+  var modeSelect = document.getElementById('mode-select');
+  var goalInput = document.getElementById('goal-input');
+
+  modeSelect.addEventListener('change', function() {
+    var mode = modeSelect.value;
+    if (mode === 'goal') {
+      goalInput.style.display = '';
+      goalInput.focus();
+    } else {
+      goalInput.style.display = 'none';
+      fetch('/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'reactive' })
+      }).catch(function() {});
+    }
+  });
+
+  goalInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      var goalText = goalInput.value.trim();
+      if (!goalText) return;
+      fetch('/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'goal', goal_text: goalText })
+      }).catch(function() {});
+      goalInput.value = '';
+    }
+    if (e.key === 'Escape') {
+      modeSelect.value = 'reactive';
+      goalInput.style.display = 'none';
+      fetch('/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'reactive' })
+      }).catch(function() {});
+    }
+  });
+
+  // ── Thinking checkbox ─────────────────────────────────────
+  var thinkingCb = document.getElementById('thinking-checkbox');
+  thinkingCb.addEventListener('change', function() {
+    fetch('/thinking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: thinkingCb.checked })
+    }).catch(function() {});
+  });
+
+  // ── Perception polling ────────────────────────────────────
+  function updatePerception() {
+    fetch('/api/perception').then(function(r) {
+      return r.json();
+    }).then(function(data) {
+      var result = (data && data.result) ? data.result : null;
+
+      var faceEl = document.getElementById('perc-face');
+      var humanEl = document.getElementById('perc-human');
+      var colorEl = document.getElementById('perc-color');
+
+      if (!result) {
+        faceEl.textContent = '—';
+        faceEl.className = 'perception-val none';
+        humanEl.textContent = '—';
+        humanEl.className = 'perception-val none';
+        colorEl.textContent = '—';
+        colorEl.className = 'perception-val none';
+        return;
+      }
+
+      var faceDetected = result.face && result.face.detected;
+      faceEl.textContent = faceDetected ? 'detected' : 'not detected';
+      faceEl.className = 'perception-val' + (faceDetected ? '' : ' none');
+
+      var humanDetected = result.human && result.human.detected;
+      humanEl.textContent = humanDetected ? 'detected' : 'not detected';
+      humanEl.className = 'perception-val' + (humanDetected ? '' : ' none');
+
+      var color = result.color;
+      if (color && color.color) {
+        colorEl.textContent = color.color;
+        colorEl.className = 'perception-val';
+      } else {
+        colorEl.textContent = '— (none targeted)';
+        colorEl.className = 'perception-val none';
+      }
+    }).catch(function() {
+      // Leave last known values on error — don't blank them
+    });
+  }
+
+  updatePerception();
+  setInterval(updatePerception, 2000);
+
+  // ── Gallery ───────────────────────────────────────────────
+  function makeGalleryItem(label, image_b64) {
+    var item = document.createElement('div');
+    item.className = 'gallery-item';
+
+    var img = document.createElement('img');
+    img.src = 'data:image/jpeg;base64,' + image_b64;
+    img.style.cssText = 'width:100%;display:block;';
+    img.alt = label;
+
+    var lbl = document.createElement('div');
+    lbl.className = 'gallery-label';
+    lbl.textContent = label;
+
+    item.appendChild(img);
+    item.appendChild(lbl);
+    return item;
+  }
+
+  function addGalleryItem(item) {
+    var grid = document.getElementById('gallery-grid');
+    var empty = document.getElementById('gallery-empty');
+    if (empty) {
+      empty.remove();
+    }
+    grid.appendChild(item);
+  }
+
+  function loadGallery() {
+    // Flush any SSE images that arrived while tab was inactive
+    if (pendingGalleryImages.length > 0) {
+      var batch = pendingGalleryImages.splice(0);
+      batch.forEach(addGalleryItem);
+    }
+
+    // If already loaded from a prior click, don't re-fetch (SSE keeps it live)
+    if (galleryLoaded) return;
+    galleryLoaded = true;
+
+    fetch('/gallery').then(function(r) {
+      return r.json();
+    }).then(function(images) {
+      if (!Array.isArray(images) || images.length === 0) return;
+      var grid = document.getElementById('gallery-grid');
+      var empty = document.getElementById('gallery-empty');
+      if (empty) empty.remove();
+      images.forEach(function(img) {
+        grid.appendChild(makeGalleryItem(img.label, img.image_b64));
+      });
+    }).catch(function() {
+      // Leave "No images yet" placeholder
+    });
   }
 </script>
 
