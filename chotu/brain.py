@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 import traceback
 from collections import deque
@@ -46,6 +47,8 @@ gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
 gallery_store: list[dict] = []
 thinking_enabled: bool = False
 _active_goal_task: asyncio.Task | None = None
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
 # --- Mute no-op ---
@@ -179,6 +182,15 @@ def _emit(event: dict) -> None:
         pass
 
 
+def _extract_think_blocks(text: str | None) -> tuple[str | None, list[str]]:
+    """Strip <think>...</think> blocks from text. Returns (clean_text, [think_texts])."""
+    if not text:
+        return text, []
+    blocks = _THINK_RE.findall(text)
+    clean = _THINK_RE.sub("", text).strip() or None
+    return clean, blocks
+
+
 # --- Terminal output ---
 
 def dbg(msg: str):
@@ -294,7 +306,7 @@ async def run_goal(goal_str: str) -> dict:
         dbg(f"[goal] outer iteration {iterations + 1}, state: {state_str}")
 
         try:
-            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
         except Exception as e:
             print(f"  [goal] LLM error: {e}")
             break
@@ -302,6 +314,18 @@ async def run_goal(goal_str: str) -> dict:
         if not response.choices:
             print("  [goal] LLM returned empty choices")
             break
+
+        # Strip think blocks and emit them
+        if response.choices:
+            content = response.choices[0].message.content
+            clean_content, think_blocks = _extract_think_blocks(content)
+            for block in think_blocks:
+                block = block.strip()
+                if block:
+                    print(f"  [think] {block[:120]}...")
+                    _emit({"type": "think", "text": block})
+            if think_blocks and response.choices[0].message.content != clean_content:
+                response.choices[0].message.content = clean_content
 
         speaks_fired = 0
         set_legs_fired = 0
@@ -396,13 +420,25 @@ async def run_goal(goal_str: str) -> dict:
                 break
 
             try:
-                response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+                response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
             except Exception as e:
                 print(f"  [goal] LLM follow-up error: {e}")
                 break
 
             if not response.choices:
                 break
+
+            # Strip think blocks and emit them
+            if response.choices:
+                content = response.choices[0].message.content
+                clean_content, think_blocks = _extract_think_blocks(content)
+                for block in think_blocks:
+                    block = block.strip()
+                    if block:
+                        print(f"  [think] {block[:120]}...")
+                        _emit({"type": "think", "text": block})
+                if think_blocks and response.choices[0].message.content != clean_content:
+                    response.choices[0].message.content = clean_content
 
             inner_iterations += 1
 
@@ -497,7 +533,7 @@ async def _process(user_input: str):
     dbg(f"sending {len(messages)} messages to LLM")
 
     try:
-        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
     except Exception as e:
         print(f"  LLM error: {e}")
         return
@@ -505,6 +541,18 @@ async def _process(user_input: str):
     if not response.choices:
         print("  LLM error: empty choices")
         return
+
+    # Strip think blocks and emit them
+    if response.choices:
+        content = response.choices[0].message.content
+        clean_content, think_blocks = _extract_think_blocks(content)
+        for block in think_blocks:
+            block = block.strip()
+            if block:
+                print(f"  [think] {block[:120]}...")
+                _emit({"type": "think", "text": block})
+        if think_blocks and response.choices[0].message.content != clean_content:
+            response.choices[0].message.content = clean_content
 
     # Per-turn hard caps — enforced in code regardless of model behaviour
     speaks_fired = 0
@@ -595,7 +643,7 @@ async def _process(user_input: str):
 
         dbg(f"follow-up LLM call (iteration {iterations + 1})")
         try:
-            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS)
+            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
         except Exception as e:
             print(f"  LLM error on follow-up: {e}")
             return
@@ -603,6 +651,18 @@ async def _process(user_input: str):
         if not response.choices:
             print("  LLM error: empty choices on follow-up")
             return
+
+        # Strip think blocks and emit them
+        if response.choices:
+            content = response.choices[0].message.content
+            clean_content, think_blocks = _extract_think_blocks(content)
+            for block in think_blocks:
+                block = block.strip()
+                if block:
+                    print(f"  [think] {block[:120]}...")
+                    _emit({"type": "think", "text": block})
+            if think_blocks and response.choices[0].message.content != clean_content:
+                response.choices[0].message.content = clean_content
 
         iterations += 1
 
