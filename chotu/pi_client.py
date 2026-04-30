@@ -15,18 +15,21 @@ class PiClient:
     async def health(self) -> dict:
         return await self._get("/health", "health")
 
-    async def move(self, direction: str, steps: int = 1, speed: int = 50) -> dict:
+    async def move(self, direction: str, steps: int = 1, speed: int = 80) -> dict:
         return await self._post_slow("/move", "move", {
             "direction": direction,
             "steps": steps,
             "speed": speed,
         })
 
-    async def pose(self, name: str) -> dict:
-        return await self._post_slow("/pose", "pose", {"name": name})
+    async def pose(self, name: str, speed: int = 80) -> dict:
+        return await self._post_slow("/pose", "pose", {"name": name, "speed": speed})
 
-    async def set_legs(self, legs: list, speed: int = 50) -> dict:
+    async def set_legs(self, legs: list, speed: int = 80) -> dict:
         return await self._post_slow("/set_legs", "set_legs", {"legs": legs, "speed": speed})
+
+    async def do_trick(self, name: str, speed: int = 80) -> dict:
+        return await self._post_slow("/trick", "trick", {"name": name, "speed": speed})
 
     async def speak(self, text: str) -> dict:
         return await self._post("/speak", "speak", {"text": text})
@@ -39,6 +42,21 @@ class PiClient:
 
     async def get_battery(self) -> dict:
         return await self._get("/battery", "battery")
+
+    async def get_perception(
+        self,
+        color: str | None = None,
+        face: bool = False,
+        human: bool = False,
+    ) -> dict:
+        body: dict = {}
+        if color:
+            body["color"] = color
+        if face:
+            body["face"] = True
+        if human:
+            body["human"] = True
+        return await self._post("/perception", "perception", body)
 
     # --- Internal helpers ---
 
