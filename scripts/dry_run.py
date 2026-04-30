@@ -41,7 +41,9 @@ def fake_result(tool: str, args: dict) -> dict:
     if tool == "pose":
         return {**base, "result": {"pose": args.get("name", "stand"), "held_ms": 500}}
     if tool == "set_legs":
-        return {**base, "result": {"legs": args.get("legs", []), "speed": args.get("speed", 50)}}
+        return {**base, "result": {"legs": args.get("legs", []), "speed": args.get("speed", 80)}}
+    if tool == "do_trick":
+        return {**base, "result": {"name": args.get("name", "pushup")}}
     if tool == "speak":
         muted = MUTE
         return {**base, "result": {"text": args.get("text", ""), "played": not muted, "muted": muted}}
@@ -52,9 +54,8 @@ def fake_result(tool: str, args: dict) -> dict:
     if tool == "capture_vision":
         return {**base, "result": {"image_base64": "", "format": "jpeg"}}
     if tool == "scan_environment":
-        segments = args.get("segments", 8)
-        labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][:segments]
-        fake_map = [{"direction": d, "objects": []} for d in labels]
+        from chotu.brain import SCAN_LABELS, SCAN_DEGREES, _build_map_key
+        fake_map = {_build_map_key(l, d): [] for l, d in zip(SCAN_LABELS, SCAN_DEGREES)}
         return {**base, "result": {"map": fake_map, "summary": "Dry run — no real images."}}
     if tool == "wait":
         return {**base, "result": {"waited_seconds": args.get("seconds", 1), "reason": args.get("reason", "")}}
