@@ -56,6 +56,7 @@ def _voltage_to_percent(v: float) -> int:
 async def lifespan(app: FastAPI):
     Vilib.camera_start(vflip=False, hflip=False)
     await asyncio.sleep(1)  # camera warm-up
+    Vilib.human_detect(True)
     yield
     Vilib.camera_stop()
 
@@ -81,11 +82,12 @@ def _envelope(tool: str, result: dict, start: float, error=None) -> dict:
 class MoveRequest(BaseModel):
     direction: str   # "forward" | "backward" | "turn left" | "turn right"
     steps: int = 1
-    speed: int = 50
+    speed: int = 80
 
 
 class PoseRequest(BaseModel):
     name: str        # "stand" | "sit" | "wave" | "push up" | "look up" | "look down" | "look left" | "look right"
+    speed: int = 80
 
 
 class SpeakRequest(BaseModel):
@@ -94,7 +96,21 @@ class SpeakRequest(BaseModel):
 
 class SetLegsRequest(BaseModel):
     legs: list[list[float]]  # 4 × [x, y, z] in mm
-    speed: int = 50
+    speed: int = 80
+
+
+class TrickRequest(BaseModel):
+    name: str        # "pushup" | "twist" | "swimming" | "handwork"
+    speed: int = 80
+
+
+VILIB_COLORS = {"red", "orange", "yellow", "green", "blue", "purple"}
+
+
+class PerceptionRequest(BaseModel):
+    color: str | None = None
+    face: bool = False
+    human: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -139,10 +155,10 @@ async def move(req: MoveRequest):
 @app.post("/pose")
 async def pose(req: PoseRequest):
     start = time.time()
-    logging.info(f"POST /pose  name={req.name}")
+    logging.info(f"POST /pose  name={req.name} speed={req.speed}")
     try:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: crawler.do_action(req.name))
+        await loop.run_in_executor(None, lambda: crawler.do_step(req.name, req.speed))
         held_ms = int((time.time() - start) * 1000)
         result = _envelope("pose", {"pose": req.name, "held_ms": held_ms}, start)
         logging.info(f"  pose ok ({held_ms}ms)")
@@ -249,6 +265,128 @@ async def battery():
     except Exception as e:
         logging.error(f"  battery error: {e}")
         return _envelope("battery", {}, start, str(e))
+
+
+@app.post("/perception")
+async def perception(req: PerceptionRequest):
+    start = time.time()
+    result = {}
+
+    if req.color:
+        if req.color not in VILIB_COLORS:
+            return _envelope("perception", {}, start, f"unsupported color: {req.color}")
+        Vilib.color_detect(req.color)
+        await asyncio.sleep(0.1)
+        p = Vilib.detect_obj_parameter
+        result["color"] = {
+            "target": req.color,
+            "detected": p.get("color_n", 0) > 0,
+            "x": p.get("color_x", 0),
+            "y": p.get("color_y", 0),
+            "size": p.get("color_n", 0),
+        }
+
+    if req.face:
+        Vilib.face_detect_switch(True)
+        await asyncio.sleep(0.1)
+        p = Vilib.detect_obj_parameter
+        result["face"] = {
+            "detected": p.get("human_n", 0) > 0,
+            "x": p.get("human_x", 0),
+            "y": p.get("human_y", 0),
+        }
+
+    if req.human:
+        p = Vilib.detect_obj_parameter
+        result["human"] = {
+            "detected": p.get("human_n", 0) > 0,
+        }
+
+    return _envelope("perception", result, start)
+
+
+# ---------------------------------------------------------------------------
+# Tricks
+# ---------------------------------------------------------------------------
+
+def _trick_pushup(speed: int):
+    up   = [[80, 0, -100], [80, 0, -100], [0, 120, -60], [0, 120, -60]]
+    down = [[80, 0, -30],  [80, 0, -30],  [0, 120, -60], [0, 120, -60]]
+    crawler.do_step(up, speed);   time.sleep(0.6)
+    crawler.do_step(down, speed); time.sleep(0.6)
+
+
+def _trick_twist(speed: int):
+    new_step = [[50, 50, -80], [50, 50, -80], [50, 50, -80], [50, 50, -80]]
+    for i in range(4):
+        for inc in range(30, 60, 5):
+            rise = [50, 50, -80 + inc * 0.5]
+            drop = [50, 50, -80 - inc]
+            new_step[i]           = rise
+            new_step[(i + 2) % 4] = drop
+            new_step[(i + 1) % 4] = rise
+            new_step[(i - 1) % 4] = drop
+            crawler.do_step(new_step, speed)
+            time.sleep(0.02)
+
+
+def _trick_swimming(speed: int, loops: int = 40):
+    for i in range(loops):
+        crawler.do_step(
+            [
+                [100 - i, i, 0],
+                [100 - i, i, 0],
+                [0, 120, -60 + i / 5],
+                [0, 100, -40 - i / 5],
+            ],
+            speed,
+        )
+        time.sleep(0.01)
+
+
+def _trick_handwork(speed: int):
+    base = None
+    try:
+        base = crawler.move_list["sit"][0]
+    except Exception:
+        pass
+    if not base or len(base) < 4:
+        crawler.do_step("sit", speed)
+        time.sleep(0.6)
+        return
+    left_hand = crawler.mix_step(base, 0, [0, 50, 80])
+    right_hand = crawler.mix_step(base, 1, [0, 50, 80])
+    two_hand   = crawler.mix_step(left_hand, 1, [0, 50, 80])
+    crawler.do_step("sit", speed);       time.sleep(0.6)
+    crawler.do_step(left_hand, speed);   time.sleep(0.6)
+    crawler.do_step(two_hand, speed);    time.sleep(0.6)
+    crawler.do_step(right_hand, speed);  time.sleep(0.6)
+    crawler.do_step("sit", speed);       time.sleep(0.6)
+
+
+_TRICKS = {
+    "pushup":   _trick_pushup,
+    "twist":    _trick_twist,
+    "swimming": _trick_swimming,
+    "handwork": _trick_handwork,
+}
+
+
+@app.post("/trick")
+async def trick(req: TrickRequest):
+    start = time.time()
+    logging.info(f"POST /trick  name={req.name} speed={req.speed}")
+    if req.name not in _TRICKS:
+        return _envelope("trick", {}, start, f"unknown trick: {req.name}")
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: _TRICKS[req.name](req.speed))
+        result = _envelope("trick", {"name": req.name}, start)
+        logging.info(f"  trick ok ({result['duration_ms']}ms)")
+        return result
+    except Exception as e:
+        logging.error(f"  trick error: {e}")
+        return _envelope("trick", {"name": req.name}, start, str(e))
 
 
 # ---------------------------------------------------------------------------
