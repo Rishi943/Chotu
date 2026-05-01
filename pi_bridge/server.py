@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
     Vilib.camera_start(vflip=False, hflip=False)
     await asyncio.sleep(1)  # camera warm-up
     yield
-    Vilib.camera_stop()
+    Vilib.camera_close()
 
 
 app = FastAPI(lifespan=lifespan)

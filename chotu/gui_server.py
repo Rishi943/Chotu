@@ -44,6 +44,16 @@ async def gallery():
     return JSONResponse(brain.gallery_store)
 
 
+@app.get("/stream")
+async def stream():
+    async def _pipe():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("GET", f"{brain.PI_HOST}/stream") as resp:
+                async for chunk in resp.aiter_bytes(4096):
+                    yield chunk
+    return StreamingResponse(_pipe(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
 @app.get("/api/perception")
 async def perception():
     async with httpx.AsyncClient(timeout=5.0) as client:
