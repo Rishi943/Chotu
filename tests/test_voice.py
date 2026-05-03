@@ -202,3 +202,59 @@ def test_voice_listener_drain_empties_queue(monkeypatch):
     assert not listener._audio_q.empty()
     listener.drain()
     assert listener._audio_q.empty()
+
+
+def test_voice_listener_wait_wake_word_detects(monkeypatch):
+    """wake_word() returns True after OWW threshold is crossed."""
+    import chotu.voice as v
+
+    monkeypatch.setattr("sounddevice.InputStream", lambda **kw: _FakeStream())
+
+    call_count = {"n": 0}
+
+    class FakeOWW:
+        def reset(self): pass
+        def predict(self, chunk):
+            call_count["n"] += 1
+            return {"hey_jarvis": 0.9 if call_count["n"] >= 3 else 0.0}
+
+    monkeypatch.setattr(v, "_oww_model", FakeOWW())
+
+    listener = v.VoiceListener()
+    listener.start()
+
+    # Feed 5 silent chunks — OWW fires at chunk 3
+    for _ in range(5):
+        listener._audio_q.put(np.zeros(1280, dtype=np.float32))
+
+    result = listener.wait_wake_word()
+    assert result is True
+    assert call_count["n"] >= 3
+
+
+def test_voice_listener_wait_wake_word_below_threshold(monkeypatch):
+    """wait_wake_word keeps looping while score is below threshold."""
+    import chotu.voice as v
+
+    monkeypatch.setattr("sounddevice.InputStream", lambda **kw: _FakeStream())
+
+    call_count = {"n": 0}
+
+    class FakeOWW:
+        def reset(self): pass
+        def predict(self, chunk):
+            call_count["n"] += 1
+            # Fire on exactly the 4th chunk
+            return {"hey_jarvis": 0.9 if call_count["n"] == 4 else 0.0}
+
+    monkeypatch.setattr(v, "_oww_model", FakeOWW())
+
+    listener = v.VoiceListener()
+    listener.start()
+
+    for _ in range(4):
+        listener._audio_q.put(np.zeros(1280, dtype=np.float32))
+
+    result = listener.wait_wake_word()
+    assert result is True
+    assert call_count["n"] == 4

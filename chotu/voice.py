@@ -124,7 +124,16 @@ class VoiceListener:
 
     def wait_wake_word(self) -> bool:
         """Block until wake word detected. Returns True when heard."""
-        raise NotImplementedError
+        oww = _get_oww()
+        oww.reset()
+        while True:
+            try:
+                chunk = self._audio_q.get(timeout=5.0)
+            except queue.Empty:
+                continue
+            scores = oww.predict(_audio_to_int16(chunk))
+            if max(scores.values()) >= WAKE_THRESHOLD:
+                return True
 
     def record_utterance(self) -> str:
         """Record until silence and transcribe. Returns text or ''."""
