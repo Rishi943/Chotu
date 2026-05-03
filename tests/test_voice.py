@@ -100,24 +100,25 @@ def test_listen_and_transcribe_wrapper(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_voice_loop_pushes_to_queue(monkeypatch):
-    """voice_loop() should push transcribed text into input_queue."""
+async def test_voice_loop_pushes_to_queue_wake_word_mode(monkeypatch):
+    """Regression: wake-word mode voice_loop still pushes transcribed text to input_queue."""
     import asyncio
     import chotu.brain as brain
+    import chotu.voice as v
 
-    call_count = {"n": 0}
+    class FakeListener:
+        def start(self): pass
+        def stop(self): pass
+        def drain(self): pass
+        def wait_wake_word(self): return True
+        def record_utterance(self): return "walk forward"
 
-    async def fake_listen():
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return "walk forward"
-        await asyncio.sleep(999)
-
-    monkeypatch.setattr("chotu.brain.listen_and_transcribe", fake_listen)
+    monkeypatch.setattr(v, "VoiceListener", FakeListener)
+    monkeypatch.setattr(brain, "continuous_mode", False)
     monkeypatch.setattr(brain, "input_queue", asyncio.Queue())
 
     task = asyncio.create_task(brain.voice_loop())
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)
     task.cancel()
     try:
         await task

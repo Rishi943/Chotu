@@ -781,16 +781,38 @@ async def input_loop():
 
 
 async def voice_loop():
+    global continuous_mode
+    import time as _time
+    from chotu.voice import VoiceListener, CONTINUOUS_SILENCE_TIMEOUT
+    listener = VoiceListener()
+    listener.start()
+    last_speech_time = _time.monotonic()
     print("  [voice] Voice input active — say 'Hey Jarvis' to speak to Chotu.")
+
     while True:
         try:
-            text = await listen_and_transcribe()
+            if not continuous_mode:
+                await asyncio.to_thread(listener.wait_wake_word)
+                listener.drain()
+            else:
+                await tts_done_event.wait()
+                tts_done_event.clear()
+                listener.drain()
+
+                if _time.monotonic() - last_speech_time > CONTINUOUS_SILENCE_TIMEOUT:
+                    continuous_mode = False
+                    print("  [voice] Silence timeout — dropping to wake-word mode.")
+                    continue
+
+            text = await asyncio.to_thread(listener.record_utterance)
+
+            if text.strip():
+                last_speech_time = _time.monotonic()
+                input_queue.put_nowait(text)
+
         except Exception as e:
             print(f"  [voice error] {e}")
             await asyncio.sleep(1.0)
-            continue
-        if text.strip():
-            input_queue.put_nowait(text)
 
 
 # --- Main ---
