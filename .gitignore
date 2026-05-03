@@ -7,6 +7,8 @@ __pycache__/
 .claude/
 .directory
 docs/
+sounds/
+tests/
 CHOTU.md
 CHOTU_final.md
 
