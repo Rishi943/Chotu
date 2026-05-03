@@ -72,6 +72,64 @@ def _get_oww():
     return _oww_model
 
 
+# --- VoiceListener class ---
+
+CONTINUOUS_SILENCE_TIMEOUT = int(os.getenv("CONTINUOUS_SILENCE_TIMEOUT", "30"))
+
+
+class VoiceListener:
+    """Owns a sounddevice.InputStream for its lifetime.
+
+    Methods share a single audio_q so the stream stays open across
+    wake-word detection and recording phases.
+    """
+
+    def __init__(self):
+        import queue as _q
+        self._audio_q: _q.Queue = _q.Queue()
+        self._stream = None
+
+    def start(self) -> None:
+        """Open the InputStream and start streaming audio into _audio_q."""
+        import sounddevice
+
+        def _cb(indata, frames, time, status):
+            self._audio_q.put(indata[:, 0].copy())
+
+        stream_kwargs = dict(
+            samplerate=SAMPLE_RATE, channels=1, dtype="float32",
+            blocksize=CHUNK_SAMPLES, callback=_cb,
+        )
+        if MIC_DEVICE is not None:
+            stream_kwargs["device"] = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else MIC_DEVICE
+
+        self._stream = sounddevice.InputStream(**stream_kwargs)
+        self._stream.start()
+
+    def stop(self) -> None:
+        """Stop and close the InputStream."""
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+    def drain(self) -> None:
+        """Discard all buffered audio (e.g. captured during TTS playback)."""
+        while True:
+            try:
+                self._audio_q.get_nowait()
+            except Exception:
+                break
+
+    def wait_wake_word(self) -> bool:
+        """Block until wake word detected. Returns True when heard."""
+        raise NotImplementedError
+
+    def record_utterance(self) -> str:
+        """Record until silence and transcribe. Returns text or ''."""
+        raise NotImplementedError
+
+
 # --- Blocking listener ---
 
 def _blocking_listen_and_transcribe() -> str:

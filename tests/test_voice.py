@@ -155,3 +155,50 @@ async def test_voice_loop_pushes_to_queue(monkeypatch):
 
     assert not brain.input_queue.empty()
     assert brain.input_queue.get_nowait() == "walk forward"
+
+
+# ── VoiceListener tests ──────────────────────────────────────
+
+class _FakeStream:
+    """Minimal sounddevice.InputStream stand-in."""
+    def __init__(self, **kw):
+        self.started = False
+        self.stopped = False
+        self.closed = False
+    def start(self): self.started = True
+    def stop(self): self.stopped = True
+    def close(self): self.closed = True
+
+
+def test_voice_listener_start_opens_stream(monkeypatch):
+    import chotu.voice as v
+    fake = _FakeStream()
+    monkeypatch.setattr("sounddevice.InputStream", lambda **kw: fake)
+    listener = v.VoiceListener()
+    listener.start()
+    assert fake.started
+
+
+def test_voice_listener_stop_closes_stream(monkeypatch):
+    import chotu.voice as v
+    fake = _FakeStream()
+    monkeypatch.setattr("sounddevice.InputStream", lambda **kw: fake)
+    listener = v.VoiceListener()
+    listener.start()
+    listener.stop()
+    assert fake.stopped
+    assert fake.closed
+    assert listener._stream is None
+
+
+def test_voice_listener_drain_empties_queue(monkeypatch):
+    import queue
+    import chotu.voice as v
+    monkeypatch.setattr("sounddevice.InputStream", lambda **kw: _FakeStream())
+    listener = v.VoiceListener()
+    listener.start()
+    for i in range(5):
+        listener._audio_q.put(np.zeros(1280, dtype=np.float32))
+    assert not listener._audio_q.empty()
+    listener.drain()
+    assert listener._audio_q.empty()
