@@ -402,6 +402,9 @@
         <label class="checkbox-label">
           <input type="checkbox" id="thinking-checkbox"> thinking
         </label>
+        <label class="checkbox-label">
+          <input type="checkbox" id="continuous-checkbox"> continuous
+        </label>
       </div>
     </div>
 
@@ -590,6 +593,16 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: thinkingCb.checked })
+    }).catch(function() {});
+  });
+
+  // ── Continuous conversation checkbox ──────────────────────
+  var continuousCb = document.getElementById('continuous-checkbox');
+  continuousCb.addEventListener('change', function() {
+    fetch('/stt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: continuousCb.checked })
     }).catch(function() {});
   });
 

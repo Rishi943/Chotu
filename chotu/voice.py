@@ -72,40 +72,72 @@ def _get_oww():
     return _oww_model
 
 
-# --- Blocking listener ---
+# --- VoiceListener class ---
 
-def _blocking_listen_and_transcribe() -> str:
-    """Block until wake word heard, record utterance, return transcribed text."""
-    import sounddevice
-    audio_q: queue.Queue = queue.Queue()
+CONTINUOUS_SILENCE_TIMEOUT = int(os.getenv("CONTINUOUS_SILENCE_TIMEOUT", "30"))
 
-    def _cb(indata, frames, time, status):
-        audio_q.put(indata[:, 0].copy())
 
-    oww = _get_oww()
-    oww.reset()
+class VoiceListener:
+    """Owns a sounddevice.InputStream for its lifetime.
 
-    stream_kwargs = dict(
-        samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-        blocksize=CHUNK_SAMPLES, callback=_cb,
-    )
-    if MIC_DEVICE is not None:
-        stream_kwargs["device"] = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else MIC_DEVICE
+    Methods share a single audio_q so the stream stays open across
+    wake-word detection and recording phases.
+    """
 
-    with sounddevice.InputStream(**stream_kwargs):
-        # Phase 1: wait for wake word
-        print("  [voice] Waiting for 'Hey Jarvis'...")
+    def __init__(self):
+        self._audio_q: queue.Queue = queue.Queue()
+        self._stream = None
+
+    def start(self) -> None:
+        """Open the InputStream and start streaming audio into _audio_q."""
+        if self._stream is not None:
+            return
+        import sounddevice
+
+        def _cb(indata, frames, time, status):
+            self._audio_q.put(indata[:, 0].copy())
+
+        stream_kwargs = dict(
+            samplerate=SAMPLE_RATE, channels=1, dtype="float32",
+            blocksize=CHUNK_SAMPLES, callback=_cb,
+        )
+        if MIC_DEVICE is not None:
+            stream_kwargs["device"] = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else MIC_DEVICE
+
+        self._stream = sounddevice.InputStream(**stream_kwargs)
+        self._stream.start()
+
+    def stop(self) -> None:
+        """Stop and close the InputStream."""
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+    def drain(self) -> None:
+        """Discard all buffered audio (e.g. captured during TTS playback)."""
         while True:
             try:
-                chunk = audio_q.get(timeout=5.0)
+                self._audio_q.get_nowait()
+            except queue.Empty:
+                break
+
+    def wait_wake_word(self) -> bool:
+        """Block until wake word detected. Returns True when heard."""
+        oww = _get_oww()
+        oww.reset()
+        while True:
+            try:
+                chunk = self._audio_q.get(timeout=5.0)
             except queue.Empty:
                 continue
             scores = oww.predict(_audio_to_int16(chunk))
-            if max(scores.values()) >= WAKE_THRESHOLD:
+            if scores and max(scores.values()) >= WAKE_THRESHOLD:
                 print("  [voice] Wake word! Speak now...")
-                break
+                return True
 
-        # Phase 2: record until silence
+    def record_utterance(self) -> str:
+        """Record until silence and transcribe. Returns text or ''."""
         recorded: list[np.ndarray] = []
         silence_chunks = 0
         silence_limit = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SAMPLES)
@@ -114,7 +146,7 @@ def _blocking_listen_and_transcribe() -> str:
 
         for _ in range(max_chunks):
             try:
-                chunk = audio_q.get(timeout=5.0)
+                chunk = self._audio_q.get(timeout=5.0)
             except queue.Empty:
                 break
             recorded.append(chunk)
@@ -126,18 +158,31 @@ def _blocking_listen_and_transcribe() -> str:
                 if silence_chunks >= silence_limit:
                     break
 
-    if not recorded or not has_speech:
-        return ""
+        if not recorded or not has_speech:
+            return ""
 
-    audio = np.concatenate(recorded)
-    segments, _ = _get_whisper().transcribe(audio, language="en", beam_size=5)
-    text = " ".join(seg.text.strip() for seg in segments).strip()
-    print(f"  [voice] Heard: {text!r}")
-    return text
+        audio = np.concatenate(recorded)
+        segments, _ = _get_whisper().transcribe(audio, language="en", beam_size=5)
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        if text:
+            print(f"  [voice] Heard: {text!r}")
+        return text
 
 
-# --- Public async API ---
+# --- Public API ---
+
+def _blocking_listen_and_transcribe_via_class() -> str:
+    """One-shot: wake word → drain → record → transcribe. Opens and closes stream."""
+    listener = VoiceListener()
+    listener.start()
+    try:
+        listener.wait_wake_word()
+        listener.drain()
+        return listener.record_utterance()
+    finally:
+        listener.stop()
+
 
 async def listen_and_transcribe() -> str:
     """Async wrapper: runs blocking listener in thread pool."""
-    return await asyncio.to_thread(_blocking_listen_and_transcribe)
+    return await asyncio.to_thread(_blocking_listen_and_transcribe_via_class)
