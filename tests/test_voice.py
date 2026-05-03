@@ -79,53 +79,24 @@ def test_get_oww_returns_same_instance(monkeypatch):
     assert first is second
 
 
-def test_blocking_listen_transcribes(monkeypatch):
-    """Full pipeline: fake wake word fires after 3 chunks, then speech + silence."""
-    import queue as q
+def test_listen_and_transcribe_wrapper(monkeypatch):
+    """listen_and_transcribe() must call wait_wake_word, drain, record_utterance, stop."""
     import chotu.voice as v
 
-    audio_q = q.Queue()
-    speech_chunk = np.full(1280, 0.5, dtype=np.float32)
-    silent_chunk = np.zeros(1280, dtype=np.float32)
+    calls = []
 
-    silence_limit = int(v.SILENCE_TIMEOUT_S * v.SAMPLE_RATE / v.CHUNK_SAMPLES) + 1
-    for _ in range(3):
-        audio_q.put(silent_chunk.copy())
-    audio_q.put(speech_chunk.copy())   # wake word fires here
-    for _ in range(5):
-        audio_q.put(speech_chunk.copy())
-    for _ in range(silence_limit + 2):
-        audio_q.put(silent_chunk.copy())
+    class FakeListener:
+        def start(self): calls.append("start")
+        def stop(self): calls.append("stop")
+        def drain(self): calls.append("drain")
+        def wait_wake_word(self): calls.append("wait_wake_word"); return True
+        def record_utterance(self): calls.append("record_utterance"); return "hello"
 
-    class FakeStream:
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
+    monkeypatch.setattr(v, "VoiceListener", FakeListener)
 
-    monkeypatch.setattr("sounddevice.InputStream", lambda **kw: FakeStream())
-    monkeypatch.setattr("chotu.voice.queue.Queue", lambda: audio_q)
-
-    call_count = {"n": 0}
-
-    class FakeOWW:
-        def reset(self): pass
-        def predict(self, chunk):
-            call_count["n"] += 1
-            score = 0.9 if call_count["n"] >= 4 else 0.0
-            return {"hey_jarvis": score}
-
-    monkeypatch.setattr(v, "_oww_model", FakeOWW())
-
-    class FakeSeg:
-        text = " hello chotu"
-
-    class FakeWhisper:
-        def transcribe(self, audio, **kw):
-            return [FakeSeg()], None
-
-    monkeypatch.setattr(v, "_whisper_model", FakeWhisper())
-
-    result = v._blocking_listen_and_transcribe()
-    assert result == "hello chotu"
+    result = v._blocking_listen_and_transcribe_via_class()
+    assert result == "hello"
+    assert calls == ["start", "wait_wake_word", "drain", "record_utterance", "stop"]
 
 
 @pytest.mark.asyncio
