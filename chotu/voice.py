@@ -85,12 +85,13 @@ class VoiceListener:
     """
 
     def __init__(self):
-        import queue as _q
-        self._audio_q: _q.Queue = _q.Queue()
+        self._audio_q: queue.Queue = queue.Queue()
         self._stream = None
 
     def start(self) -> None:
         """Open the InputStream and start streaming audio into _audio_q."""
+        if self._stream is not None:
+            return
         import sounddevice
 
         def _cb(indata, frames, time, status):
@@ -118,7 +119,7 @@ class VoiceListener:
         while True:
             try:
                 self._audio_q.get_nowait()
-            except Exception:
+            except queue.Empty:
                 break
 
     def wait_wake_word(self) -> bool:
