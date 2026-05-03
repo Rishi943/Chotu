@@ -24,6 +24,26 @@ async def _ha_call(service: str, data: dict) -> bool:
         return False
 
 
+async def _play_soundbite(spell: str) -> None:
+    path = os.getenv(f"SPELL_{spell.upper()}_SOUND", "")
+    if not path or not os.path.exists(path):
+        return
+    try:
+        import wave
+        import numpy as np
+        import sounddevice as sd
+        from chotu.tools import _get_tts_lock
+        with wave.open(path, "rb") as wf:
+            rate = wf.getframerate()
+            audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+        async with _get_tts_lock():
+            sd.stop()
+            sd.play(audio, samplerate=rate)
+            await asyncio.to_thread(sd.wait)
+    except Exception as e:
+        print(f"  [spells] soundbite error: {e}")
+
+
 async def _wand_pose(pi) -> None:
     try:
         await pi.set_legs(_WAND_POSE, speed=40)
@@ -48,6 +68,7 @@ async def cast_lumos(pi) -> dict:
     start = time.time()
     entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
+    await _play_soundbite("lumos")
     ok = await _ha_call("turn_on", {"entity_id": entity})
     return _envelope("lumos", ok, start)
 
@@ -56,6 +77,7 @@ async def cast_nox(pi) -> dict:
     start = time.time()
     entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
+    await _play_soundbite("nox")
     ok = await _ha_call("turn_off", {"entity_id": entity})
     return _envelope("nox", ok, start)
 
@@ -64,6 +86,7 @@ async def cast_avada_kedavra(pi) -> dict:
     start = time.time()
     entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
+    await _play_soundbite("avada_kedavra")
     ok_flash = await _ha_call("turn_on", {"entity_id": entity, "rgb_color": [0, 255, 0], "brightness": 255})
     await asyncio.sleep(0.3)
     ok_off = await _ha_call("turn_off", {"entity_id": entity})

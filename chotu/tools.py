@@ -5,6 +5,9 @@ import json
 import os
 import time
 
+from dotenv import load_dotenv
+load_dotenv()
+
 _tts_lock: asyncio.Lock | None = None
 
 def _get_tts_lock() -> asyncio.Lock:
@@ -14,6 +17,10 @@ def _get_tts_lock() -> asyncio.Lock:
     return _tts_lock
 
 from chotu.pi_client import PiClient
+
+_ALL_SPELLS = ["lumos", "nox", "avada_kedavra"]
+_raw = os.getenv("SPELLS_ENABLED", "lumos,nox,avada_kedavra")
+_ENABLED_SPELLS = [s.strip() for s in _raw.split(",") if s.strip() in _ALL_SPELLS] or _ALL_SPELLS
 
 
 # --- goal_complete signal (set by brain.py at startup) ---
@@ -290,7 +297,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "name": {
                         "type": "string",
-                        "enum": ["lumos", "nox", "avada_kedavra"],
+                        "enum": _ENABLED_SPELLS,
                         "description": "lumos=on, nox=off, avada_kedavra=green flash then off.",
                     },
                 },
