@@ -2,7 +2,16 @@
 
 import asyncio
 import json
+import os
 import time
+
+_tts_lock: asyncio.Lock | None = None
+
+def _get_tts_lock() -> asyncio.Lock:
+    global _tts_lock
+    if _tts_lock is None:
+        _tts_lock = asyncio.Lock()
+    return _tts_lock
 
 from chotu.pi_client import PiClient
 
@@ -69,7 +78,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "pose",
-            "description": "Adopt a named pose. Use to express yourself physically.",
+            "description": "Adopt a named pose. stand/sit are static positions; wave/push up/look up/down/left/right are animated sequences.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -83,8 +92,8 @@ TOOL_SCHEMAS = [
                     },
                     "speed": {
                         "type": "integer",
-                        "description": "Servo speed 0-100. Default 80. Use lower (30-50) for slow/deliberate poses.",
-                        "default": 80,
+                        "description": "Servo speed 0-100. Default 50. Keep at 50 or below — stand/sit move all 12 servos at once and high speed causes power brown-outs.",
+                        "default": 50,
                     },
                 },
                 "required": ["name"],
@@ -131,27 +140,6 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "speak",
-            "description": (
-                "Speak aloud through the Pi speaker using espeak. "
-                "MUST use Rocky-style broken English: no articles, short fragments, "
-                "questions end with 'question?', emotions named directly."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "Text to speak. Use broken English.",
-                    },
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_distance",
             "description": "Read ultrasonic distance sensor. Returns distance in cm.",
             "parameters": {"type": "object", "properties": {}},
@@ -179,21 +167,6 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "scan_environment",
-            "description": (
-                "Perform a 360° sweep in 6 segments. Rotate, photograph, "
-                "identify objects at each segment, return a body-relative "
-                "spatial map (front, front-right, back-right, back, back-left, "
-                "front-left). Use before 'point at X' tasks or to build "
-                "awareness of the surroundings. Robot ends back at its "
-                "starting heading."
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "do_trick",
             "description": (
                 "Perform a named trick animation. These are pre-choreographed physical routines. "
@@ -211,6 +184,34 @@ TOOL_SCHEMAS = [
                         "type": "integer",
                         "description": "Servo speed 0-100. Default 80.",
                         "default": 80,
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_face",
+            "description": (
+                "Change your OLED face expression. Use to show emotion or react to context. "
+                "Available: idle, speak_open, speak_close, playful, judging, embarrassed, "
+                "dissatisfied, angry, sad, indifferent, confused, doubt, surprised, greeting, "
+                "wink, sleeping, magic, cute, thinking, dead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "enum": [
+                            "idle", "speak_open", "speak_close", "playful", "judging",
+                            "embarrassed", "dissatisfied", "angry", "sad", "indifferent",
+                            "confused", "doubt", "surprised", "greeting", "wink",
+                            "sleeping", "magic", "cute", "thinking", "dead",
+                        ],
+                        "description": "Expression name.",
                     },
                 },
                 "required": ["name"],
@@ -278,6 +279,33 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "cast_spell",
+            "description": (
+                "Cast a magic spell. Raises front-right leg like a wand, then controls the room light via Home Assistant. "
+                "lumos=lights on, nox=lights off, avada_kedavra=green flash then lights off. "
+                "Pick contextually — say 'lumos' when asked to turn lights on, etc."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "enum": ["lumos", "nox", "avada_kedavra"],
+                        "description": "lumos=on, nox=off, avada_kedavra=green flash then off.",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+]
+
+
+# Goal-mode-only tools (not exposed in reactive mode)
+GOAL_ONLY_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
             "name": "goal_complete",
             "description": (
                 "Call this when your goal is achieved or impossible. "
@@ -301,6 +329,9 @@ TOOL_SCHEMAS = [
         },
     },
 ]
+
+
+GOAL_TOOL_SCHEMAS = TOOL_SCHEMAS + GOAL_ONLY_SCHEMAS
 
 
 # --- Estop helpers ---
@@ -360,22 +391,92 @@ async def local_wait(seconds: int = 5, reason: str = "") -> dict:
     }
 
 
+async def local_speak(text: str, face_pi=None) -> dict:
+    """Run piper TTS on laptop and play via sounddevice. No Pi call.
+
+    face_pi: if provided, animates speak_open/speak_close on OLED during playback.
+    Serialized via _tts_lock — concurrent callers queue up rather than overlap.
+    """
+    import re
+    import numpy as np
+    import sounddevice as sd
+
+    model = os.environ.get("LOCALIS_PIPER_MODEL", "")
+    text_tts = re.sub(r"\bChotu\b", "Chaw-too", text, flags=re.IGNORECASE)
+    start = time.time()
+
+    # Synthesize outside the lock so piper runs in parallel with any current playback
+    proc = await asyncio.create_subprocess_exec(
+        "piper", "--model", model, "--output-raw",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    pcm, _ = await proc.communicate(input=text_tts.encode())
+    audio = np.frombuffer(pcm, dtype=np.int16)
+    pad = np.zeros(int(0.1 * 22050), dtype=np.int16)
+    audio = np.concatenate([pad, audio])
+
+    async with _get_tts_lock():
+        sd.stop()
+        sd.play(audio, samplerate=22050)
+
+        if face_pi is not None:
+            async def _anim(stop_ev: asyncio.Event):
+                frames = ["speak_open", "speak_close"]
+                i = 0
+                while not stop_ev.is_set():
+                    try:
+                        await face_pi.set_face(name=frames[i % 2])
+                    except Exception:
+                        pass
+                    i += 1
+                    await asyncio.sleep(0.125)
+
+            stop_ev = asyncio.Event()
+            anim_task = asyncio.create_task(_anim(stop_ev))
+            try:
+                await asyncio.to_thread(sd.wait)
+            finally:
+                stop_ev.set()
+                anim_task.cancel()
+                try:
+                    await anim_task
+                except asyncio.CancelledError:
+                    pass
+        else:
+            await asyncio.to_thread(sd.wait)
+
+    ms = int((time.time() - start) * 1000)
+    return {
+        "ok": True, "tool": "speak",
+        "result": {"text": text, "backend": "piper-laptop"},
+        "duration_ms": ms, "timestamp": time.time(), "error": None,
+    }
+
+
 # --- Dispatch ---
 
+async def _do_cast_spell(pi: PiClient, name: str) -> dict:
+    from chotu.spells import cast_spell
+    return await cast_spell(pi, name)
+
+
 def build_dispatch(pi: PiClient, estop: asyncio.Event) -> dict:
-    """Build tool name -> async callable dispatch map."""
+    """Build tool name -> async callable dispatch map. speak is NOT a tool — it's emitted as message content and fired from brain.py."""
     return {
         "move": lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_coro("move"),
         # Poses are not estop-blocked — they don't advance the robot's position.
         "pose": lambda **kw: pi.pose(**kw),
         "set_legs": lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
         "do_trick": lambda **kw: pi.do_trick(**kw),
-        "speak": lambda **kw: pi.speak(**kw),
         "get_distance": lambda **kw: pi.get_distance(),
         "get_battery": lambda **kw: pi.get_battery(),
         "capture_vision": lambda **kw: capture_vision_tool(pi),
+        "set_face": lambda **kw: pi.set_face(**kw),
         "wait": lambda **kw: local_wait(**kw),
         "get_perception": lambda **kw: pi.get_perception(**kw),
+        "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),
         "goal_complete":  lambda **kw: local_goal_complete(**kw),
     }
 
