@@ -205,7 +205,7 @@ def test_voice_listener_drain_empties_queue(monkeypatch):
 
 
 def test_voice_listener_wait_wake_word_detects(monkeypatch):
-    """wake_word() returns True after OWW threshold is crossed."""
+    """wait_wake_word() returns True after OWW threshold is crossed."""
     import chotu.voice as v
 
     monkeypatch.setattr("sounddevice.InputStream", lambda **kw: _FakeStream())

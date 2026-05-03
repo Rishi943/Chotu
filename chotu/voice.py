@@ -132,7 +132,8 @@ class VoiceListener:
             except queue.Empty:
                 continue
             scores = oww.predict(_audio_to_int16(chunk))
-            if max(scores.values()) >= WAKE_THRESHOLD:
+            if scores and max(scores.values()) >= WAKE_THRESHOLD:
+                print("  [voice] Wake word! Speak now...")
                 return True
 
     def record_utterance(self) -> str:
