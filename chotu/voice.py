@@ -163,7 +163,10 @@ class VoiceListener:
 
         audio = np.concatenate(recorded)
         segments, _ = _get_whisper().transcribe(audio, language="en", beam_size=5)
-        return " ".join(seg.text.strip() for seg in segments).strip()
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        if text:
+            print(f"  [voice] Heard: {text!r}")
+        return text
 
 
 # --- Blocking listener ---
