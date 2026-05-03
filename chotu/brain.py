@@ -48,6 +48,12 @@ gallery_store: list[dict] = []
 thinking_enabled: bool = False
 _active_goal_task: asyncio.Task | None = None
 
+continuous_mode: bool = False
+tts_done_event: asyncio.Event = asyncio.Event()
+tts_done_event.set()  # initially ready — no TTS playing at startup
+_pending_speaks: int = 0
+_pi_reachable: bool = False
+
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
@@ -228,6 +234,40 @@ def print_monologue(text: str):
     if text and text.strip():
         print(f"  [thinks] {text.strip()}")
         _emit({"type": "monologue", "text": text.strip()})
+
+
+# --- TTS helpers ---
+
+def _fire_face(state: str) -> None:
+    """Emit a face state event (stub — wired to Pi face API when available)."""
+    _emit({"type": "face", "state": state})
+
+
+def _fire_speak_if_content(content: str | None) -> "asyncio.Task | None":
+    """Fire local_speak as a background task. Sets tts_done_event when all pending speaks finish."""
+    global _pending_speaks
+    if not content or not content.strip():
+        return None
+    text = content.strip()
+    print_speak(text, muted=MUTE)
+    if MUTE:
+        if _pending_speaks == 0:
+            tts_done_event.set()
+        return None
+
+    _pending_speaks += 1
+    tts_done_event.clear()
+
+    async def _speak_then_idle():
+        global _pending_speaks
+        from chotu.tools import local_speak
+        await local_speak(text, face_pi=pi if _pi_reachable else None)
+        _fire_face("idle")
+        _pending_speaks -= 1
+        if _pending_speaks == 0:
+            tts_done_event.set()
+
+    return asyncio.create_task(_speak_then_idle())
 
 
 # --- Obstacle poller ---
