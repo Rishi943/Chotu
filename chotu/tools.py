@@ -457,7 +457,11 @@ async def local_speak(text: str, face_pi=None) -> dict:
 
 # --- Dispatch ---
 
-async def _do_cast_spell(pi: PiClient, name: str) -> dict:
+async def _do_cast_spell(pi: PiClient, name: str = "") -> dict:
+    if not name:
+        return {"ok": False, "tool": "cast_spell", "result": {},
+                "duration_ms": 0, "timestamp": time.time(),
+                "error": "cast_spell: name is required"}
     from chotu.spells import cast_spell
     return await cast_spell(pi, name)
 
