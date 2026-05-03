@@ -288,9 +288,12 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "cast_spell",
             "description": (
-                "Cast a magic spell. Raises front-right leg like a wand, then controls the room light via Home Assistant. "
-                "lumos=lights on, nox=lights off, avada_kedavra=green flash then lights off. "
-                "Pick contextually — say 'lumos' when asked to turn lights on, etc."
+                "Cast a magic spell. Raises front-right leg like a wand, then controls the room light. "
+                + ", ".join(
+                    {"lumos": "lumos=lights on", "nox": "nox=lights off",
+                     "avada_kedavra": "avada_kedavra=green flash then lights off"}[s]
+                    for s in _ENABLED_SPELLS
+                ) + (". Only one spell is available — always use it for any magic request, do not ask which spell." if len(_ENABLED_SPELLS) == 1 else ". Pick contextually.")
             ),
             "parameters": {
                 "type": "object",
@@ -298,7 +301,11 @@ TOOL_SCHEMAS = [
                     "name": {
                         "type": "string",
                         "enum": _ENABLED_SPELLS,
-                        "description": "lumos=on, nox=off, avada_kedavra=green flash then off.",
+                        "description": ", ".join(
+                            {"lumos": "lumos=on", "nox": "nox=off",
+                             "avada_kedavra": "avada_kedavra=green flash then off"}[s]
+                            for s in _ENABLED_SPELLS
+                        ),
                     },
                 },
                 "required": ["name"],
@@ -469,6 +476,10 @@ async def _do_cast_spell(pi: PiClient, name: str = "") -> dict:
         return {"ok": False, "tool": "cast_spell", "result": {},
                 "duration_ms": 0, "timestamp": time.time(),
                 "error": "cast_spell: name is required"}
+    if name not in _ENABLED_SPELLS:
+        return {"ok": False, "tool": "cast_spell", "result": {},
+                "duration_ms": 0, "timestamp": time.time(),
+                "error": f"spell '{name}' is not available"}
     from chotu.spells import cast_spell
     return await cast_spell(pi, name)
 

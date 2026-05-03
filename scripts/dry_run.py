@@ -23,7 +23,7 @@ load_dotenv()
 
 MODE = os.getenv("CHOTU_MODE", "A")
 MUTE = os.getenv("CHOTU_MUTE", "0") == "1"
-MAX_TOOL_ITERATIONS = 20
+MAX_TOOL_ITERATIONS = 6  # match brain.py reactive mode
 
 llm_client = LLMClient()
 memory: deque = deque(maxlen=15)
@@ -44,21 +44,28 @@ def fake_result(tool: str, args: dict) -> dict:
         return {**base, "result": {"legs": args.get("legs", []), "speed": args.get("speed", 80)}}
     if tool == "do_trick":
         return {**base, "result": {"name": args.get("name", "pushup")}}
-    if tool == "speak":
-        muted = MUTE
-        return {**base, "result": {"text": args.get("text", ""), "played": not muted, "muted": muted}}
     if tool == "get_distance":
         return {**base, "result": {"cm": 87.5, "reliable": True}}
     if tool == "get_battery":
         return {**base, "result": {"voltage": 7.6, "percent": 68, "charging": True}}
     if tool == "capture_vision":
         return {**base, "result": {"image_base64": "", "format": "jpeg"}}
-    if tool == "scan_environment":
-        from chotu.brain import SCAN_LABELS, SCAN_DEGREES, _build_map_key
-        fake_map = {_build_map_key(l, d): [] for l, d in zip(SCAN_LABELS, SCAN_DEGREES)}
-        return {**base, "result": {"map": fake_map, "summary": "Dry run — no real images."}}
+    if tool == "get_perception":
+        color = args.get("color")
+        result = {}
+        if color:
+            result["color"] = {"target": color, "detected": False, "x": 0, "y": 0, "size": 0}
+        if args.get("face"):
+            result["face"] = {"detected": False, "x": 0, "y": 0}
+        if args.get("human"):
+            result["human"] = {"detected": False}
+        return {**base, "result": result}
     if tool == "wait":
         return {**base, "result": {"waited_seconds": args.get("seconds", 1), "reason": args.get("reason", "")}}
+    if tool == "set_face":
+        return {**base, "result": {"name": args.get("name", "idle"), "ok": True}}
+    if tool == "cast_spell":
+        return {**base, "result": {"spell": args.get("name", "")}}
     return {**base, "ok": False, "result": {}, "error": f"unknown tool: {tool}"}
 
 
@@ -66,10 +73,13 @@ def print_tool_call(name: str, args: dict, result: dict):
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
     status = "ok" if result.get("ok") else f"FAIL: {result.get('error')}"
     print(f"  [{name}] {args_str} -> {status}")
-    if name == "speak" and result.get("ok"):
-        muted = result.get("result", {}).get("muted", False)
-        label = "muted" if muted else "speaks"
-        print(f'    \x1b[36m[{label}]\x1b[0m "{args.get("text", "")}"')
+
+
+def print_speak(text: str):
+    if not text or not text.strip():
+        return
+    label = "muted" if MUTE else "speaks"
+    print(f'  \x1b[36m[{label}]\x1b[0m "{text.strip()}"')
 
 
 def build_messages(user_input: str) -> list[dict]:
@@ -90,6 +100,9 @@ async def process(user_input: str):
     except Exception as e:
         print(f"  LLM error: {e}")
         return
+
+    # Speak from initial response content
+    print_speak(response.choices[0].message.content or "")
 
     iterations = 0
     while response.choices[0].message.tool_calls and iterations < MAX_TOOL_ITERATIONS:
@@ -112,14 +125,14 @@ async def process(user_input: str):
         except Exception as e:
             print(f"  LLM error on follow-up: {e}")
             return
+        # Speak from follow-up response content
+        print_speak(response.choices[0].message.content or "")
         iterations += 1
 
     if iterations >= MAX_TOOL_ITERATIONS:
         print("  \x1b[31m[safety] tool iteration limit hit\x1b[0m")
 
     final = response.choices[0].message.content or ""
-    if final.strip():
-        print(f"  \x1b[35m[thinks]\x1b[0m {final.strip()}")
 
     memory.append({"role": "user", "content": user_input})
     if final:
