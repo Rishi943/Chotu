@@ -45,7 +45,8 @@ class FakeClient:
 def test_lumos_calls_turn_on(pi):
     from chotu.spells import cast_lumos
     client = FakeClient()
-    with patch("httpx.AsyncClient", return_value=client):
+    with patch("httpx.AsyncClient", return_value=client), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
         result = run(cast_lumos(pi))
     assert result["ok"] is True
     assert result["result"]["spell"] == "lumos"
@@ -56,7 +57,8 @@ def test_lumos_calls_turn_on(pi):
 def test_nox_calls_turn_off(pi):
     from chotu.spells import cast_nox
     client = FakeClient()
-    with patch("httpx.AsyncClient", return_value=client):
+    with patch("httpx.AsyncClient", return_value=client), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
         result = run(cast_nox(pi))
     assert result["ok"] is True
     assert result["result"]["spell"] == "nox"

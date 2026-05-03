@@ -6,32 +6,31 @@ import time
 
 import httpx
 
-_HA_BASE_URL = os.getenv("HA_BASE_URL", "http://127.0.0.1:8123")
-_HA_TOKEN    = os.getenv("HA_TOKEN", "")
-_HA_ENTITY   = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
-
 _WAND_POSE = [[80, 0, 20], [60, 0, -30], [60, 0, -30], [60, 0, -30]]  # FR raised
-_NEUTRAL   = [[60, 0, -30]] * 4
+_NEUTRAL   = [[60, 0, -30] for _ in range(4)]
 
 
 async def _ha_call(service: str, data: dict) -> bool:
-    headers = {
-        "Authorization": f"Bearer {_HA_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    url = f"{_HA_BASE_URL}/api/services/light/{service}"
+    token    = os.getenv("HA_TOKEN", "")
+    base_url = os.getenv("HA_BASE_URL", "http://127.0.0.1:8123")
+    headers  = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url      = f"{base_url}/api/services/light/{service}"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.post(url, json=data, headers=headers)
             return r.status_code < 300
-    except Exception:
+    except Exception as e:
+        print(f"  [spells] HA call failed: {e}")
         return False
 
 
 async def _wand_pose(pi) -> None:
-    await pi.set_legs(_WAND_POSE, speed=40)
-    await asyncio.sleep(0.5)
-    await pi.set_legs(_NEUTRAL, speed=40)
+    try:
+        await pi.set_legs(_WAND_POSE, speed=40)
+        await asyncio.sleep(0.5)
+        await pi.set_legs(_NEUTRAL, speed=40)
+    except Exception:
+        pass  # Pi unreachable — skip pose, proceed to spell
 
 
 def _envelope(spell: str, ok: bool, start: float) -> dict:
@@ -47,25 +46,28 @@ def _envelope(spell: str, ok: bool, start: float) -> dict:
 
 async def cast_lumos(pi) -> dict:
     start = time.time()
+    entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
-    ok = await _ha_call("turn_on", {"entity_id": _HA_ENTITY})
+    ok = await _ha_call("turn_on", {"entity_id": entity})
     return _envelope("lumos", ok, start)
 
 
 async def cast_nox(pi) -> dict:
     start = time.time()
+    entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
-    ok = await _ha_call("turn_off", {"entity_id": _HA_ENTITY})
+    ok = await _ha_call("turn_off", {"entity_id": entity})
     return _envelope("nox", ok, start)
 
 
 async def cast_avada_kedavra(pi) -> dict:
     start = time.time()
+    entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
-    await _ha_call("turn_on", {"entity_id": _HA_ENTITY, "rgb_color": [0, 255, 0], "brightness": 255})
+    ok_flash = await _ha_call("turn_on", {"entity_id": entity, "rgb_color": [0, 255, 0], "brightness": 255})
     await asyncio.sleep(0.3)
-    ok = await _ha_call("turn_off", {"entity_id": _HA_ENTITY})
-    return _envelope("avada_kedavra", ok, start)
+    ok_off = await _ha_call("turn_off", {"entity_id": entity})
+    return _envelope("avada_kedavra", ok_flash and ok_off, start)
 
 
 async def cast_spell(pi, name: str) -> dict:
