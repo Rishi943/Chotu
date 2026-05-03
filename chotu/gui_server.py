@@ -90,6 +90,14 @@ async def thinking(request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/stt")
+async def stt(request: Request):
+    body = await request.json()
+    enabled = bool(body.get("enabled", False))
+    brain.continuous_mode = enabled
+    return JSONResponse({"ok": True})
+
+
 async def run_gui_server():
     config = uvicorn.Config(app, host="0.0.0.0", port=8888, log_level="warning")
     server = uvicorn.Server(config)
