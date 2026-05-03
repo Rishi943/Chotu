@@ -37,7 +37,10 @@ async def _play_soundbite(spell: str) -> None:
         from chotu.tools import _get_tts_lock
         with wave.open(path, "rb") as wf:
             rate = wf.getframerate()
+            ch = wf.getnchannels()
             audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+            if ch > 1:
+                audio = audio.reshape(-1, ch)
         async with _get_tts_lock():
             sd.stop()
             sd.play(audio, samplerate=rate)
