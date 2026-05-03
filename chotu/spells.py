@@ -24,8 +24,10 @@ async def _ha_call(service: str, data: dict) -> bool:
         return False
 
 
+_SOUND_ENV = {"lumos": "SPELL_LUMOS_SOUND", "nox": "SPELL_NOX_SOUND", "avada_kedavra": "SPELL_AVADA_SOUND"}
+
 async def _play_soundbite(spell: str) -> None:
-    path = os.getenv(f"SPELL_{spell.upper()}_SOUND", "")
+    path = os.getenv(_SOUND_ENV.get(spell, ""), "")
     if not path or not os.path.exists(path):
         return
     try:
