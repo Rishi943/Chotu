@@ -258,3 +258,56 @@ def test_voice_listener_wait_wake_word_below_threshold(monkeypatch):
     result = listener.wait_wake_word()
     assert result is True
     assert call_count["n"] == 4
+
+
+def _make_listener_with_fake_stream(monkeypatch):
+    """Helper: return a started VoiceListener with a no-op stream."""
+    import chotu.voice as v
+    monkeypatch.setattr("sounddevice.InputStream", lambda **kw: _FakeStream())
+    listener = v.VoiceListener()
+    listener.start()
+    return listener
+
+
+def test_voice_listener_record_utterance_transcribes(monkeypatch):
+    import chotu.voice as v
+    listener = _make_listener_with_fake_stream(monkeypatch)
+
+    speech_chunk = np.full(1280, 0.5, dtype=np.float32)
+    silent_chunk = np.zeros(1280, dtype=np.float32)
+
+    silence_limit = int(v.SILENCE_TIMEOUT_S * v.SAMPLE_RATE / v.CHUNK_SAMPLES) + 2
+    for _ in range(5):
+        listener._audio_q.put(speech_chunk.copy())
+    for _ in range(silence_limit):
+        listener._audio_q.put(silent_chunk.copy())
+
+    class FakeSeg:
+        text = " hello chotu"
+
+    class FakeWhisper:
+        def transcribe(self, audio, **kw):
+            return [FakeSeg()], None
+
+    monkeypatch.setattr(v, "_whisper_model", FakeWhisper())
+
+    result = listener.record_utterance()
+    assert result == "hello chotu"
+
+
+def test_voice_listener_record_utterance_empty_if_no_speech(monkeypatch):
+    import chotu.voice as v
+    listener = _make_listener_with_fake_stream(monkeypatch)
+
+    silent_chunk = np.zeros(1280, dtype=np.float32)
+    silence_limit = int(v.SILENCE_TIMEOUT_S * v.SAMPLE_RATE / v.CHUNK_SAMPLES) + 2
+    for _ in range(silence_limit):
+        listener._audio_q.put(silent_chunk.copy())
+
+    class FakeWhisper:
+        def transcribe(self, audio, **kw):
+            return [], None
+
+    monkeypatch.setattr(v, "_whisper_model", FakeWhisper())
+    result = listener.record_utterance()
+    assert result == ""

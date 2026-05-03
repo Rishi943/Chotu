@@ -138,7 +138,32 @@ class VoiceListener:
 
     def record_utterance(self) -> str:
         """Record until silence and transcribe. Returns text or ''."""
-        raise NotImplementedError
+        recorded: list[np.ndarray] = []
+        silence_chunks = 0
+        silence_limit = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SAMPLES)
+        max_chunks = int(MAX_RECORD_S * SAMPLE_RATE / CHUNK_SAMPLES)
+        has_speech = False
+
+        for _ in range(max_chunks):
+            try:
+                chunk = self._audio_q.get(timeout=5.0)
+            except queue.Empty:
+                break
+            recorded.append(chunk)
+            if _is_speech(chunk):
+                has_speech = True
+                silence_chunks = 0
+            elif has_speech:
+                silence_chunks += 1
+                if silence_chunks >= silence_limit:
+                    break
+
+        if not recorded or not has_speech:
+            return ""
+
+        audio = np.concatenate(recorded)
+        segments, _ = _get_whisper().transcribe(audio, language="en", beam_size=5)
+        return " ".join(seg.text.strip() for seg in segments).strip()
 
 
 # --- Blocking listener ---
