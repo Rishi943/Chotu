@@ -43,6 +43,9 @@ class PiClient:
     async def get_battery(self) -> dict:
         return await self._get("/battery", "battery")
 
+    async def set_face(self, name: str) -> dict:
+        return await self._post("/face", "face", {"name": name})
+
     async def get_perception(
         self,
         color: str | None = None,

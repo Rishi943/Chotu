@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import time
 import traceback
 from collections import deque
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 from chotu.llm_client import LLMClient
 from chotu.pi_client import PiClient
 from chotu.system_prompt import build_system_prompt
-from chotu.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
+from chotu.tools import TOOL_SCHEMAS, GOAL_TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
 
 
 # --- Config ---
@@ -41,12 +42,11 @@ memory: deque = deque(maxlen=15)
 input_queue: asyncio.Queue = asyncio.Queue()
 OBSTACLE_CM = 15
 estop: asyncio.Event = asyncio.Event()
-object_map: dict = {}  # populated by scan_environment_tool; injected into context each turn
-
 gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
 gallery_store: list[dict] = []
 thinking_enabled: bool = False
 _active_goal_task: asyncio.Task | None = None
+_pi_reachable: bool = False
 
 continuous_mode: bool = False
 tts_done_event: asyncio.Event = asyncio.Event()
@@ -57,115 +57,33 @@ _pi_reachable: bool = False
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
-# --- Mute no-op ---
+# --- Speak firing (from message content, not tool call) ---
 
-async def _muted_speak(**kw) -> dict:
-    return {
-        "ok": True, "tool": "speak",
-        "result": {"text": kw.get("text", ""), "played": False, "muted": True},
-        "duration_ms": 0, "timestamp": time.time(), "error": None,
-    }
+def _fire_face(name: str) -> None:
+    if _pi_reachable:
+        asyncio.create_task(pi.set_face(name=name))
+
+
+def _fire_speak_if_content(content: str | None) -> asyncio.Task | None:
+    """If content is non-empty, fire local_speak as a background task. Returns the task or None."""
+    if not content or not content.strip():
+        return None
+    text = content.strip()
+    print_speak(text, muted=MUTE)
+    if MUTE:
+        return None
+
+    async def _speak_then_idle():
+        from chotu.tools import local_speak
+        await local_speak(text, face_pi=pi if _pi_reachable else None)
+        _fire_face("idle")
+
+    return asyncio.create_task(_speak_then_idle())
 
 
 # --- Dispatch map ---
 
 dispatch_map = build_dispatch(pi, estop)
-if MUTE:
-    dispatch_map["speak"] = lambda **kw: _muted_speak(**kw)
-
-
-# --- scan_environment (local tool, not a Pi endpoint) ---
-
-SCAN_SEGMENTS = 6
-SCAN_LABELS = [
-    "front", "front-right", "back-right",
-    "back", "back-left", "front-left",
-]
-SCAN_DEGREES = [0, 60, 120, 180, 240, 300]
-TURN_STEPS_PER_SEGMENT = 2  # 6 segments × 2 steps × ~30° = ~360°
-
-
-def _build_map_key(label: str, deg: int) -> str:
-    return f"{label} (+{deg}°)"
-
-
-def _should_invalidate_map_after_turn(name: str, args: dict, result: dict) -> bool:
-    if name != "move":
-        return False
-    if not result.get("ok"):
-        return False
-    return args.get("direction") in ("turn left", "turn right")
-
-
-async def _describe_objects(image_b64: str) -> list[str]:
-    """Mini LLM call to identify objects in a single image."""
-    try:
-        response = await llm_client.chat_complete(
-            messages=[{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                {"type": "text", "text": (
-                    "List only objects you can clearly see in this image. "
-                    "Maximum 3 items, comma-separated, one line, no articles. "
-                    "If the image is dark, blurry, or nothing is clearly identifiable, respond with exactly: nothing"
-                )},
-            ]}],
-            tools=[],
-        )
-        text = (response.choices[0].message.content or "").strip().lower()
-        if text == "nothing" or not text:
-            return []
-        return [o.strip() for o in text.split(",") if o.strip() and o.strip() != "nothing"]
-    except Exception:
-        return []
-
-
-async def scan_environment_tool() -> dict:
-    """360° sweep: rotate in 6 segments, photograph each, identify objects.
-
-    Makes 5 right-turns (SCAN_SEGMENTS-1) then an equal left-turn to return
-    to the original heading. Net rotation ≈ 0 regardless of degrees-per-step.
-    """
-    global object_map
-    start = time.time()
-    entries: dict[str, list[str]] = {}
-    turns_made = 0
-
-    for i, (label, deg) in enumerate(zip(SCAN_LABELS, SCAN_DEGREES)):
-        if i > 0:
-            turn = await pi.move("turn right", steps=TURN_STEPS_PER_SEGMENT, speed=80)
-            if not turn.get("ok"):
-                break
-            turns_made += 1
-
-        capture = await capture_vision_tool(pi)
-        image_b64 = capture.get("result", {}).get("image_base64", "")
-        objects = await _describe_objects(image_b64) if image_b64 else []
-        entries[_build_map_key(label, deg)] = objects
-
-    # Return to original heading by reversing all right-turns.
-    if turns_made > 0:
-        await pi.move("turn left", steps=turns_made * TURN_STEPS_PER_SEGMENT, speed=80)
-
-    # Replace map atomically — any partial scan still overwrites the previous one.
-    object_map.clear()
-    object_map.update(entries)
-    object_map["_timestamp"] = time.time()  # kept for the 60s freshness gate in build_messages
-
-    notable = [(key, obj) for key, objs in entries.items() for obj in objs]
-    if notable:
-        summary = "Found: " + ", ".join(f"{obj} ({key})" for key, obj in notable)
-    else:
-        summary = "No objects identified."
-
-    ms = int((time.time() - start) * 1000)
-    return {
-        "ok": True, "tool": "scan_environment",
-        "result": {"map": entries, "summary": summary},
-        "duration_ms": ms, "timestamp": time.time(), "error": None,
-    }
-
-
-dispatch_map["scan_environment"] = lambda **kw: scan_environment_tool()
 
 
 # --- Goal mode state ---
@@ -181,9 +99,6 @@ set_goal_complete_event(goal_complete_event)
 
 def build_messages(user_input: str) -> list[dict]:
     sp = build_system_prompt(MODE)
-    if object_map and (time.time() - object_map.get("_timestamp", 0)) < 60:
-        clean_map = {k: v for k, v in object_map.items() if k != "_timestamp"}
-        sp += f"\n\n# Object map (from last scan)\n{json.dumps(clean_map, indent=2)}"
     messages = [{"role": "system", "content": sp}]
     for entry in memory:
         messages.append(entry)
@@ -342,24 +257,22 @@ async def run_goal(goal_str: str) -> dict:
     MAX_INNER = 12
 
     while iterations < MAX_GOAL_ITERATIONS:
+        dbg(f"[goal] outer-loop top: event.is_set={goal_complete_event.is_set()}, iter={iterations}")
         if goal_complete_event.is_set():
             break
 
         state_str = await build_state_string()
 
-        map_injection = ""
-        if object_map and (time.time() - object_map.get("_timestamp", 0)) < 60:
-            clean_map = {k: v for k, v in object_map.items() if k != "_timestamp"}
-            map_injection = f"\n\n[object map — from recent scan]\n{json.dumps(clean_map)}"
-
         turn_label = "Begin pursuing your goal." if iterations == 0 else "Continue pursuing your goal."
-        messages.append({"role": "user", "content": f"[state]\n{state_str}{map_injection}\n\n{turn_label}"})
+        messages.append({"role": "user", "content": f"[state]\n{state_str}\n\n{turn_label}"})
 
         dbg(f"[goal] outer iteration {iterations + 1}, state: {state_str}")
 
+        _fire_face("thinking")
         try:
-            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
+            response = await llm_client.chat_complete(messages, GOAL_TOOL_SCHEMAS, thinking=thinking_enabled)
         except Exception as e:
+            _fire_face("idle")
             print(f"  [goal] LLM error: {e}")
             break
 
@@ -367,7 +280,7 @@ async def run_goal(goal_str: str) -> dict:
             print("  [goal] LLM returned empty choices")
             break
 
-        # Strip think blocks and emit them
+        # Strip think blocks, emit, fire speak
         if response.choices:
             content = response.choices[0].message.content
             clean_content, think_blocks = _extract_think_blocks(content)
@@ -378,13 +291,16 @@ async def run_goal(goal_str: str) -> dict:
                     _emit({"type": "think", "text": block})
             if think_blocks and response.choices[0].message.content != clean_content:
                 response.choices[0].message.content = clean_content
+            if _fire_speak_if_content(clean_content):
+                _goal_spoke = True
 
-        speaks_fired = 0
         set_legs_fired = 0
         waits_fired = 0
+        goal_complete_fired = 0
         failed_tools: set[str] = set()
         deferred_vision: list[dict] = []
         inner_iterations = 0
+        _goal_spoke = False
 
         while response.choices[0].message.tool_calls and inner_iterations < MAX_INNER:
             if goal_complete_event.is_set():
@@ -400,8 +316,8 @@ async def run_goal(goal_str: str) -> dict:
                 name = tc.function.name
                 if goal_complete_event.is_set():
                     suppressed.append(_suppressed(tc.id, name, "goal already complete"))
-                elif name == "speak" and speaks_fired >= 1:
-                    suppressed.append(_suppressed(tc.id, name, "1 speak per turn max"))
+                elif name == "goal_complete" and goal_complete_fired >= 1:
+                    suppressed.append(_suppressed(tc.id, name, "1 goal_complete per batch max"))
                 elif name == "set_legs" and set_legs_fired >= 12:
                     suppressed.append(_suppressed(tc.id, name, "12 set_legs per turn max"))
                 elif name == "wait" and waits_fired >= 1:
@@ -409,9 +325,9 @@ async def run_goal(goal_str: str) -> dict:
                 elif name in failed_tools:
                     suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
                 else:
-                    if name == "speak":    speaks_fired += 1
-                    if name == "set_legs": set_legs_fired += 1
-                    if name == "wait":     waits_fired += 1
+                    if name == "set_legs":      set_legs_fired += 1
+                    if name == "wait":          waits_fired += 1
+                    if name == "goal_complete": goal_complete_fired += 1
                     to_dispatch.append(tc)
 
             dispatched = await asyncio.gather(*[_run_one(tc) for tc in to_dispatch])
@@ -434,9 +350,6 @@ async def run_goal(goal_str: str) -> dict:
 
                 if not result.get("ok"):
                     failed_tools.add(name)
-
-                if name == "speak" and not suppressed_call and result.get("ok"):
-                    print_speak(args.get("text", ""), muted=result.get("result", {}).get("muted", False))
 
                 if suppressed_call:
                     continue
@@ -472,7 +385,7 @@ async def run_goal(goal_str: str) -> dict:
                 break
 
             try:
-                response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
+                response = await llm_client.chat_complete(messages, GOAL_TOOL_SCHEMAS, thinking=thinking_enabled)
             except Exception as e:
                 print(f"  [goal] LLM follow-up error: {e}")
                 break
@@ -480,7 +393,7 @@ async def run_goal(goal_str: str) -> dict:
             if not response.choices:
                 break
 
-            # Strip think blocks and emit them
+            # Strip think blocks, emit, fire speak
             if response.choices:
                 content = response.choices[0].message.content
                 clean_content, think_blocks = _extract_think_blocks(content)
@@ -491,12 +404,14 @@ async def run_goal(goal_str: str) -> dict:
                         _emit({"type": "think", "text": block})
                 if think_blocks and response.choices[0].message.content != clean_content:
                     response.choices[0].message.content = clean_content
+                if _fire_speak_if_content(clean_content):
+                    _goal_spoke = True
 
             inner_iterations += 1
 
-        final_text = response.choices[0].message.content
-        print_monologue(final_text)
-
+        if not _goal_spoke:
+            _fire_face("idle")
+        dbg(f"[goal] post-inner check: event.is_set={goal_complete_event.is_set()} iterations={iterations}")
         if goal_complete_event.is_set():
             break
 
@@ -534,7 +449,8 @@ async def battery_monitor() -> None:
                     fired.add(threshold)
                     print(f"[battery] {pct:.0f}% — warning at {threshold}%")
                     if not MUTE:
-                        await pi.speak(msg)
+                        from chotu.tools import local_speak
+                        await local_speak(msg)
                     else:
                         print(f"[battery][muted] {msg}")
         await asyncio.sleep(BATTERY_POLL_INTERVAL)
@@ -565,10 +481,6 @@ async def _run_one(tc):
         args = json.loads(args_json) if args_json else {}
     except json.JSONDecodeError:
         args = {}
-    if _should_invalidate_map_after_turn(name, args, result):
-        if object_map:
-            dbg(f"[map] invalidated after {args.get('direction')}")
-        object_map.clear()
     return tc, name, args_json, result
 
 
@@ -581,20 +493,24 @@ def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
 
 async def _process(user_input: str):
     _emit({"type": "user", "text": user_input})
+    _fire_face("thinking")
     messages = build_messages(user_input)
     dbg(f"sending {len(messages)} messages to LLM")
+    _spoke = False
 
     try:
         response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
     except Exception as e:
         print(f"  LLM error: {e}")
+        _fire_face("idle")
         return
 
     if not response.choices:
         print("  LLM error: empty choices")
+        _fire_face("idle")
         return
 
-    # Strip think blocks and emit them
+    # Strip think blocks, emit them, and fire speak from clean content
     if response.choices:
         content = response.choices[0].message.content
         clean_content, think_blocks = _extract_think_blocks(content)
@@ -605,9 +521,10 @@ async def _process(user_input: str):
                 _emit({"type": "think", "text": block})
         if think_blocks and response.choices[0].message.content != clean_content:
             response.choices[0].message.content = clean_content
+        if _fire_speak_if_content(clean_content):
+            _spoke = True
 
     # Per-turn hard caps — enforced in code regardless of model behaviour
-    speaks_fired = 0
     set_legs_fired = 0
     waits_fired = 0
     failed_tools: set[str] = set()
@@ -623,16 +540,13 @@ async def _process(user_input: str):
         suppressed = []
         for tc in assistant_msg.tool_calls:
             name = tc.function.name
-            if name == "speak" and speaks_fired >= 1:
-                suppressed.append(_suppressed(tc.id, name, "1 speak per turn max"))
-            elif name == "set_legs" and set_legs_fired >= 12:
+            if name == "set_legs" and set_legs_fired >= 12:
                 suppressed.append(_suppressed(tc.id, name, "12 set_legs per turn max"))
             elif name == "wait" and waits_fired >= 1:
                 suppressed.append(_suppressed(tc.id, name, "1 wait per turn max"))
             elif name in failed_tools:
                 suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
             else:
-                if name == "speak":   speaks_fired += 1
                 if name == "set_legs": set_legs_fired += 1
                 if name == "wait":    waits_fired += 1
                 to_dispatch.append(tc)
@@ -658,14 +572,7 @@ async def _process(user_input: str):
             if not result.get("ok"):
                 failed_tools.add(name)
 
-            if name == "speak" and not suppressed_call and result.get("ok"):
-                muted = result.get("result", {}).get("muted", False)
-                print_speak(args.get("text", ""), muted=muted)
-
             if tool_call is None:
-                # Suppressed calls still need a tool result in the message history
-                # Find the original tc by matching name from the suppressed list
-                # (already handled: we build messages below using tool_call.id from suppressed tuple)
                 continue
 
             if name == "capture_vision" and result.get("ok"):
@@ -704,7 +611,7 @@ async def _process(user_input: str):
             print("  LLM error: empty choices on follow-up")
             return
 
-        # Strip think blocks and emit them
+        # Strip think blocks, emit, and fire speak from clean content
         if response.choices:
             content = response.choices[0].message.content
             clean_content, think_blocks = _extract_think_blocks(content)
@@ -715,6 +622,8 @@ async def _process(user_input: str):
                     _emit({"type": "think", "text": block})
             if think_blocks and response.choices[0].message.content != clean_content:
                 response.choices[0].message.content = clean_content
+            if _fire_speak_if_content(clean_content):
+                _spoke = True
 
         iterations += 1
 
@@ -722,7 +631,8 @@ async def _process(user_input: str):
         print("  [safety] Tool call limit reached, stopping.")
 
     final_text = response.choices[0].message.content
-    print_monologue(final_text)
+    if not _spoke:
+        _fire_face("idle")
 
     memory.append({"role": "user", "content": user_input})
     if final_text:
@@ -824,39 +734,59 @@ async def main(goal: str | None = None):
         print("  [mute] Audio disabled — speak() calls logged but not sent to Pi.")
     print(f"Pi bridge: {PI_HOST}")
 
+    global _pi_reachable
     health = await pi.health()
     if health.get("ok"):
         print("Pi bridge: connected")
+        _pi_reachable = True
     else:
         print(f"Pi bridge: NOT reachable ({health.get('error', '?')})")
         print("  Tools will return error envelopes. Continuing anyway.")
 
+    import sys as _sys
+    _sys.modules.setdefault('chotu.brain', _sys.modules['__main__'])
     from chotu import gui_server
+    loop = asyncio.get_running_loop()
+    _shutdown = asyncio.Event()
+
+    def _on_signal():
+        if not _shutdown.is_set():
+            print("\n[shutdown] Ctrl+C — stopping...")
+            _shutdown.set()
+
+    loop.add_signal_handler(signal.SIGINT, _on_signal)
+    loop.add_signal_handler(signal.SIGTERM, _on_signal)
+
     tasks = [
         asyncio.create_task(obstacle_poller(pi, estop)),
         asyncio.create_task(battery_monitor()),
         asyncio.create_task(gui_server.run_gui_server()),
     ]
 
+    print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
+    tasks.append(asyncio.create_task(brain_loop()))
+    tasks.append(asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop()))
     if goal:
         print(f"Goal: {goal}\n")
         tasks.append(asyncio.create_task(goal_runner_task(goal)))
-    else:
-        print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
-        tasks.append(asyncio.create_task(brain_loop()))
-        tasks.append(asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop()))
+
+    _stop_task = asyncio.create_task(_shutdown.wait())
 
     try:
-        await asyncio.gather(*tasks)
+        done, _ = await asyncio.wait(tasks + [_stop_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in done:
+            if t is _stop_task or t.cancelled():
+                continue
+            exc = t.exception()
+            if exc:
+                print(f"\n[fatal] Unhandled exception: {exc}")
+                traceback.print_exc()
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
-    except Exception as e:
-        print(f"\n[fatal] Unhandled exception: {e}")
-        traceback.print_exc()
     finally:
-        for t in tasks:
+        for t in tasks + [_stop_task]:
             t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, _stop_task, return_exceptions=True)
         await llm_client.close()
         print("\nChotu sitting down...")
         try:
@@ -865,6 +795,8 @@ async def main(goal: str | None = None):
             pass
         await pi.close()
         print("Chotu shutting down. Bye!")
+        import os as _os
+        _os._exit(0)
 
 
 if __name__ == "__main__":

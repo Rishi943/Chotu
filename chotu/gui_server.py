@@ -98,6 +98,16 @@ async def stt(request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/battery")
+async def battery():
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        try:
+            resp = await client.get(f"{brain.PI_HOST}/battery")
+            return JSONResponse(resp.json())
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+
 async def run_gui_server():
     config = uvicorn.Config(app, host="0.0.0.0", port=8888, log_level="warning")
     server = uvicorn.Server(config)

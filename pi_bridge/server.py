@@ -47,6 +47,9 @@ us = Ultrasonic(Pin("D2"), Pin("D3"))
 _bat_adc = ADC("A4")
 pygame.mixer.init()  # must run before speak uses pygame.mixer.Sound
 
+from chotu import face as _face
+_face.init()
+
 
 def _read_battery_voltage() -> float:
     """Read battery via ADC A4 with 3× voltage divider (robot_hat standard)."""
@@ -65,8 +68,21 @@ def _voltage_to_percent(v: float) -> int:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Vilib.camera_start(vflip=False, hflip=False)
-    await asyncio.sleep(1)  # camera warm-up
+    await asyncio.sleep(4)  # AWB/AE convergence
+    # Lock AWB at settled gains to prevent drift/oscillation
+    try:
+        meta = Vilib.get_controls()
+        gains = meta.get("ColourGains")
+        if gains:
+            Vilib.set_controls({"AwbEnable": False, "ColourGains": gains})
+            logging.info(f"AWB locked: red={gains[0]:.2f} blue={gains[1]:.2f}")
+        else:
+            logging.warning("AWB lock skipped: no ColourGains in metadata")
+    except Exception as e:
+        logging.warning(f"AWB lock failed: {e}")
+    _face.set_face("greeting")
     yield
+    _face.set_face("sleeping")
     Vilib.camera_close()
 
 
@@ -96,7 +112,13 @@ class MoveRequest(BaseModel):
 
 class PoseRequest(BaseModel):
     name: str        # "stand" | "sit" | "wave" | "push up" | "look up" | "look down" | "look left" | "look right"
-    speed: int = 80
+    speed: int = 50
+
+MAX_POSE_SPEED = 50  # stand/sit move all 12 servos simultaneously — cap to avoid current spike
+
+# Static positions available as do_step presets; everything else is a multi-frame
+# action sequence that must go through do_action.
+_STATIC_POSES = {"stand", "sit"}
 
 
 class SpeakRequest(BaseModel):
@@ -106,6 +128,10 @@ class SpeakRequest(BaseModel):
 class SetLegsRequest(BaseModel):
     legs: list[list[float]]  # 4 × [x, y, z] in mm
     speed: int = 80
+
+
+class FaceRequest(BaseModel):
+    name: str
 
 
 class TrickRequest(BaseModel):
@@ -125,6 +151,13 @@ class PerceptionRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.post("/face")
+async def set_face_endpoint(req: FaceRequest):
+    start = time.time()
+    ok = _face.set_face(req.name)
+    return _envelope("face", {"name": req.name, "ok": ok}, start)
+
 
 @app.get("/health")
 async def health():
@@ -163,10 +196,15 @@ async def move(req: MoveRequest):
 @app.post("/pose")
 async def pose(req: PoseRequest):
     start = time.time()
-    logging.info(f"POST /pose  name={req.name} speed={req.speed}")
+    speed = min(req.speed, MAX_POSE_SPEED)
+    logging.info(f"POST /pose  name={req.name} speed={speed}")
     try:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: crawler.do_step(req.name, req.speed))
+        if req.name in _STATIC_POSES:
+            await loop.run_in_executor(None, lambda: crawler.do_step(req.name, speed))
+        else:
+            await loop.run_in_executor(None, lambda: crawler.do_action(req.name, 1, speed))
+        await asyncio.sleep(0.1)  # let servos settle before next command
         held_ms = int((time.time() - start) * 1000)
         result = _envelope("pose", {"pose": req.name, "held_ms": held_ms}, start)
         logging.info(f"  pose ok ({held_ms}ms)")
@@ -204,18 +242,22 @@ async def speak(req: SpeakRequest):
         loop = asyncio.get_event_loop()
 
         def _do_speak():
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                tmpfile = f.name
+            _face.start_speak_animation()
             try:
-                subprocess.run(["espeak", "-w", tmpfile, "-v", "en", req.text], check=True, timeout=30)
-                channel = pygame.mixer.Sound(tmpfile).play()
-                while channel.get_busy():
-                    time.sleep(0.05)
-            finally:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    tmpfile = f.name
                 try:
-                    os.unlink(tmpfile)
-                except OSError:
-                    pass
+                    subprocess.run(["espeak", "-w", tmpfile, "-v", "en", req.text], check=True, timeout=30)
+                    channel = pygame.mixer.Sound(tmpfile).play()
+                    while channel.get_busy():
+                        time.sleep(0.05)
+                finally:
+                    try:
+                        os.unlink(tmpfile)
+                    except OSError:
+                        pass
+            finally:
+                _face.stop_speak_animation()
 
         await loop.run_in_executor(None, _do_speak)
         result = _envelope("speak", {"text": req.text, "played": True}, start)
@@ -246,7 +288,7 @@ async def capture():
         if frame is None:
             logging.warning("  capture: no frame available")
             return _envelope("capture", {}, start, "no frame available from camera")
-        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
         image_b64 = base64.b64encode(buf).decode()
         kb = len(image_b64) * 3 // 4 // 1024
         logging.info(f"  capture ok (~{kb}KB, {int((time.time()-start)*1000)}ms)")
@@ -331,21 +373,29 @@ def _trick_twist(speed: int):
             new_step[(i + 1) % 4] = rise
             new_step[(i - 1) % 4] = drop
             crawler.do_step(new_step, speed)
-            time.sleep(0.02)
+            time.sleep(0.04)
 
 
 def _trick_swimming(speed: int, loops: int = 40):
+    # Ramp to start position slowly so we don't spike current from wherever legs are.
+    crawler.do_step([[60, 0, -30]] * 4, 40)
+    time.sleep(0.8)
+    crawler.do_step([[80, 20, -20], [80, 20, -20], [40, 60, -50], [40, 60, -50]], 40)
+    time.sleep(0.8)
     for i in range(loops):
+        phase = i / loops  # 0.0 → 1.0
+        front_x = 80 + 20 * phase
+        front_y = 20 + 20 * phase
+        front_z = -20 + 10 * phase
+        rear_x = 40 - 20 * phase
+        rear_y = 60 + 40 * phase
+        rear_z = -50 + 20 * phase
         crawler.do_step(
-            [
-                [100 - i, i, 0],
-                [100 - i, i, 0],
-                [0, 120, -60 + i / 5],
-                [0, 100, -40 - i / 5],
-            ],
+            [[front_x, front_y, front_z], [front_x, front_y, front_z],
+             [rear_x, rear_y, rear_z], [rear_x, rear_y, rear_z]],
             speed,
         )
-        time.sleep(0.01)
+        time.sleep(0.05)
 
 
 def _trick_handwork(speed: int):

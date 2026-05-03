@@ -314,6 +314,38 @@
       line-height: 1.8;
     }
 
+    .battery-overlay {
+      position: absolute;
+      bottom: 8px;
+      right: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0,0,0,0.55);
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 11px;
+      color: #ccc;
+      pointer-events: none;
+    }
+
+    .battery-bar {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+    }
+
+    .battery-seg {
+      width: 6px;
+      height: 10px;
+      background: #2a2a2a;
+      border-radius: 1px;
+    }
+
+    .battery-seg.filled-green  { background: #4caf50; }
+    .battery-seg.filled-yellow { background: #ffc107; }
+    .battery-seg.filled-red    { background: #f44336; }
+
     .camera-label .url {
       color: #333;
       font-size: 11px;
@@ -429,6 +461,16 @@
     <div class="camera-block">
       <img id="camera-stream" src="/stream" alt="camera feed"
            style="width:100%;height:100%;object-fit:contain;display:block;">
+      <div class="battery-overlay" id="battery-overlay">
+        <div class="battery-bar" id="battery-bar">
+          <div class="battery-seg" id="bat-s0"></div>
+          <div class="battery-seg" id="bat-s1"></div>
+          <div class="battery-seg" id="bat-s2"></div>
+          <div class="battery-seg" id="bat-s3"></div>
+          <div class="battery-seg" id="bat-s4"></div>
+        </div>
+        <span id="battery-pct">—</span>
+      </div>
     </div>
 
     <!-- Perception / vilib tags -->
@@ -496,54 +538,69 @@
   }
 
   // ── SSE event stream ──────────────────────────────────────
-  var es = new EventSource('/events');
+  var _sseConnected = false;
 
-  es.onmessage = function(event) {
-    var data;
-    try {
-      data = JSON.parse(event.data);
-    } catch(e) {
-      return;
-    }
+  function connectSSE() {
+    var es = new EventSource('/events');
 
-    var type = data.type;
-    if (type === 'ping') return;
-
-    if (type === 'user') {
-      appendEvent('ev-user', '[user] ' + data.text);
-    } else if (type === 'think') {
-      appendEvent('ev-think', '[think] ' + data.text);
-    } else if (type === 'monologue') {
-      appendEvent('ev-monologue', '[thinks] ' + data.text);
-    } else if (type === 'speak') {
-      appendEvent('ev-speak', '[speak] "' + data.text + '"');
-    } else if (type === 'tool_call') {
-      var msg;
-      if (data.ok) {
-        msg = '[' + data.tool + '] ok=' + data.ok + ' ' + data.ms + 'ms';
+    es.onopen = function() {
+      if (!_sseConnected) {
+        _sseConnected = true;
       } else {
-        msg = '[' + data.tool + '] ok=false error=' + (data.error || '?');
+        appendEvent('ev-mode', '[stream] reconnected');
       }
-      appendEvent('ev-tool', msg);
-    } else if (type === 'image') {
-      // Add to gallery
-      var item = makeGalleryItem(data.label, data.image_b64);
-      var galleryPanel = document.getElementById('panel-gallery');
-      if (galleryPanel.classList.contains('active')) {
-        addGalleryItem(item);
-      } else {
-        pendingGalleryImages.push(item);
-      }
-    } else if (type === 'estop') {
-      appendEvent('ev-estop', '[estop] ' + data.state + ' at ' + data.cm + 'cm');
-    } else if (type === 'mode') {
-      appendEvent('ev-mode', '[mode] switched to ' + data.mode);
-    }
-  };
+    };
 
-  es.onerror = function() {
-    // EventSource auto-reconnects; no action needed
-  };
+    es.onmessage = function(event) {
+      var data;
+      try {
+        data = JSON.parse(event.data);
+      } catch(e) {
+        return;
+      }
+
+      var type = data.type;
+      if (type === 'ping') return;
+
+      if (type === 'user') {
+        appendEvent('ev-user', '[user] ' + data.text);
+      } else if (type === 'think') {
+        appendEvent('ev-think', '[think] ' + data.text);
+      } else if (type === 'monologue') {
+        appendEvent('ev-monologue', '[thinks] ' + data.text);
+      } else if (type === 'speak') {
+        appendEvent('ev-speak', '[speak] "' + data.text + '"');
+      } else if (type === 'tool_call') {
+        var msg;
+        if (data.ok) {
+          msg = '[' + data.tool + '] ok=' + data.ok + ' ' + data.ms + 'ms';
+        } else {
+          msg = '[' + data.tool + '] ok=false error=' + (data.error || '?');
+        }
+        appendEvent('ev-tool', msg);
+      } else if (type === 'image') {
+        var item = makeGalleryItem(data.label, data.image_b64);
+        var galleryPanel = document.getElementById('panel-gallery');
+        if (galleryPanel.classList.contains('active')) {
+          addGalleryItem(item);
+        } else {
+          pendingGalleryImages.push(item);
+        }
+      } else if (type === 'estop') {
+        appendEvent('ev-estop', '[estop] ' + data.state + ' at ' + data.cm + 'cm');
+      } else if (type === 'mode') {
+        appendEvent('ev-mode', '[mode] switched to ' + data.mode);
+      }
+    };
+
+    es.onerror = function(e) {
+      appendEvent('ev-estop', '[stream] disconnected — reconnecting...');
+      es.close();
+      setTimeout(connectSSE, 3000);
+    };
+  }
+
+  connectSSE();
 
   // ── Mode dropdown ─────────────────────────────────────────
   var modeSelect = document.getElementById('mode-select');
@@ -638,6 +695,32 @@
 
   updatePerception();
   setInterval(updatePerception, 2000);
+
+  // ── Battery overlay ───────────────────────────────────────
+  function updateBattery() {
+    fetch('/api/battery').then(function(r) {
+      return r.json();
+    }).then(function(data) {
+      var pctEl = document.getElementById('battery-pct');
+      if (!data || !data.ok) {
+        pctEl.textContent = '—';
+        for (var i = 0; i < 5; i++) {
+          document.getElementById('bat-s' + i).className = 'battery-seg';
+        }
+        return;
+      }
+      var pct = Math.round(data.result.percent);
+      pctEl.textContent = pct + '%';
+      var filled = Math.round(pct / 20); // 0–5 segments
+      var cls = pct >= 50 ? 'filled-green' : pct >= 20 ? 'filled-yellow' : 'filled-red';
+      for (var j = 0; j < 5; j++) {
+        document.getElementById('bat-s' + j).className = 'battery-seg' + (j < filled ? ' ' + cls : '');
+      }
+    }).catch(function() {});
+  }
+
+  updateBattery();
+  setInterval(updateBattery, 30000);
 
   // ── Gallery ───────────────────────────────────────────────
   function makeGalleryItem(label, image_b64) {
