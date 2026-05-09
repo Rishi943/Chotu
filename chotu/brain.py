@@ -47,38 +47,14 @@ gallery_store: list[dict] = []
 thinking_enabled: bool = False
 _active_goal_task: asyncio.Task | None = None
 _pi_reachable: bool = False
+_last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
 
 continuous_mode: bool = False
 tts_done_event: asyncio.Event = asyncio.Event()
 tts_done_event.set()  # initially ready — no TTS playing at startup
 _pending_speaks: int = 0
-_pi_reachable: bool = False
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
-
-
-# --- Speak firing (from message content, not tool call) ---
-
-def _fire_face(name: str) -> None:
-    if _pi_reachable:
-        asyncio.create_task(pi.set_face(name=name))
-
-
-def _fire_speak_if_content(content: str | None) -> asyncio.Task | None:
-    """If content is non-empty, fire local_speak as a background task. Returns the task or None."""
-    if not content or not content.strip():
-        return None
-    text = content.strip()
-    print_speak(text, muted=MUTE)
-    if MUTE:
-        return None
-
-    async def _speak_then_idle():
-        from chotu.tools import local_speak
-        await local_speak(text, face_pi=pi if _pi_reachable else None)
-        _fire_face("idle")
-
-    return asyncio.create_task(_speak_then_idle())
 
 
 # --- Dispatch map ---
@@ -154,8 +130,10 @@ def print_monologue(text: str):
 # --- TTS helpers ---
 
 def _fire_face(state: str) -> None:
-    """Emit a face state event (stub — wired to Pi face API when available)."""
+    """Emit a face-state event to the GUI and update the Pi's physical face panel."""
     _emit({"type": "face", "state": state})
+    if _pi_reachable:
+        asyncio.create_task(pi.set_face(name=state))
 
 
 def _fire_speak_if_content(content: str | None) -> "asyncio.Task | None":
@@ -255,6 +233,7 @@ async def run_goal(goal_str: str) -> dict:
     messages = [{"role": "system", "content": build_goal_prompt(goal_str)}]
     iterations = 0
     MAX_INNER = 12
+    consecutive_pi_fail_iters = 0
 
     while iterations < MAX_GOAL_ITERATIONS:
         dbg(f"[goal] outer-loop top: event.is_set={goal_complete_event.is_set()}, iter={iterations}")
@@ -301,6 +280,8 @@ async def run_goal(goal_str: str) -> dict:
         deferred_vision: list[dict] = []
         inner_iterations = 0
         _goal_spoke = False
+        _pi_unreachable_this_iter = False
+        _pi_success_this_iter = False
 
         while response.choices[0].message.tool_calls and inner_iterations < MAX_INNER:
             if goal_complete_event.is_set():
@@ -350,6 +331,10 @@ async def run_goal(goal_str: str) -> dict:
 
                 if not result.get("ok"):
                     failed_tools.add(name)
+                    if "pi_unreachable" in result.get("error", ""):
+                        _pi_unreachable_this_iter = True
+                elif name not in ("wait", "goal_complete"):
+                    _pi_success_this_iter = True
 
                 if suppressed_call:
                     continue
@@ -393,7 +378,7 @@ async def run_goal(goal_str: str) -> dict:
             if not response.choices:
                 break
 
-            # Strip think blocks, emit, fire speak
+            # Strip think blocks, emit — speaks suppressed in inner goal loop
             if response.choices:
                 content = response.choices[0].message.content
                 clean_content, think_blocks = _extract_think_blocks(content)
@@ -404,8 +389,6 @@ async def run_goal(goal_str: str) -> dict:
                         _emit({"type": "think", "text": block})
                 if think_blocks and response.choices[0].message.content != clean_content:
                     response.choices[0].message.content = clean_content
-                if _fire_speak_if_content(clean_content):
-                    _goal_spoke = True
 
             inner_iterations += 1
 
@@ -414,6 +397,29 @@ async def run_goal(goal_str: str) -> dict:
         dbg(f"[goal] post-inner check: event.is_set={goal_complete_event.is_set()} iterations={iterations}")
         if goal_complete_event.is_set():
             break
+
+        # Consecutive Pi failure guard — stop goal if Pi is unreachable 3 outer iters in a row.
+        # On the FIRST unreachable iter, inject a system note so the LLM knows the bridge is
+        # offline and can call goal_complete cleanly instead of hallucinating from stale images.
+        if _pi_unreachable_this_iter and not _pi_success_this_iter:
+            consecutive_pi_fail_iters += 1
+            batt = f"{_last_battery['percent']:.0f}% ({_last_battery['voltage']:.2f}V)" if _last_battery else "unknown"
+            if consecutive_pi_fail_iters >= 3:
+                print(f"\n  [brownout?] Pi unreachable for {consecutive_pi_fail_iters} consecutive iterations (last battery: {batt}) — stopping goal")
+                break
+            else:
+                print(f"  [pi-fail] iteration {consecutive_pi_fail_iters}/3 unreachable (last battery: {batt})")
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Pi bridge is unreachable — likely a brownout from rapid motion. "
+                        "Do not call any motion or vision tools (move/pose/set_legs/do_trick/capture_vision/get_perception/get_distance) — they will all fail. "
+                        "Do not describe images; you have no current camera view. "
+                        "Call goal_complete(success=false, outcome='pi offline — likely brownout') to end the goal cleanly."
+                    ),
+                })
+        else:
+            consecutive_pi_fail_iters = 0
 
         iterations += 1
 
@@ -429,7 +435,7 @@ async def run_goal(goal_str: str) -> dict:
 
 # --- Battery monitor ---
 
-BATTERY_POLL_INTERVAL = 60  # seconds
+BATTERY_POLL_INTERVAL = 2  # seconds — fast enough to catch voltage sag before brownout
 _BATTERY_THRESHOLDS = [
     (15, "battery critical. fifteen percent. plug in now friend."),
     (50, "battery fifty percent. halfway gone."),
@@ -437,17 +443,22 @@ _BATTERY_THRESHOLDS = [
 ]
 
 async def battery_monitor() -> None:
-    """Polls battery every 60s and speaks once when crossing 75/50/15% thresholds."""
+    """Poll battery every BATTERY_POLL_INTERVAL seconds. Emit voltage to GUI on every poll;
+    speak once when crossing 75/50/15% thresholds."""
     await asyncio.sleep(10.0)  # startup delay
     fired: set[int] = set()
     while True:
         result = await pi.get_battery()
         if result.get("ok"):
             pct = result.get("result", {}).get("percent", 100)
+            voltage = result.get("result", {}).get("voltage", 0)
+            _last_battery["percent"] = pct
+            _last_battery["voltage"] = voltage
+            _emit({"type": "battery", "percent": pct, "voltage": voltage})
             for threshold, msg in _BATTERY_THRESHOLDS:
                 if pct <= threshold and threshold not in fired:
                     fired.add(threshold)
-                    print(f"[battery] {pct:.0f}% — warning at {threshold}%")
+                    print(f"[battery] {pct:.0f}% ({voltage:.2f}V) — warning at {threshold}%")
                     if not MUTE:
                         from chotu.tools import local_speak
                         await local_speak(msg)

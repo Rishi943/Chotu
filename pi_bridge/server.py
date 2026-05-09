@@ -107,7 +107,7 @@ def _envelope(tool: str, result: dict, start: float, error=None) -> dict:
 class MoveRequest(BaseModel):
     direction: str   # "forward" | "backward" | "turn left" | "turn right"
     steps: int = 1
-    speed: int = 80
+    speed: int = 70
 
 
 class PoseRequest(BaseModel):
@@ -115,10 +115,42 @@ class PoseRequest(BaseModel):
     speed: int = 50
 
 MAX_POSE_SPEED = 50  # stand/sit move all 12 servos simultaneously — cap to avoid current spike
+MAX_MOTION_SPEED = 80  # hard cap for move/set_legs/trick — peak current safety
+MOTION_COOLDOWN_S = 0.3  # min gap between motion calls; lets pack voltage recover from sag
 
 # Static positions available as do_step presets; everything else is a multi-frame
 # action sequence that must go through do_action.
 _STATIC_POSES = {"stand", "sit"}
+
+# Serializes all motion endpoints. The crawler is a single hardware singleton; two
+# concurrent do_action/do_step calls from different threads corrupt servo state and
+# spike current draw. Brain may dispatch multiple tool calls in parallel via
+# asyncio.gather — the lock forces them to run one at a time on the bridge.
+_motion_lock: asyncio.Lock | None = None  # lazy-init in _motion_section (event loop must exist)
+_last_motion_end: float = 0.0
+
+
+def _get_motion_lock() -> asyncio.Lock:
+    global _motion_lock
+    if _motion_lock is None:
+        _motion_lock = asyncio.Lock()
+    return _motion_lock
+
+
+@asynccontextmanager
+async def _motion_section():
+    """Hold the motion lock and enforce MOTION_COOLDOWN_S since the last motion ended.
+    Updates _last_motion_end on exit (success or failure)."""
+    global _last_motion_end
+    lock = _get_motion_lock()
+    async with lock:
+        gap = time.monotonic() - _last_motion_end
+        if gap < MOTION_COOLDOWN_S:
+            await asyncio.sleep(MOTION_COOLDOWN_S - gap)
+        try:
+            yield
+        finally:
+            _last_motion_end = time.monotonic()
 
 
 class SpeakRequest(BaseModel):
@@ -127,7 +159,7 @@ class SpeakRequest(BaseModel):
 
 class SetLegsRequest(BaseModel):
     legs: list[list[float]]  # 4 × [x, y, z] in mm
-    speed: int = 80
+    speed: int = 70
 
 
 class FaceRequest(BaseModel):
@@ -136,7 +168,7 @@ class FaceRequest(BaseModel):
 
 class TrickRequest(BaseModel):
     name: str        # "pushup" | "twist" | "swimming" | "handwork"
-    speed: int = 80
+    speed: int = 70
 
 
 VILIB_COLORS = {"red", "orange", "yellow", "green", "blue", "purple"}
@@ -168,13 +200,15 @@ async def health():
 @app.post("/move")
 async def move(req: MoveRequest):
     start = time.time()
-    logging.info(f"POST /move  direction={req.direction} steps={req.steps} speed={req.speed}")
+    speed = min(req.speed, MAX_MOTION_SPEED)
+    logging.info(f"POST /move  direction={req.direction} steps={req.steps} speed={speed}")
     try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: crawler.do_action(req.direction, req.steps, req.speed),
-        )
+        async with _motion_section():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: crawler.do_action(req.direction, req.steps, speed),
+            )
         result = _envelope("move", {
             "direction": req.direction,
             "steps_requested": req.steps,
@@ -199,12 +233,13 @@ async def pose(req: PoseRequest):
     speed = min(req.speed, MAX_POSE_SPEED)
     logging.info(f"POST /pose  name={req.name} speed={speed}")
     try:
-        loop = asyncio.get_event_loop()
-        if req.name in _STATIC_POSES:
-            await loop.run_in_executor(None, lambda: crawler.do_step(req.name, speed))
-        else:
-            await loop.run_in_executor(None, lambda: crawler.do_action(req.name, 1, speed))
-        await asyncio.sleep(0.1)  # let servos settle before next command
+        async with _motion_section():
+            loop = asyncio.get_event_loop()
+            if req.name in _STATIC_POSES:
+                await loop.run_in_executor(None, lambda: crawler.do_step(req.name, speed))
+            else:
+                await loop.run_in_executor(None, lambda: crawler.do_action(req.name, 1, speed))
+            await asyncio.sleep(0.1)  # let servos settle before next command
         held_ms = int((time.time() - start) * 1000)
         result = _envelope("pose", {"pose": req.name, "held_ms": held_ms}, start)
         logging.info(f"  pose ok ({held_ms}ms)")
@@ -217,21 +252,23 @@ async def pose(req: PoseRequest):
 @app.post("/set_legs")
 async def set_legs(req: SetLegsRequest):
     start = time.time()
-    logging.info(f"POST /set_legs  legs={req.legs} speed={req.speed}")
+    speed = min(req.speed, MAX_MOTION_SPEED)
+    logging.info(f"POST /set_legs  legs={req.legs} speed={speed}")
     try:
         if len(req.legs) != 4 or any(len(leg) != 3 for leg in req.legs):
             raise ValueError("legs must be 4 × [x, y, z]")
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: crawler.do_step(req.legs, req.speed),
-        )
-        result = _envelope("set_legs", {"legs": req.legs, "speed": req.speed}, start)
+        async with _motion_section():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: crawler.do_step(req.legs, speed),
+            )
+        result = _envelope("set_legs", {"legs": req.legs, "speed": speed}, start)
         logging.info(f"  set_legs ok ({result['duration_ms']}ms)")
         return result
     except Exception as e:
         logging.error(f"  set_legs error: {e}")
-        return _envelope("set_legs", {"legs": req.legs, "speed": req.speed}, start, str(e))
+        return _envelope("set_legs", {"legs": req.legs, "speed": speed}, start, str(e))
 
 
 @app.post("/speak")
@@ -429,12 +466,14 @@ _TRICKS = {
 @app.post("/trick")
 async def trick(req: TrickRequest):
     start = time.time()
-    logging.info(f"POST /trick  name={req.name} speed={req.speed}")
+    speed = min(req.speed, MAX_MOTION_SPEED)
+    logging.info(f"POST /trick  name={req.name} speed={speed}")
     if req.name not in _TRICKS:
         return _envelope("trick", {}, start, f"unknown trick: {req.name}")
     try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: _TRICKS[req.name](req.speed))
+        async with _motion_section():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: _TRICKS[req.name](speed))
         result = _envelope("trick", {"name": req.name}, start)
         logging.info(f"  trick ok ({result['duration_ms']}ms)")
         return result

@@ -56,7 +56,7 @@ TOOL_SCHEMAS = [
             "name": "move",
             "description": (
                 "Walk in a direction. 1 step is about 45mm (1.8 inches). "
-                "1 turn is about 30 degrees. speed 0-100, default 80."
+                "1 turn is about 30 degrees. speed 0-100, default 70."
             ),
             "parameters": {
                 "type": "object",
@@ -73,8 +73,8 @@ TOOL_SCHEMAS = [
                     },
                     "speed": {
                         "type": "integer",
-                        "description": "Servo speed 0-100. Default 80. Higher is faster but jerkier.",
-                        "default": 80,
+                        "description": "Servo speed 0-100. Default 70. Bridge hard-caps at 80 to prevent brown-outs.",
+                        "default": 70,
                     },
                 },
                 "required": ["direction"],
@@ -136,8 +136,8 @@ TOOL_SCHEMAS = [
                     },
                     "speed": {
                         "type": "integer",
-                        "description": "Servo speed 0-100. Default 80. Low (10-30) for slow/creeping, high (80+) for energetic.",
-                        "default": 80,
+                        "description": "Servo speed 0-100. Default 70. Low (10-30) for slow/creeping. Bridge hard-caps at 80.",
+                        "default": 70,
                     },
                 },
                 "required": ["legs"],
@@ -189,8 +189,8 @@ TOOL_SCHEMAS = [
                     },
                     "speed": {
                         "type": "integer",
-                        "description": "Servo speed 0-100. Default 80.",
-                        "default": 80,
+                        "description": "Servo speed 0-100. Default 70. Bridge hard-caps at 80.",
+                        "default": 70,
                     },
                 },
                 "required": ["name"],

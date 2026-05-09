@@ -346,6 +346,19 @@
     .battery-seg.filled-yellow { background: #ffc107; }
     .battery-seg.filled-red    { background: #f44336; }
 
+    #battery-volt {
+      font-variant-numeric: tabular-nums;
+      color: #aaa;
+    }
+    #battery-volt.sag {
+      color: #ff5252;
+      animation: sag-flash 0.6s ease-in-out infinite alternate;
+    }
+    @keyframes sag-flash {
+      from { opacity: 1; }
+      to   { opacity: 0.45; }
+    }
+
     .camera-label .url {
       color: #333;
       font-size: 11px;
@@ -470,6 +483,7 @@
           <div class="battery-seg" id="bat-s4"></div>
         </div>
         <span id="battery-pct">—</span>
+        <span id="battery-volt">—V</span>
       </div>
     </div>
 
@@ -590,6 +604,8 @@
         appendEvent('ev-estop', '[estop] ' + data.state + ' at ' + data.cm + 'cm');
       } else if (type === 'mode') {
         appendEvent('ev-mode', '[mode] switched to ' + data.mode);
+      } else if (type === 'battery') {
+        applyBattery(data.percent, data.voltage);
       }
     };
 
@@ -697,30 +713,56 @@
   setInterval(updatePerception, 2000);
 
   // ── Battery overlay ───────────────────────────────────────
-  function updateBattery() {
-    fetch('/api/battery').then(function(r) {
-      return r.json();
-    }).then(function(data) {
-      var pctEl = document.getElementById('battery-pct');
-      if (!data || !data.ok) {
-        pctEl.textContent = '—';
-        for (var i = 0; i < 5; i++) {
-          document.getElementById('bat-s' + i).className = 'battery-seg';
-        }
-        return;
+  // Driven by SSE 'battery' events (every BATTERY_POLL_INTERVAL on the brain).
+  // Initial value still fetched once via /api/battery so the UI isn't blank
+  // before the first SSE tick lands.
+  var voltHistory = [];  // ring buffer of {t,v} for last ~30s; used as sag baseline
+  var SAG_WINDOW_MS = 30000;
+  var SAG_DROP_V = 0.4;
+
+  function applyBattery(pct, voltage) {
+    var pctEl = document.getElementById('battery-pct');
+    var vEl = document.getElementById('battery-volt');
+    if (pct == null || voltage == null) {
+      pctEl.textContent = '—';
+      vEl.textContent = '—V';
+      vEl.classList.remove('sag');
+      for (var i = 0; i < 5; i++) {
+        document.getElementById('bat-s' + i).className = 'battery-seg';
       }
-      var pct = Math.round(data.result.percent);
-      pctEl.textContent = pct + '%';
-      var filled = Math.round(pct / 20); // 0–5 segments
-      var cls = pct >= 50 ? 'filled-green' : pct >= 20 ? 'filled-yellow' : 'filled-red';
-      for (var j = 0; j < 5; j++) {
-        document.getElementById('bat-s' + j).className = 'battery-seg' + (j < filled ? ' ' + cls : '');
+      return;
+    }
+    var pctRounded = Math.round(pct);
+    pctEl.textContent = pctRounded + '%';
+    vEl.textContent = voltage.toFixed(2) + 'V';
+    var filled = Math.round(pctRounded / 20);
+    var cls = pctRounded >= 50 ? 'filled-green' : pctRounded >= 20 ? 'filled-yellow' : 'filled-red';
+    for (var j = 0; j < 5; j++) {
+      document.getElementById('bat-s' + j).className = 'battery-seg' + (j < filled ? ' ' + cls : '');
+    }
+
+    // Sag detection: voltage dropped >SAG_DROP_V from the max seen in the last SAG_WINDOW_MS.
+    var now = Date.now();
+    voltHistory.push({ t: now, v: voltage });
+    while (voltHistory.length && now - voltHistory[0].t > SAG_WINDOW_MS) {
+      voltHistory.shift();
+    }
+    var baseline = voltHistory.reduce(function(m, x) { return x.v > m ? x.v : m; }, 0);
+    if (baseline - voltage >= SAG_DROP_V) {
+      vEl.classList.add('sag');
+    } else {
+      vEl.classList.remove('sag');
+    }
+  }
+
+  function bootstrapBattery() {
+    fetch('/api/battery').then(function(r) { return r.json(); }).then(function(data) {
+      if (data && data.ok) {
+        applyBattery(data.result.percent, data.result.voltage);
       }
     }).catch(function() {});
   }
-
-  updateBattery();
-  setInterval(updateBattery, 30000);
+  bootstrapBattery();
 
   // ── Gallery ───────────────────────────────────────────────
   function makeGalleryItem(label, image_b64) {
