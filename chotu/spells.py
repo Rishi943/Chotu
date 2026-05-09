@@ -1,26 +1,48 @@
-"""Spell implementations — wand pose + optional soundbite + HA REST call."""
+"""Spell implementations — wand pose + optional soundbite + Tuya local control."""
 
 import asyncio
 import os
 import time
 
-import httpx
-
 _WAND_POSE = [[80, 0, 20], [60, 0, -30], [60, 0, -30], [60, 0, -30]]  # FR raised
 _NEUTRAL   = [[60, 0, -30] for _ in range(4)]
 
 
-async def _ha_call(service: str, data: dict) -> bool:
-    token    = os.getenv("HA_TOKEN", "")
-    base_url = os.getenv("HA_BASE_URL", "http://127.0.0.1:8123")
-    headers  = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    url      = f"{base_url}/api/services/light/{service}"
+def _tuya_device():
+    import tinytuya
+    d = tinytuya.BulbDevice(
+        os.getenv("TUYA_DEVICE_ID", ""),
+        os.getenv("TUYA_LIGHT_IP", ""),
+        os.getenv("TUYA_LOCAL_KEY", ""),
+    )
+    d.set_version(float(os.getenv("TUYA_VERSION", "3.3")))
+    return d
+
+
+async def _tuya_on() -> bool:
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.post(url, json=data, headers=headers)
-            return r.status_code < 300
+        await asyncio.to_thread(lambda: _tuya_device().turn_on())
+        return True
     except Exception as e:
-        print(f"  [spells] HA call failed: {e}")
+        print(f"  [spells] tuya error: {e}")
+        return False
+
+
+async def _tuya_off() -> bool:
+    try:
+        await asyncio.to_thread(lambda: _tuya_device().turn_off())
+        return True
+    except Exception as e:
+        print(f"  [spells] tuya error: {e}")
+        return False
+
+
+async def _tuya_colour(r: int, g: int, b: int) -> bool:
+    try:
+        await asyncio.to_thread(lambda: _tuya_device().set_colour(r, g, b))
+        return True
+    except Exception as e:
+        print(f"  [spells] tuya error: {e}")
         return False
 
 
@@ -65,36 +87,33 @@ def _envelope(spell: str, ok: bool, start: float) -> dict:
         "result": {"spell": spell},
         "duration_ms": int((time.time() - start) * 1000),
         "timestamp": time.time(),
-        "error": None if ok else "HA call failed",
+        "error": None if ok else "tuya call failed",
     }
 
 
 async def cast_lumos(pi) -> dict:
     start = time.time()
-    entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
     await _play_soundbite("lumos")
-    ok = await _ha_call("turn_on", {"entity_id": entity})
+    ok = await _tuya_on()
     return _envelope("lumos", ok, start)
 
 
 async def cast_nox(pi) -> dict:
     start = time.time()
-    entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
     await _play_soundbite("nox")
-    ok = await _ha_call("turn_off", {"entity_id": entity})
+    ok = await _tuya_off()
     return _envelope("nox", ok, start)
 
 
 async def cast_avada_kedavra(pi) -> dict:
     start = time.time()
-    entity = os.getenv("HA_LIGHT_ENTITY", "light.rishi_room_light")
     await _wand_pose(pi)
     await _play_soundbite("avada_kedavra")
-    ok_flash = await _ha_call("turn_on", {"entity_id": entity, "rgb_color": [0, 255, 0], "brightness": 255})
+    ok_flash = await _tuya_colour(0, 255, 0)
     await asyncio.sleep(0.3)
-    ok_off = await _ha_call("turn_off", {"entity_id": entity})
+    ok_off = await _tuya_off()
     return _envelope("avada_kedavra", ok_flash and ok_off, start)
 
 

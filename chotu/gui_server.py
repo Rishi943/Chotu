@@ -47,10 +47,13 @@ async def gallery():
 @app.get("/stream")
 async def stream():
     async def _pipe():
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("GET", f"{brain.PI_HOST}/stream") as resp:
-                async for chunk in resp.aiter_bytes(4096):
-                    yield chunk
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", f"{brain.PI_HOST}/stream") as resp:
+                    async for chunk in resp.aiter_bytes(4096):
+                        yield chunk
+        except (httpx.ConnectError, httpx.TimeoutException):
+            return
     return StreamingResponse(_pipe(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
