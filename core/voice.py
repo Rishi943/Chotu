@@ -9,12 +9,12 @@ import numpy as np
 # --- Config ---
 
 WAKE_WORD_MODEL_PATH = os.getenv(
-    "CHOTU_WAKE_WORD_MODEL",
+    "PALIV_WAKE_WORD_MODEL",
     os.path.expanduser("~/Rishi/AI/Chotu/models/hey_jarvis_v0.1.onnx"),
 )
-WHISPER_MODEL_SIZE = os.getenv("CHOTU_WHISPER_MODEL", "small")
-WAKE_THRESHOLD = float(os.getenv("CHOTU_WAKE_THRESHOLD", "0.5"))
-MIC_DEVICE = os.getenv("CHOTU_MIC_DEVICE")  # None = sounddevice default; set to device index/name for ReSpeaker
+WHISPER_MODEL_SIZE = os.getenv("PALIV_WHISPER_MODEL", "small")
+WAKE_THRESHOLD = float(os.getenv("PALIV_WAKE_THRESHOLD", "0.5"))
+MIC_DEVICE = os.getenv("PALIV_MIC_DEVICE")  # None = sounddevice default; set to device index/name for ReSpeaker
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1280       # 80ms at 16kHz — openWakeWord's expected chunk size
 SILENCE_TIMEOUT_S = 1.5    # seconds of silence after speech ends recording

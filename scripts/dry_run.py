@@ -3,7 +3,7 @@
 Usage:
     python -m scripts.dry_run
     python -m scripts.dry_run "walk forward 2 steps and say hi"
-    CHOTU_MUTE=1 python -m scripts.dry_run "hi"
+    PALIV_MUTE=1 python -m scripts.dry_run "hi"
 """
 
 import asyncio
@@ -15,15 +15,14 @@ from collections import deque
 
 from dotenv import load_dotenv
 
-from chotu.llm_client import LLMClient
-from chotu.system_prompt import build_system_prompt
-from chotu.tools import TOOL_SCHEMAS
+from core.llm_client import LLMClient
+from core.prompts import SYSTEM_PROMPT
+from core.tools import TOOL_SCHEMAS
 
 load_dotenv()
 
-MODE = os.getenv("CHOTU_MODE", "A")
-MUTE = os.getenv("CHOTU_MUTE", "0") == "1"
-MAX_TOOL_ITERATIONS = 6  # match brain.py reactive mode
+MUTE = os.getenv("PALIV_MUTE", "0") == "1"
+MAX_TOOL_ITERATIONS = 6  # match brain.py live loop
 
 llm_client = LLMClient()
 memory: deque = deque(maxlen=15)
@@ -83,7 +82,7 @@ def print_speak(text: str):
 
 
 def build_messages(user_input: str) -> list[dict]:
-    messages = [{"role": "system", "content": build_system_prompt(MODE)}]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for entry in memory:
         messages.append(entry)
     messages.append({"role": "user", "content": user_input})

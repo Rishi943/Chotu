@@ -16,35 +16,11 @@ def _get_tts_lock() -> asyncio.Lock:
         _tts_lock = asyncio.Lock()
     return _tts_lock
 
-from chotu.pi_client import PiClient
+from core.pi_client import PiClient
 
 _ALL_SPELLS = ["lumos", "nox", "avada_kedavra"]
 _raw = os.getenv("SPELLS_ENABLED", "lumos,nox,avada_kedavra")
 _ENABLED_SPELLS = [s.strip() for s in _raw.split(",") if s.strip() in _ALL_SPELLS] or _ALL_SPELLS
-
-
-# --- goal_complete signal (set by brain.py at startup) ---
-
-_goal_complete_event: asyncio.Event | None = None
-_goal_complete_result: dict = {}
-
-
-def set_goal_complete_event(event: asyncio.Event) -> None:
-    global _goal_complete_event
-    _goal_complete_event = event
-
-
-async def local_goal_complete(outcome: str, success: bool) -> dict:
-    global _goal_complete_result
-    _goal_complete_result.clear()
-    _goal_complete_result.update({"outcome": outcome, "success": success})
-    if _goal_complete_event:
-        _goal_complete_event.set()
-    return {
-        "ok": True, "tool": "goal_complete",
-        "result": {"outcome": outcome, "success": success},
-        "duration_ms": 0, "timestamp": time.time(), "error": None,
-    }
 
 
 # --- OpenAI function-calling tool schemas ---
@@ -315,39 +291,6 @@ TOOL_SCHEMAS = [
 ]
 
 
-# Goal-mode-only tools (not exposed in reactive mode)
-GOAL_ONLY_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "goal_complete",
-            "description": (
-                "Call this when your goal is achieved or impossible. "
-                "For find/locate goals, always call capture_vision() to confirm first. "
-                "Do not take any actions after calling this."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "outcome": {
-                        "type": "string",
-                        "description": "What happened. E.g. 'Found blue bottle near south wall' or 'Gave up — no blue detected after full sweep'.",
-                    },
-                    "success": {
-                        "type": "boolean",
-                        "description": "True if goal achieved, false if gave up.",
-                    },
-                },
-                "required": ["outcome", "success"],
-            },
-        },
-    },
-]
-
-
-GOAL_TOOL_SCHEMAS = TOOL_SCHEMAS + GOAL_ONLY_SCHEMAS
-
-
 # --- Estop helpers ---
 
 def _blocked(tool_name: str) -> dict:
@@ -480,7 +423,7 @@ async def _do_cast_spell(pi: PiClient, name: str = "") -> dict:
         return {"ok": False, "tool": "cast_spell", "result": {},
                 "duration_ms": 0, "timestamp": time.time(),
                 "error": f"spell '{name}' is not available"}
-    from chotu.spells import cast_spell
+    from core.spells import cast_spell
     return await cast_spell(pi, name)
 
 
@@ -499,7 +442,6 @@ def build_dispatch(pi: PiClient, estop: asyncio.Event) -> dict:
         "wait": lambda **kw: local_wait(**kw),
         "get_perception": lambda **kw: pi.get_perception(**kw),
         "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),
-        "goal_complete":  lambda **kw: local_goal_complete(**kw),
     }
 
 

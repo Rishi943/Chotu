@@ -1,4 +1,9 @@
-"""Chotu's brain — agent loop, memory buffer, terminal input."""
+"""Chotu's brain — live loop, memory buffer, terminal input.
+
+Loads PALIV.md (framework contract) and CHOTU.md (persona) into the system
+prompt at import time. State machine (IDLE/PLAY/LISTEN) will land in a later
+session; today this runs as a single reactive-equivalent loop.
+"""
 
 import asyncio
 import json
@@ -11,10 +16,10 @@ from collections import deque
 
 from dotenv import load_dotenv
 
-from chotu.llm_client import LLMClient
-from chotu.pi_client import PiClient
-from chotu.system_prompt import build_system_prompt
-from chotu.tools import TOOL_SCHEMAS, GOAL_TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
+from core.llm_client import LLMClient
+from core.pi_client import PiClient
+from core.prompts import SYSTEM_PROMPT
+from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
 
 
 # --- Config ---
@@ -22,16 +27,16 @@ from chotu.tools import TOOL_SCHEMAS, GOAL_TOOL_SCHEMAS, build_dispatch, dispatc
 load_dotenv()
 
 PI_HOST = os.getenv("PI_HOST", "http://chotu.local:7000")
-MODE = os.getenv("CHOTU_MODE", "reactive")
-MAX_TOOL_ITERATIONS = 6  # used by _process() in reactive mode
-DEBUG = os.getenv("CHOTU_DEBUG", "0") == "1"
-MUTE = os.getenv("CHOTU_MUTE", "0") == "1"
-TICK_INTERVAL = int(os.getenv("CHOTU_TICK_INTERVAL", "5"))
-VOICE_ENABLED = os.getenv("CHOTU_VOICE", "0") == "1"
+MAX_TOOL_ITERATIONS = 6
+DEBUG = os.getenv("PALIV_DEBUG", "0") == "1"
+MUTE = os.getenv("PALIV_MUTE", "0") == "1"
+TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
+VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
+
 
 listen_and_transcribe = None
 if VOICE_ENABLED:
-    from chotu.voice import listen_and_transcribe
+    from core.voice import listen_and_transcribe
 
 
 # --- Globals ---
@@ -45,7 +50,6 @@ estop: asyncio.Event = asyncio.Event()
 gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
 gallery_store: list[dict] = []
 thinking_enabled: bool = False
-_active_goal_task: asyncio.Task | None = None
 _pi_reachable: bool = False
 _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
 
@@ -62,20 +66,10 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 dispatch_map = build_dispatch(pi, estop)
 
 
-# --- Goal mode state ---
-
-goal_complete_event: asyncio.Event = asyncio.Event()
-MAX_GOAL_ITERATIONS = int(os.getenv("CHOTU_GOAL_ITERATIONS", "40"))
-
-from chotu.tools import set_goal_complete_event
-set_goal_complete_event(goal_complete_event)
-
-
 # --- Message building ---
 
 def build_messages(user_input: str) -> list[dict]:
-    sp = build_system_prompt(MODE)
-    messages = [{"role": "system", "content": sp}]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for entry in memory:
         messages.append(entry)
     messages.append({"role": "user", "content": user_input})
@@ -153,7 +147,7 @@ def _fire_speak_if_content(content: str | None) -> "asyncio.Task | None":
 
     async def _speak_then_idle():
         global _pending_speaks
-        from chotu.tools import local_speak
+        from core.tools import local_speak
         await local_speak(text, face_pi=pi if _pi_reachable else None)
         _fire_face("idle")
         _pending_speaks -= 1
@@ -181,256 +175,6 @@ async def obstacle_poller(pi_client: PiClient, estop_event: asyncio.Event) -> No
                     dbg(f"[estop] clear ({cm:.1f}cm)")
                 estop_event.clear()
         await asyncio.sleep(0.2)
-
-
-# --- Goal mode helpers ---
-
-async def build_state_string() -> str:
-    """Fresh ambient state for each goal iteration: distance, estop, human."""
-    dist_result = await pi.get_distance()
-    dist_str = (
-        f"{dist_result['result']['cm']:.1f}cm"
-        if dist_result.get("ok") else "unknown"
-    )
-    estop_str = "blocked" if estop.is_set() else "clear"
-
-    perception_result = await pi.get_perception(human=True)
-    if perception_result.get("ok"):
-        human = perception_result["result"].get("human", {})
-        human_str = "detected" if human.get("detected") else "not detected"
-    else:
-        human_str = "unknown"
-
-    return f"distance: {dist_str} | estop: {estop_str} | human: {human_str}"
-
-
-def _compress_vision_in_history(messages: list[dict]) -> None:
-    """Replace image_url blocks in older user messages with a text placeholder.
-    Keeps the most recent image intact. Prevents context bloat on long goal runs."""
-    image_indices = [
-        i for i, m in enumerate(messages)
-        if m.get("role") == "user"
-        and isinstance(m.get("content"), list)
-        and any(b.get("type") == "image_url" for b in m["content"])
-    ]
-    for idx in image_indices[:-1]:
-        msg = messages[idx]
-        text_parts = [b["text"] for b in msg["content"] if b.get("type") == "text"]
-        caption = " ".join(text_parts) or "[camera image]"
-        messages[idx] = {"role": "user", "content": f"[vision compressed: {caption[:120]}]"}
-
-
-async def run_goal(goal_str: str) -> dict:
-    """Pursue a single goal until goal_complete() is called or max iterations hit.
-    Standalone — does not use memory deque, input_queue, or _process()."""
-    from chotu.tools import _goal_complete_result
-    from chotu.system_prompt import build_goal_prompt
-
-    _emit({"type": "user", "text": f"[goal] {goal_str}"})
-    print(f"\n[goal] Starting: {goal_str}")
-    goal_complete_event.clear()
-
-    messages = [{"role": "system", "content": build_goal_prompt(goal_str)}]
-    iterations = 0
-    MAX_INNER = 12
-    consecutive_pi_fail_iters = 0
-
-    while iterations < MAX_GOAL_ITERATIONS:
-        dbg(f"[goal] outer-loop top: event.is_set={goal_complete_event.is_set()}, iter={iterations}")
-        if goal_complete_event.is_set():
-            break
-
-        state_str = await build_state_string()
-
-        turn_label = "Begin pursuing your goal." if iterations == 0 else "Continue pursuing your goal."
-        messages.append({"role": "user", "content": f"[state]\n{state_str}\n\n{turn_label}"})
-
-        dbg(f"[goal] outer iteration {iterations + 1}, state: {state_str}")
-
-        _fire_face("thinking")
-        try:
-            response = await llm_client.chat_complete(messages, GOAL_TOOL_SCHEMAS, thinking=thinking_enabled)
-        except Exception as e:
-            _fire_face("idle")
-            print(f"  [goal] LLM error: {e}")
-            break
-
-        if not response.choices:
-            print("  [goal] LLM returned empty choices")
-            break
-
-        # Strip think blocks, emit, fire speak
-        if response.choices:
-            content = response.choices[0].message.content
-            clean_content, think_blocks = _extract_think_blocks(content)
-            for block in think_blocks:
-                block = block.strip()
-                if block:
-                    print(f"  [think] {block[:120]}...")
-                    _emit({"type": "think", "text": block})
-            if think_blocks and response.choices[0].message.content != clean_content:
-                response.choices[0].message.content = clean_content
-            if _fire_speak_if_content(clean_content):
-                _goal_spoke = True
-
-        set_legs_fired = 0
-        waits_fired = 0
-        goal_complete_fired = 0
-        failed_tools: set[str] = set()
-        deferred_vision: list[dict] = []
-        inner_iterations = 0
-        _goal_spoke = False
-        _pi_unreachable_this_iter = False
-        _pi_success_this_iter = False
-
-        while response.choices[0].message.tool_calls and inner_iterations < MAX_INNER:
-            if goal_complete_event.is_set():
-                break
-
-            assistant_msg = response.choices[0].message
-            messages.append(llm_client.format_assistant_message(response))
-
-            to_dispatch = []
-            suppressed = []
-
-            for tc in assistant_msg.tool_calls:
-                name = tc.function.name
-                if goal_complete_event.is_set():
-                    suppressed.append(_suppressed(tc.id, name, "goal already complete"))
-                elif name == "goal_complete" and goal_complete_fired >= 1:
-                    suppressed.append(_suppressed(tc.id, name, "1 goal_complete per batch max"))
-                elif name == "set_legs" and set_legs_fired >= 12:
-                    suppressed.append(_suppressed(tc.id, name, "12 set_legs per turn max"))
-                elif name == "wait" and waits_fired >= 1:
-                    suppressed.append(_suppressed(tc.id, name, "1 wait per turn max"))
-                elif name in failed_tools:
-                    suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
-                else:
-                    if name == "set_legs":      set_legs_fired += 1
-                    if name == "wait":          waits_fired += 1
-                    if name == "goal_complete": goal_complete_fired += 1
-                    to_dispatch.append(tc)
-
-            dispatched = await asyncio.gather(*[_run_one(tc) for tc in to_dispatch])
-
-            all_results = (
-                [(tc, name, result) for tc, name, _, result in dispatched] +
-                [(None, name, result) for _, name, result in suppressed]
-            )
-
-            for tool_call, name, result in all_results:
-                suppressed_call = tool_call is None
-                args_json = tool_call.function.arguments if tool_call else "{}"
-                try:
-                    args = json.loads(args_json) if args_json else {}
-                except json.JSONDecodeError:
-                    args = {"_raw": args_json}
-
-                if not suppressed_call:
-                    print_tool_call(name, args, result)
-
-                if not result.get("ok"):
-                    failed_tools.add(name)
-                    if "pi_unreachable" in result.get("error", ""):
-                        _pi_unreachable_this_iter = True
-                elif name not in ("wait", "goal_complete"):
-                    _pi_success_this_iter = True
-
-                if suppressed_call:
-                    continue
-
-                if name == "capture_vision" and result.get("ok"):
-                    image_b64 = result["result"].get("image_base64", "")
-                    messages.append(llm_client.format_tool_result(tool_call.id, "Camera snapshot taken."))
-                    if image_b64:
-                        deferred_vision.append({
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                                {"type": "text", "text": "This is your current camera view. Describe what you observe, then continue toward your goal."},
-                            ],
-                        })
-                        if len(gallery_store) >= 50:
-                            gallery_store.pop(0)
-                        gallery_store.append({"label": "capture", "image_b64": image_b64, "ts": time.time()})
-                        _emit({"type": "image", "label": "capture", "image_b64": image_b64})
-                else:
-                    messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
-
-            for tool_id, name, result in suppressed:
-                messages.append(llm_client.format_tool_result(tool_id, json.dumps(result)))
-
-            for msg in deferred_vision:
-                messages.append(msg)
-            deferred_vision.clear()
-
-            _compress_vision_in_history(messages)
-
-            if goal_complete_event.is_set():
-                break
-
-            try:
-                response = await llm_client.chat_complete(messages, GOAL_TOOL_SCHEMAS, thinking=thinking_enabled)
-            except Exception as e:
-                print(f"  [goal] LLM follow-up error: {e}")
-                break
-
-            if not response.choices:
-                break
-
-            # Strip think blocks, emit — speaks suppressed in inner goal loop
-            if response.choices:
-                content = response.choices[0].message.content
-                clean_content, think_blocks = _extract_think_blocks(content)
-                for block in think_blocks:
-                    block = block.strip()
-                    if block:
-                        print(f"  [think] {block[:120]}...")
-                        _emit({"type": "think", "text": block})
-                if think_blocks and response.choices[0].message.content != clean_content:
-                    response.choices[0].message.content = clean_content
-
-            inner_iterations += 1
-
-        if not _goal_spoke:
-            _fire_face("idle")
-        dbg(f"[goal] post-inner check: event.is_set={goal_complete_event.is_set()} iterations={iterations}")
-        if goal_complete_event.is_set():
-            break
-
-        # Consecutive Pi failure guard — stop goal if Pi is unreachable 3 outer iters in a row.
-        # On the FIRST unreachable iter, inject a system note so the LLM knows the bridge is
-        # offline and can call goal_complete cleanly instead of hallucinating from stale images.
-        if _pi_unreachable_this_iter and not _pi_success_this_iter:
-            consecutive_pi_fail_iters += 1
-            batt = f"{_last_battery['percent']:.0f}% ({_last_battery['voltage']:.2f}V)" if _last_battery else "unknown"
-            if consecutive_pi_fail_iters >= 3:
-                print(f"\n  [brownout?] Pi unreachable for {consecutive_pi_fail_iters} consecutive iterations (last battery: {batt}) — stopping goal")
-                break
-            else:
-                print(f"  [pi-fail] iteration {consecutive_pi_fail_iters}/3 unreachable (last battery: {batt})")
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        "Pi bridge is unreachable — likely a brownout from rapid motion. "
-                        "Do not call any motion or vision tools (move/pose/set_legs/do_trick/capture_vision/get_perception/get_distance) — they will all fail. "
-                        "Do not describe images; you have no current camera view. "
-                        "Call goal_complete(success=false, outcome='pi offline — likely brownout') to end the goal cleanly."
-                    ),
-                })
-        else:
-            consecutive_pi_fail_iters = 0
-
-        iterations += 1
-
-    if goal_complete_event.is_set():
-        outcome = dict(_goal_complete_result)
-        print(f"\n[goal] Complete: {outcome['outcome']} (success={outcome['success']})")
-    else:
-        outcome = {"outcome": "max iterations reached", "success": False}
-        print(f"\n[goal] Gave up after {MAX_GOAL_ITERATIONS} outer iterations.")
-
-    return outcome
 
 
 # --- Battery monitor ---
@@ -471,16 +215,16 @@ async def battery_monitor() -> None:
                     fired.add(threshold)
                     print(f"[battery] {pct:.0f}% ({voltage:.2f}V) — warning at {threshold}%")
                     if not MUTE:
-                        from chotu.tools import local_speak
+                        from core.tools import local_speak
                         await local_speak(msg)
                     else:
                         print(f"[battery][muted] {msg}")
         await asyncio.sleep(BATTERY_POLL_INTERVAL)
 
 
-# --- Brain loop ---
+# --- Live loop ---
 
-async def brain_loop():
+async def live_loop():
     while True:
         user_input = await input_queue.get()
         if not user_input.strip():
@@ -661,45 +405,6 @@ async def _process(user_input: str):
         memory.append({"role": "assistant", "content": final_text})
 
 
-# --- Goal runner ---
-
-async def goal_runner_task(initial_goal: str) -> None:
-    """Run goals sequentially. After each completes, sit and wait for next goal via terminal."""
-    current_goal = initial_goal
-
-    while True:
-        await run_goal(current_goal)
-
-        print("\n[goal] Sitting down. Type next goal or Ctrl+C to quit.")
-        try:
-            await pi.pose("sit")
-        except Exception:
-            pass
-
-        try:
-            next_goal = await asyncio.to_thread(input, "next goal> ")
-            if next_goal.strip():
-                current_goal = next_goal.strip()
-            else:
-                print("[goal] No goal entered. Waiting for input...")
-                continue
-        except EOFError:
-            break
-
-
-async def set_mode(mode: str, goal_text: str | None = None) -> None:
-    global _active_goal_task
-    if mode == "goal" and goal_text:
-        if _active_goal_task and not _active_goal_task.done():
-            _active_goal_task.cancel()
-        _active_goal_task = asyncio.create_task(goal_runner_task(goal_text))
-        _emit({"type": "mode", "mode": "goal"})
-    elif mode == "reactive":
-        if _active_goal_task and not _active_goal_task.done():
-            _active_goal_task.cancel()
-            _active_goal_task = None
-        _emit({"type": "mode", "mode": "reactive"})
-
 
 # --- Input loops ---
 
@@ -715,7 +420,7 @@ async def input_loop():
 async def voice_loop():
     global continuous_mode
     import time as _time
-    from chotu.voice import VoiceListener, CONTINUOUS_SILENCE_TIMEOUT
+    from core.voice import VoiceListener, CONTINUOUS_SILENCE_TIMEOUT
     listener = VoiceListener()
     listener.start()
     last_speech_time = _time.monotonic()
@@ -749,9 +454,8 @@ async def voice_loop():
 
 # --- Main ---
 
-async def main(goal: str | None = None):
-    mode_label = "autonomous" if goal else MODE
-    print(f"Chotu brain started (mode: {mode_label}, model: {llm_client.model}, provider: {llm_client.provider})")
+async def main():
+    print(f"Chotu brain started (model: {llm_client.model}, provider: {llm_client.provider})")
     if MUTE:
         print("  [mute] Audio disabled — speak() calls logged but not sent to Pi.")
     print(f"Pi bridge: {PI_HOST}")
@@ -766,8 +470,8 @@ async def main(goal: str | None = None):
         print("  Tools will return error envelopes. Continuing anyway.")
 
     import sys as _sys
-    _sys.modules.setdefault('chotu.brain', _sys.modules['__main__'])
-    from chotu import gui_server
+    _sys.modules.setdefault('core.brain', _sys.modules['__main__'])
+    from core import gui_server
     loop = asyncio.get_running_loop()
     _shutdown = asyncio.Event()
 
@@ -786,11 +490,8 @@ async def main(goal: str | None = None):
     ]
 
     print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
-    tasks.append(asyncio.create_task(brain_loop()))
+    tasks.append(asyncio.create_task(live_loop()))
     tasks.append(asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop()))
-    if goal:
-        print(f"Goal: {goal}\n")
-        tasks.append(asyncio.create_task(goal_runner_task(goal)))
 
     _stop_task = asyncio.create_task(_shutdown.wait())
 
@@ -822,8 +523,4 @@ async def main(goal: str | None = None):
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Chotu brain")
-    parser.add_argument("--goal", type=str, default=None, help="Goal for autonomous mode")
-    args = parser.parse_args()
-    asyncio.run(main(goal=args.goal))
+    asyncio.run(main())

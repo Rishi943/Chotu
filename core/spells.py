@@ -56,7 +56,7 @@ async def _play_soundbite(spell: str) -> None:
         import wave
         import numpy as np
         import sounddevice as sd
-        from chotu.tools import _get_tts_lock
+        from core.tools import _get_tts_lock
         with wave.open(path, "rb") as wf:
             rate = wf.getframerate()
             ch = wf.getnchannels()

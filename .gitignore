@@ -9,7 +9,7 @@ __pycache__/
 docs/
 sounds/
 tests/
-CHOTU.md
+sesame-robot-main/
 CHOTU_final.md
 
 # Model files — add to models/ but don't commit binaries

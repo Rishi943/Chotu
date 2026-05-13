@@ -1,4 +1,4 @@
-"""LLM client abstraction — swap providers via CHOTU_LLM_PROVIDER=local|claude."""
+"""LLM client abstraction — swap providers via PALIV_LLM_PROVIDER=local|claude."""
 
 import json
 import os
@@ -55,17 +55,17 @@ class LLMClient:
     """
     Provider-agnostic LLM wrapper.
 
-    CHOTU_LLM_PROVIDER=local  (default) — llama-server via AsyncOpenAI
-    CHOTU_LLM_PROVIDER=claude           — Anthropic API (requires anthropic package + ANTHROPIC_API_KEY)
+    PALIV_LLM_PROVIDER=local  (default) — llama-server via AsyncOpenAI
+    PALIV_LLM_PROVIDER=claude           — Anthropic API (requires anthropic package + ANTHROPIC_API_KEY)
     """
 
     def __init__(self):
-        self.provider = os.getenv("CHOTU_LLM_PROVIDER", "local")
+        self.provider = os.getenv("PALIV_LLM_PROVIDER", "local")
 
         if self.provider == "local":
-            base_url = os.getenv("CHOTU_BRAIN_URL", "http://localhost:8080/v1")
-            api_key = os.getenv("CHOTU_BRAIN_KEY", "not-needed")
-            self.model = os.getenv("CHOTU_BRAIN_MODEL", "Qwen3.5-4B-Q4_K_M.gguf")
+            base_url = os.getenv("PALIV_BRAIN_URL", "http://localhost:8080/v1")
+            api_key = os.getenv("PALIV_BRAIN_KEY", "not-needed")
+            self.model = os.getenv("PALIV_BRAIN_MODEL", "Qwen3.5-4B-Q4_K_M.gguf")
             self._openai = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=120.0)
             self._anthropic_client = None
 
@@ -77,13 +77,13 @@ class LLMClient:
             api_key = os.getenv("ANTHROPIC_API_KEY", "")
             if not api_key:
                 raise ValueError("ANTHROPIC_API_KEY not set")
-            self.model = os.getenv("CHOTU_BRAIN_MODEL", "claude-sonnet-4-6")
+            self.model = os.getenv("PALIV_BRAIN_MODEL", "claude-sonnet-4-6")
             self._anthropic_client = _anthropic.AsyncAnthropic(api_key=api_key)
             self._openai = None
 
         else:
             raise ValueError(
-                f"Unknown CHOTU_LLM_PROVIDER: {self.provider!r}. Use 'local' or 'claude'."
+                f"Unknown PALIV_LLM_PROVIDER: {self.provider!r}. Use 'local' or 'claude'."
             )
 
     async def close(self) -> None:

@@ -52,7 +52,7 @@ The laptop is the brain. The Pi is a dumb HTTP server that executes commands and
 **Prerequisites:** Python 3.12, [llama-server](https://github.com/ggml-org/llama.cpp) on PATH, [piper](https://github.com/rhasspy/piper) on PATH.
 
 ```bash
-git clone <this-repo> && cd chotu
+git clone <this-repo> && cd Paliv
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -69,11 +69,11 @@ Key variables:
 | Variable | What it does |
 |---|---|
 | `PI_HOST` | Pi bridge URL, e.g. `http://chotu.local:7000` |
-| `CHOTU_BRAIN_URL` | llama-server endpoint, default `http://localhost:8080/v1` |
-| `CHOTU_BRAIN_MODEL` | Model filename, e.g. `Qwen3.5-4B-Q4_K_M.gguf` |
+| `PALIV_BRAIN_URL` | llama-server endpoint, default `http://localhost:8080/v1` |
+| `PALIV_BRAIN_MODEL` | Model filename, e.g. `Qwen3.5-4B-Q4_K_M.gguf` |
 | `LOCALIS_PIPER_MODEL` | Path to your `.onnx` piper voice model |
-| `CHOTU_VOICE` | Set to `1` to enable wake word + Whisper STT |
-| `CHOTU_WAKE_WORD_MODEL` | Path to your `.onnx` wake word model |
+| `PALIV_VOICE` | Set to `1` to enable wake word + Whisper STT |
+| `PALIV_WAKE_WORD_MODEL` | Path to your `.onnx` wake word model |
 
 Download the model files:
 - LLM: `Qwen3.5-4B-Q4_K_M.gguf` + `mmproj-BF16.gguf` (multimodal projector) from Hugging Face
@@ -136,13 +136,13 @@ sudo ~/chotu-bridge/.venv/bin/python3 ~/chotu-bridge/server.py
 source .venv/bin/activate
 
 # Terminal input
-python3 -m chotu.brain
+python3 -m core.brain
 
 # Voice input (wake word + Whisper)
-CHOTU_VOICE=1 python3 -m chotu.brain
+PALIV_VOICE=1 python3 -m core.brain
 
 # Autonomous goal mode
-python3 -m chotu.brain --goal "find a red object and sit next to it"
+python3 -m core.brain --goal "find a red object and sit next to it"
 ```
 
 The browser UI is at **http://localhost:8888** — it shows tool calls, spoken lines, and camera snapshots as they happen.
@@ -165,7 +165,7 @@ you> do some magic
 In autonomous mode, give it a goal and it pursues it until done:
 
 ```bash
-python3 -m chotu.brain --goal "patrol the room and report what you find"
+python3 -m core.brain --goal "patrol the room and report what you find"
 ```
 
 ---
@@ -184,7 +184,7 @@ This runs the real brain loop against llama-server but fakes all Pi responses. U
 ## Project structure
 
 ```
-chotu/
+core/
   brain.py          Main agent loop
   llm_client.py     Provider-agnostic LLM wrapper (local llama / Anthropic)
   pi_client.py      Async HTTP client for Pi bridge endpoints
@@ -192,7 +192,9 @@ chotu/
   spells.py         Harry Potter spells → Home Assistant
   voice.py          Wake word detection + Whisper STT
   gui_server.py     Browser UI server (FastAPI + SSE)
-  system_prompt.py  Chotu's personality and instructions
+PALIV.md            Framework contract (states, tool budgets, hard interrupts)
+CHOTU.md            Chotu persona (loaded with PALIV.md as system prompt)
+habits/             PLAY-state skill prompts (scaffolded for next session)
 pi_bridge/
   server.py         Pi-side FastAPI bridge (servos, camera, sensors)
 scripts/
@@ -205,10 +207,9 @@ scripts/
 
 | Env var | Default | Effect |
 |---|---|---|
-| `CHOTU_VOICE` | `0` | `1` = wake word + Whisper STT |
-| `CHOTU_DEBUG` | `0` | `1` = verbose logging |
-| `CHOTU_MUTE` | `0` | `1` = no audio (logs speech instead) |
-| `CHOTU_GOAL_ITERATIONS` | `40` | Max autonomous goal loop iterations |
+| `PALIV_VOICE` | `0` | `1` = wake word + Whisper STT |
+| `PALIV_DEBUG` | `0` | `1` = verbose logging |
+| `PALIV_MUTE` | `0` | `1` = no audio (logs speech instead) |
 | `SPELLS_ENABLED` | all | Comma-separated list, e.g. `avada_kedavra` |
 | `HA_BASE_URL` | — | Home Assistant URL for spell integration |
 | `HA_TOKEN` | — | Long-lived HA token |
