@@ -114,9 +114,9 @@ class PoseRequest(BaseModel):
     name: str        # "stand" | "sit" | "wave" | "push up" | "look up" | "look down" | "look left" | "look right"
     speed: int = 50
 
-MAX_POSE_SPEED = 50  # stand/sit move all 12 servos simultaneously — cap to avoid current spike
-MAX_MOTION_SPEED = 80  # hard cap for move/set_legs/trick — peak current safety
-MOTION_COOLDOWN_S = 0.3  # min gap between motion calls; lets pack voltage recover from sag
+MAX_POSE_SPEED = 40  # stand/sit move all 12 servos simultaneously — cap to avoid current spike
+MAX_MOTION_SPEED = 60  # hard cap for move/set_legs/trick — peak current safety (was 80, too aggressive on a sagging pack)
+MOTION_COOLDOWN_S = 0.6  # min gap between motion calls; lets pack voltage recover from sag (was 0.3)
 
 # Static positions available as do_step presets; everything else is a multi-frame
 # action sequence that must go through do_action.

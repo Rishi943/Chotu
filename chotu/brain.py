@@ -436,27 +436,38 @@ async def run_goal(goal_str: str) -> dict:
 # --- Battery monitor ---
 
 BATTERY_POLL_INTERVAL = 2  # seconds — fast enough to catch voltage sag before brownout
+BATTERY_MIN_VALID_VOLTAGE = 5.5  # below this, the ADC is reading a brownout transient — discard
+BATTERY_CONSECUTIVE_REQUIRED = 3  # threshold must hold this many polls in a row before firing
 _BATTERY_THRESHOLDS = [
     (15, "battery critical. fifteen percent. plug in now friend."),
     (50, "battery fifty percent. halfway gone."),
-    (75, "battery seventy five percent."),
 ]
 
 async def battery_monitor() -> None:
     """Poll battery every BATTERY_POLL_INTERVAL seconds. Emit voltage to GUI on every poll;
-    speak once when crossing 75/50/15% thresholds."""
+    speak once when a threshold holds for BATTERY_CONSECUTIVE_REQUIRED polls in a row.
+    Readings below BATTERY_MIN_VALID_VOLTAGE are treated as brownout transients and ignored."""
     await asyncio.sleep(10.0)  # startup delay
     fired: set[int] = set()
+    streak: dict[int, int] = {t: 0 for t, _ in _BATTERY_THRESHOLDS}
     while True:
         result = await pi.get_battery()
         if result.get("ok"):
             pct = result.get("result", {}).get("percent", 100)
             voltage = result.get("result", {}).get("voltage", 0)
+            if voltage < BATTERY_MIN_VALID_VOLTAGE:
+                # bogus brownout-transient read; do not update state or fire warnings
+                await asyncio.sleep(BATTERY_POLL_INTERVAL)
+                continue
             _last_battery["percent"] = pct
             _last_battery["voltage"] = voltage
             _emit({"type": "battery", "percent": pct, "voltage": voltage})
             for threshold, msg in _BATTERY_THRESHOLDS:
-                if pct <= threshold and threshold not in fired:
+                if pct <= threshold:
+                    streak[threshold] += 1
+                else:
+                    streak[threshold] = 0
+                if streak[threshold] >= BATTERY_CONSECUTIVE_REQUIRED and threshold not in fired:
                     fired.add(threshold)
                     print(f"[battery] {pct:.0f}% ({voltage:.2f}V) — warning at {threshold}%")
                     if not MUTE:
