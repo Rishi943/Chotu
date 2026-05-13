@@ -10,7 +10,7 @@ import numpy as np
 
 WAKE_WORD_MODEL_PATH = os.getenv(
     "PALIV_WAKE_WORD_MODEL",
-    os.path.expanduser("~/Rishi/AI/Chotu/models/hey_jarvis_v0.1.onnx"),
+    os.path.expanduser("~/Rishi/AI/Paliv/models/hey_jarvis_v0.1.onnx"),
 )
 WHISPER_MODEL_SIZE = os.getenv("PALIV_WHISPER_MODEL", "small")
 WAKE_THRESHOLD = float(os.getenv("PALIV_WAKE_THRESHOLD", "0.5"))
