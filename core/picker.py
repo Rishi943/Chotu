@@ -61,3 +61,44 @@ SYSTEM_PROMPT = (
 
 
 FALLBACK_PICK = Pick(state="idle", name="do_nothing")
+
+
+def _validate(response, current_state: State) -> Pick:
+    """Validate an LLMResponse and return a Pick. Never raises."""
+    try:
+        msg = response.choices[0].message
+    except (IndexError, AttributeError):
+        logger.warning("picker fallback: no choices in response")
+        return FALLBACK_PICK
+
+    tcs = msg.tool_calls
+    if not tcs:
+        logger.warning("picker fallback: no tool_calls in response")
+        return FALLBACK_PICK
+
+    tc = tcs[0]
+    if tc.function.name != "pick_habit":
+        logger.warning("picker fallback: wrong tool name=%s", tc.function.name)
+        return FALLBACK_PICK
+
+    try:
+        args = json.loads(tc.function.arguments or "{}")
+    except json.JSONDecodeError:
+        logger.warning("picker fallback: arguments not JSON: %r", tc.function.arguments)
+        return FALLBACK_PICK
+
+    state = args.get("state")
+    name = args.get("name")
+    if state not in ("idle", "play"):
+        logger.warning("picker fallback: bad state=%r", state)
+        return FALLBACK_PICK
+    if not isinstance(name, str):
+        logger.warning("picker fallback: bad name=%r", name)
+        return FALLBACK_PICK
+
+    allowed = IDLE_HABITS if state == "idle" else PLAY_HABITS
+    if name not in allowed:
+        logger.warning("picker fallback: name=%r not in %s habits", name, state)
+        return FALLBACK_PICK
+
+    return Pick(state=state, name=name)
