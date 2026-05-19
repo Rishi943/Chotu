@@ -102,3 +102,38 @@ def _validate(response: LLMResponse) -> Pick:
         return FALLBACK_PICK
 
     return Pick(state=state, name=name)
+
+
+def _render_recent(picks: list[str]) -> str:
+    return ", ".join(picks) if picks else "none yet"
+
+
+def _build_messages(ctx: PickerInput) -> list[dict]:
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"Current state: {ctx.current_state}.\n"
+                f"Recent picks (oldest → newest): {_render_recent(ctx.recent_picks)}."
+            ),
+        },
+    ]
+
+
+async def pick_next(ctx: PickerInput, llm: LLMClient) -> Pick:
+    """Single picker call. Validated. Never raises."""
+    messages = _build_messages(ctx)
+    try:
+        response = await llm.chat_complete(
+            messages=messages,
+            tools=[PICK_HABIT_TOOL],
+            thinking=True,
+            tool_choice={"type": "function", "function": {"name": "pick_habit"}},
+            max_tokens=128,
+        )
+    except Exception as e:
+        logger.warning("picker fallback: LLM call raised %s: %s", type(e).__name__, e)
+        return FALLBACK_PICK
+
+    return _validate(response)
