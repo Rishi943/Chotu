@@ -92,10 +92,20 @@ class LLMClient:
         if self._anthropic_client:
             await self._anthropic_client.close()
 
-    async def chat_complete(self, messages: list[dict], tools: list[dict], thinking: bool = False) -> LLMResponse:
+    async def chat_complete(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        thinking: bool = False,
+        tool_choice: Optional[dict] = None,
+        max_tokens: Optional[int] = None,
+    ) -> LLMResponse:
         """Send messages + tools to the configured provider. Returns normalised response."""
         if self.provider == "local":
-            return await self._local_complete(messages, tools, thinking=thinking)
+            return await self._local_complete(
+                messages, tools, thinking=thinking,
+                tool_choice=tool_choice, max_tokens=max_tokens,
+            )
         return await self._claude_complete(messages, tools)
 
     def format_assistant_message(self, response: LLMResponse) -> dict:
@@ -149,7 +159,14 @@ class LLMClient:
     # Local (llama-server) backend
     # -----------------------------------------------------------------------
 
-    async def _local_complete(self, messages: list[dict], tools: list[dict], thinking: bool = False) -> LLMResponse:
+    async def _local_complete(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        thinking: bool = False,
+        tool_choice: Optional[dict] = None,
+        max_tokens: Optional[int] = None,
+    ) -> LLMResponse:
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
@@ -157,6 +174,10 @@ class LLMClient:
         }
         if tools:
             kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         raw = await self._openai.chat.completions.create(**kwargs)
         return self._normalise_openai(raw)
 
