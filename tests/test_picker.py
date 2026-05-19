@@ -21,44 +21,44 @@ def _resp(name: str | None, args: str | None) -> LLMResponse:
 
 def test_valid_idle_pick():
     r = _resp("pick_habit", json.dumps({"state": "idle", "name": "dangle_paws"}))
-    assert _validate(r, current_state="idle") == Pick("idle", "dangle_paws")
+    assert _validate(r) == Pick("idle", "dangle_paws")
 
 
 def test_valid_play_pick():
     r = _resp("pick_habit", json.dumps({"state": "play", "name": "explore"}))
-    assert _validate(r, current_state="idle") == Pick("play", "explore")
+    assert _validate(r) == Pick("play", "explore")
 
 
 def test_no_tool_calls_falls_back():
     r = _resp(None, None)
-    assert _validate(r, current_state="idle") == FALLBACK_PICK
+    assert _validate(r) == FALLBACK_PICK
 
 
 def test_wrong_tool_name_falls_back():
     r = _resp("speak", json.dumps({"text": "hi"}))
-    assert _validate(r, current_state="idle") == FALLBACK_PICK
+    assert _validate(r) == FALLBACK_PICK
 
 
 def test_invalid_json_args_falls_back():
     r = _resp("pick_habit", "not json")
-    assert _validate(r, current_state="idle") == FALLBACK_PICK
+    assert _validate(r) == FALLBACK_PICK
 
 
 def test_unknown_state_falls_back():
     r = _resp("pick_habit", json.dumps({"state": "listen", "name": "do_nothing"}))
-    assert _validate(r, current_state="idle") == FALLBACK_PICK
+    assert _validate(r) == FALLBACK_PICK
 
 
 def test_unknown_idle_name_falls_back():
     r = _resp("pick_habit", json.dumps({"state": "idle", "name": "moonwalk"}))
-    assert _validate(r, current_state="idle") == FALLBACK_PICK
+    assert _validate(r) == FALLBACK_PICK
 
 
 def test_unknown_play_name_falls_back():
     r = _resp("pick_habit", json.dumps({"state": "play", "name": "find_object"}))
-    assert _validate(r, current_state="idle") == FALLBACK_PICK
+    assert _validate(r) == FALLBACK_PICK
 
 
 def test_missing_required_field_falls_back():
     r = _resp("pick_habit", json.dumps({"state": "idle"}))
-    assert _validate(r, current_state="idle") == FALLBACK_PICK
+    assert _validate(r) == FALLBACK_PICK

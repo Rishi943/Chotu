@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Literal
 
-from core.llm_client import LLMClient
+from core.llm_client import LLMClient, LLMResponse
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ SYSTEM_PROMPT = (
 FALLBACK_PICK = Pick(state="idle", name="do_nothing")
 
 
-def _validate(response, current_state: State) -> Pick:
+def _validate(response: LLMResponse) -> Pick:
     """Validate an LLMResponse and return a Pick. Never raises."""
     try:
         msg = response.choices[0].message
