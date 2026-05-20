@@ -140,7 +140,7 @@ The picker is on the always-on path. It must never raise.
 - **Provider:** same `LLMClient` instance used by `brain.py`. No new connections.
 - **Model:** whatever `PALIV_BRAIN_MODEL` resolves to (default Qwen3.5-4B-Q4_K_M).
 - **Thinking mode:** ON for picker (overrides the brain's default-off setting).
-- **Token budget:** `max_tokens=128` — picker needs no long output.
+- **Token budget:** `max_tokens=1024`. The picker's *final* output is tiny, but thinking-mode Qwen3.5 generates 500–900 tokens of `<think>...</think>` before emitting the tool call; anything under ~1024 truncates the JSON arguments mid-string. Verified empirically (128 → 100% fallbacks, 512 → ~25%, 1024 → 0%).
 
 If `llm.chat_complete` raises (llama-server down, timeout, etc.), `pick_next` catches it, logs, and returns the fallback. Brain loop continues.
 

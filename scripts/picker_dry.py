@@ -16,7 +16,7 @@ import sys
 from collections import Counter
 
 from core.llm_client import LLMClient
-from core.picker import FALLBACK_PICK, PickerInput, pick_next
+from core.picker import PickerInput, pick_next
 
 
 class _FallbackCounter(logging.Handler):

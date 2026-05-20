@@ -130,6 +130,8 @@ async def pick_next(ctx: PickerInput, llm: LLMClient) -> Pick:
             tools=[PICK_HABIT_TOOL],
             thinking=True,
             tool_choice={"type": "function", "function": {"name": "pick_habit"}},
+            # Thinking-mode <think> block consumes ~500-900 tokens before the JSON;
+            # anything under ~1024 truncates the tool-call arguments mid-string.
             max_tokens=1024,
         )
     except Exception as e:
