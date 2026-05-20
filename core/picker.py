@@ -130,7 +130,7 @@ async def pick_next(ctx: PickerInput, llm: LLMClient) -> Pick:
             tools=[PICK_HABIT_TOOL],
             thinking=True,
             tool_choice={"type": "function", "function": {"name": "pick_habit"}},
-            max_tokens=128,
+            max_tokens=512,
         )
     except Exception as e:
         logger.warning("picker fallback: LLM call raised %s: %s", type(e).__name__, e)
