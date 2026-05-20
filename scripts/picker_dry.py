@@ -19,6 +19,16 @@ from core.llm_client import LLMClient
 from core.picker import FALLBACK_PICK, PickerInput, pick_next
 
 
+class _FallbackCounter(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.getMessage().startswith("picker fallback:"):
+            self.count += 1
+
+
 HISTORY_MAX = 5
 
 
@@ -46,7 +56,7 @@ async def _interactive(llm: LLMClient) -> None:
         state = pick.state
 
 
-async def _simulate(llm: LLMClient, n: int, history: list[str], state: str) -> int:
+async def _simulate(llm: LLMClient, n: int, history: list[str], state: str, fallback_counter: _FallbackCounter) -> int:
     counts: Counter[str] = Counter()
     transitions: Counter[str] = Counter()
     fallback_streak = 0
@@ -55,8 +65,9 @@ async def _simulate(llm: LLMClient, n: int, history: list[str], state: str) -> i
 
     for i in range(n):
         prev_state = state
+        before = fallback_counter.count
         pick = await pick_next(PickerInput(current_state=state, recent_picks=history), llm)
-        is_fallback = (pick == FALLBACK_PICK and (not history or history[-1] == "do_nothing"))
+        is_fallback = fallback_counter.count > before
         if is_fallback:
             fallback_streak += 1
             fallback_total += 1
@@ -100,10 +111,13 @@ async def main() -> int:
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
+    fallback_counter = _FallbackCounter()
+    logging.getLogger("core.picker").addHandler(fallback_counter)
+
     llm = LLMClient()
     try:
         if args.simulate is not None:
-            return await _simulate(llm, args.simulate, _parse_history(args.seed_history), args.start_state)
+            return await _simulate(llm, args.simulate, _parse_history(args.seed_history), args.start_state, fallback_counter)
         await _interactive(llm)
         return 0
     finally:
