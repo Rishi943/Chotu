@@ -89,7 +89,7 @@ async def test_pick_next_returns_validated_pick():
     pick = await pick_next(PickerInput(current_state="idle", recent_picks=["do_nothing"]), llm)
     assert pick == Pick("idle", "yawn")
     assert llm.calls[0]["thinking"] is True
-    assert llm.calls[0]["max_tokens"] == 512
+    assert llm.calls[0]["max_tokens"] == 1024
     assert llm.calls[0]["tool_choice"]["function"]["name"] == "pick_habit"
 
 
