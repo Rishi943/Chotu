@@ -43,19 +43,19 @@ async def _look_around(pi: PiClient) -> None:
 
 
 async def _pushup(pi: PiClient) -> None:
-    await pi.do_trick(name="pushup", speed=60)
+    await pi.do_trick(name="pushup", speed=100)
 
 
 async def _twist(pi: PiClient) -> None:
-    await pi.do_trick(name="twist", speed=60)
+    await pi.do_trick(name="twist", speed=100)
 
 
 async def _swimming(pi: PiClient) -> None:
-    await pi.do_trick(name="swimming", speed=60)
+    await pi.do_trick(name="swimming", speed=100)
 
 
 async def _handwork(pi: PiClient) -> None:
-    await pi.do_trick(name="handwork", speed=60)
+    await pi.do_trick(name="handwork", speed=100)
 
 
 # ---------------------------------------------------------------------------

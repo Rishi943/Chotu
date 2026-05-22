@@ -81,6 +81,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.warning(f"AWB lock failed: {e}")
     _face.set_face("greeting")
+    try:
+        crawler.do_step("stand", 40)
+        await asyncio.sleep(1.0)
+        logging.info("Startup pose: stand")
+    except Exception as e:
+        logging.warning(f"Startup stand failed: {e}")
     yield
     _face.set_face("sleeping")
     Vilib.camera_close()
@@ -114,8 +120,9 @@ class PoseRequest(BaseModel):
     name: str        # "stand" | "sit" | "wave" | "push up" | "look up" | "look down" | "look left" | "look right"
     speed: int = 50
 
-MAX_POSE_SPEED = 40  # stand/sit move all 12 servos simultaneously — cap to avoid current spike
-MAX_MOTION_SPEED = 60  # hard cap for move/set_legs/trick — peak current safety (was 80, too aggressive on a sagging pack)
+MAX_POSE_SPEED = 40   # stand/sit move all 12 servos simultaneously — cap to avoid current spike
+MAX_MOTION_SPEED = 60  # hard cap for move/set_legs — peak current safety (was 80, too aggressive on a sagging pack)
+MAX_TRICK_SPEED = 100  # tricks are pre-choreographed; official examples use 100
 MOTION_COOLDOWN_S = 0.6  # min gap between motion calls; lets pack voltage recover from sag (was 0.3)
 
 # Static positions available as do_step presets; everything else is a multi-frame
@@ -395,22 +402,26 @@ async def perception(req: PerceptionRequest):
 def _trick_pushup(speed: int):
     up   = [[80, 0, -100], [80, 0, -100], [0, 120, -60], [0, 120, -60]]
     down = [[80, 0, -30],  [80, 0, -30],  [0, 120, -60], [0, 120, -60]]
-    crawler.do_step(up, speed);   time.sleep(0.6)
-    crawler.do_step(down, speed); time.sleep(0.6)
+    for _ in range(2):
+        crawler.do_step(down, speed); time.sleep(0.6)
+        crawler.do_step(up, speed);   time.sleep(0.6)
+    crawler.do_step("stand", 40)
 
 
 def _trick_twist(speed: int):
     new_step = [[50, 50, -80], [50, 50, -80], [50, 50, -80], [50, 50, -80]]
-    for i in range(4):
-        for inc in range(30, 60, 5):
-            rise = [50, 50, -80 + inc * 0.5]
-            drop = [50, 50, -80 - inc]
-            new_step[i]           = rise
-            new_step[(i + 2) % 4] = drop
-            new_step[(i + 1) % 4] = rise
-            new_step[(i - 1) % 4] = drop
-            crawler.do_step(new_step, speed)
-            time.sleep(0.04)
+    for _ in range(2):
+        for i in range(4):
+            for inc in range(30, 60, 5):
+                rise = [50, 50, -80 + inc * 0.5]
+                drop = [50, 50, -80 - inc]
+                new_step[i]           = rise
+                new_step[(i + 2) % 4] = drop
+                new_step[(i + 1) % 4] = rise
+                new_step[(i - 1) % 4] = drop
+                crawler.do_step(new_step, speed)
+                time.sleep(0.03)
+    crawler.do_step("stand", 40)
 
 
 def _trick_swimming(speed: int, loops: int = 40):
@@ -433,6 +444,7 @@ def _trick_swimming(speed: int, loops: int = 40):
             speed,
         )
         time.sleep(0.05)
+    crawler.do_step("stand", 40)
 
 
 def _trick_handwork(speed: int):
@@ -453,6 +465,7 @@ def _trick_handwork(speed: int):
     crawler.do_step(two_hand, speed);    time.sleep(0.6)
     crawler.do_step(right_hand, speed);  time.sleep(0.6)
     crawler.do_step("sit", speed);       time.sleep(0.6)
+    crawler.do_step("stand", 40)
 
 
 _TRICKS = {
@@ -466,7 +479,7 @@ _TRICKS = {
 @app.post("/trick")
 async def trick(req: TrickRequest):
     start = time.time()
-    speed = min(req.speed, MAX_MOTION_SPEED)
+    speed = min(req.speed, MAX_TRICK_SPEED)
     logging.info(f"POST /trick  name={req.name} speed={speed}")
     if req.name not in _TRICKS:
         return _envelope("trick", {}, start, f"unknown trick: {req.name}")
