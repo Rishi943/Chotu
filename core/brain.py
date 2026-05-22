@@ -496,6 +496,10 @@ async def main():
 
     print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
     tasks.append(asyncio.create_task(live_loop()))
+
+    # Prime the monologue with one synthetic [boot] message.
+    input_queue.put_nowait(wrap_boot())
+
     tasks.append(asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop()))
 
     _stop_task = asyncio.create_task(_shutdown.wait())
