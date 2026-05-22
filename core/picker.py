@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 State = Literal["idle", "play"]
 
-IDLE_HABITS: list[str] = ["do_nothing", "dangle_paws", "yawn", "look_around", "shake_paw"]
+IDLE_HABITS: list[str] = ["do_nothing", "yawn", "look_around", "pushup", "twist", "swimming", "handwork"]
 PLAY_HABITS: list[str] = ["explore"]
 
 

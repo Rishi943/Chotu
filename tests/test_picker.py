@@ -20,8 +20,8 @@ def _resp(name: str | None, args: str | None) -> LLMResponse:
 
 
 def test_valid_idle_pick():
-    r = _resp("pick_habit", json.dumps({"state": "idle", "name": "dangle_paws"}))
-    assert _validate(r) == Pick("idle", "dangle_paws")
+    r = _resp("pick_habit", json.dumps({"state": "idle", "name": "yawn"}))
+    assert _validate(r) == Pick("idle", "yawn")
 
 
 def test_valid_play_pick():
