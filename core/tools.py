@@ -291,6 +291,18 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "investigate",
+            "description": (
+                "Take a closer look at what's in front of you. Checks distance, "
+                "then either looks up (if something's close) or steps forward two paces, "
+                "then captures a camera image. One tool call, multi-step sequence underneath."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "speak",
             "description": (
                 "Speak one short line aloud through the laptop speaker. "
@@ -494,6 +506,11 @@ async def _do_speak(text: str = "", face_pi=None, muted: bool = False) -> dict:
     }
 
 
+async def _do_investigate(pi: PiClient) -> dict:
+    from core.habits import investigate
+    return await investigate(pi)
+
+
 def build_dispatch(pi: PiClient, estop: asyncio.Event, *, mute: bool = False) -> dict:
     """Build tool name -> async callable dispatch map."""
     return {
@@ -509,6 +526,7 @@ def build_dispatch(pi: PiClient, estop: asyncio.Event, *, mute: bool = False) ->
         "get_perception": lambda **kw: pi.get_perception(**kw),
         "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),
         "speak":          lambda **kw: _do_speak(face_pi=pi, muted=mute, **kw),
+        "investigate":    lambda **kw: _do_investigate(pi),
     }
 
 

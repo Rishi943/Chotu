@@ -1,87 +1,64 @@
-"""Scripted IDLE habit implementations.
+"""Scripted habit-tools — multi-step Pi sequences that look like single tool calls to the LLM.
 
-Each habit is an async coroutine: habit(pi: PiClient) -> None.
-Brain calls run_habit(name, pi) to execute one.
-IDLE_HABIT_MAP keys must stay in sync with picker.IDLE_HABITS.
+Each habit is an async function `habit(pi: PiClient) -> dict`, returning a standard envelope.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Awaitable
+import time
 
 from core.pi_client import PiClient
 
 logger = logging.getLogger(__name__)
 
-HabitFn = Callable[[PiClient], Awaitable[None]]
+
+def _envelope(tool: str, result: dict, started_at: float, ok: bool = True, error: str | None = None) -> dict:
+    return {
+        "ok": ok, "tool": tool, "result": result,
+        "duration_ms": int((time.time() - started_at) * 1000),
+        "timestamp": time.time(), "error": error,
+    }
 
 
-# ---------------------------------------------------------------------------
-# Habit implementations
-# ---------------------------------------------------------------------------
-
-async def _do_nothing(pi: PiClient) -> None:
-    await asyncio.sleep(5)
+OBSTACLE_THRESHOLD_CM = 15.0
 
 
-async def _yawn(pi: PiClient) -> None:
-    await pi.set_face("sleeping")
-    await pi.pose(name="look up", speed=30)
-    await asyncio.sleep(1.2)
-    await pi.pose(name="stand", speed=30)
-    await pi.set_face("idle")
+async def _capture(pi: PiClient) -> dict:
+    """Indirection to allow tests to stub capture_vision_tool."""
+    from core.tools import capture_vision_tool
+    return await capture_vision_tool(pi)
 
 
-async def _look_around(pi: PiClient) -> None:
-    await pi.pose(name="look left", speed=40)
-    await asyncio.sleep(0.8)
-    await pi.pose(name="look right", speed=40)
-    await asyncio.sleep(0.8)
-    await pi.pose(name="stand", speed=40)
+async def investigate(pi: PiClient) -> dict:
+    """Look at what's in front of you: distance check, then either look up (if close) or step forward, then capture vision.
 
+    Returns a consolidated envelope summarising the steps + final vision result.
+    """
+    started = time.time()
+    steps: list[dict] = []
 
-async def _pushup(pi: PiClient) -> None:
-    await pi.do_trick(name="pushup", speed=100)
+    dist_env = await pi.get_distance()
+    steps.append({"step": "get_distance", "env": dist_env})
+    cm = (dist_env.get("result") or {}).get("cm", 9999)
 
+    if 0 < cm < OBSTACLE_THRESHOLD_CM:
+        pose_env = await pi.pose(name="look up", speed=50)
+        steps.append({"step": "pose:look_up", "env": pose_env})
+    else:
+        move_env = await pi.move(direction="forward", steps=2, speed=70)
+        steps.append({"step": "move:forward:2", "env": move_env})
 
-async def _twist(pi: PiClient) -> None:
-    await pi.do_trick(name="twist", speed=100)
+    cap_env = await _capture(pi)
+    steps.append({"step": "capture_vision", "env": cap_env})
 
-
-async def _swimming(pi: PiClient) -> None:
-    await pi.do_trick(name="swimming", speed=100)
-
-
-async def _handwork(pi: PiClient) -> None:
-    await pi.do_trick(name="handwork", speed=100)
-
-
-# ---------------------------------------------------------------------------
-# Dispatch
-# ---------------------------------------------------------------------------
-
-IDLE_HABIT_MAP: dict[str, HabitFn] = {
-    "do_nothing":  _do_nothing,
-    "yawn":        _yawn,
-    "look_around": _look_around,
-    "pushup":      _pushup,
-    "twist":       _twist,
-    "swimming":    _swimming,
-    "handwork":    _handwork,
-}
-
-
-async def run_habit(name: str, pi: PiClient) -> None:
-    """Execute a named IDLE habit. Logs and swallows errors so brain loop never crashes."""
-    fn = IDLE_HABIT_MAP.get(name)
-    if fn is None:
-        logger.warning("habits: unknown habit %r — skipping", name)
-        return
-    try:
-        logger.info("habits: running %r", name)
-        await fn(pi)
-        logger.info("habits: %r complete", name)
-    except Exception as e:
-        logger.warning("habits: %r raised %s: %s", name, type(e).__name__, e)
+    image_b64 = (cap_env.get("result") or {}).get("image_base64", "")
+    summary = {
+        "distance_cm": cm,
+        "action": "look_up" if 0 < cm < OBSTACLE_THRESHOLD_CM else "step_forward_2",
+        "image_base64": image_b64,
+        "steps_count": len(steps),
+    }
+    return _envelope("investigate", summary, started, ok=cap_env.get("ok", False),
+                     error=None if cap_env.get("ok") else "investigate: capture_vision failed")
