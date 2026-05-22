@@ -26,7 +26,7 @@ from core.pi_client import PiClient
 import os
 PI_URL = os.getenv("PI_URL", "http://chotu.local:7000")
 
-HABIT_ORDER = ["do_nothing", "yawn", "look_around", "pushup", "twist", "swimming", "handwork"]
+HABIT_ORDER = list(IDLE_HABIT_MAP.keys())
 
 
 async def main():
