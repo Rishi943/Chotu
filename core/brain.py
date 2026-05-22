@@ -39,12 +39,29 @@ if VOICE_ENABLED:
     from core.voice import listen_and_transcribe
 
 
+# --- Tagged input items ---
+
+def wrap_user_input(text: str) -> dict:
+    return {"kind": "user", "text": text}
+
+def wrap_heartbeat() -> dict:
+    return {"kind": "heartbeat", "text": "[heartbeat]"}
+
+def wrap_event(subkind: str, payload: str = "") -> dict:
+    body = f"[event] {subkind}" + (f": {payload}" if payload else "")
+    return {"kind": "event", "subkind": subkind, "text": body}
+
+def wrap_boot() -> dict:
+    return {"kind": "boot", "text": "[boot] You just woke up. You don't know where you are. The session starts here."}
+
+
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
 llm_client = LLMClient()
 memory: deque = deque(maxlen=15)
 input_queue: asyncio.Queue = asyncio.Queue()
+tool_chain_active: asyncio.Event = asyncio.Event()
 OBSTACLE_CM = 15
 estop: asyncio.Event = asyncio.Event()
 gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -198,15 +215,21 @@ async def battery_monitor() -> None:
 
 async def live_loop():
     while True:
-        user_input = await input_queue.get()
-        if not user_input.strip():
+        item = await input_queue.get()
+        if isinstance(item, str):
+            item = wrap_user_input(item)  # backwards-compat for any legacy str pushes
+        text = item.get("text", "").strip()
+        if not text:
             continue
-        print(f"\n--- Chotu thinking ---")
+        print(f"\n--- Chotu thinking ({item['kind']}) ---")
+        tool_chain_active.set()
         try:
-            await _process(user_input)
+            await _process(item)
         except Exception as e:
             print(f"  [brain error] {e}")
             traceback.print_exc()
+        finally:
+            tool_chain_active.clear()
         print()
 
 
@@ -229,8 +252,10 @@ def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
     return tool_id, name, result
 
 
-async def _process(user_input: str):
-    _emit({"type": "user", "text": user_input})
+async def _process(item: dict):
+    user_input = item["text"]
+    kind = item["kind"]
+    _emit({"type": kind, "text": user_input})
     _fire_face("thinking")
     messages = build_messages(user_input)
     dbg(f"sending {len(messages)} messages to LLM")
@@ -370,6 +395,12 @@ async def _process(user_input: str):
     final_text = response.choices[0].message.content
     _fire_face("idle")
 
+    # Empty-turn drop: heartbeat ticks that produced no monologue AND no tool calls
+    # leave no trace in memory. The transcript stays meaningful.
+    produced_anything = bool(final_text) or (iterations > 0)
+    if kind == "heartbeat" and not produced_anything:
+        return
+
     memory.append({"role": "user", "content": user_input})
     if final_text:
         memory.append({"role": "assistant", "content": final_text})
@@ -382,7 +413,7 @@ async def input_loop():
     while True:
         try:
             text = await asyncio.to_thread(input, "you> ")
-            input_queue.put_nowait(text)
+            input_queue.put_nowait(wrap_user_input(text))
         except EOFError:
             break
 
@@ -415,7 +446,7 @@ async def voice_loop():
 
             if text.strip():
                 last_speech_time = _time.monotonic()
-                input_queue.put_nowait(text)
+                input_queue.put_nowait(wrap_user_input(text))
 
         except Exception as e:
             print(f"  [voice error] {e}")
