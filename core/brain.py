@@ -16,6 +16,7 @@ from collections import deque
 
 from dotenv import load_dotenv
 
+from core.heartbeat import heartbeat_loop
 from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
@@ -490,6 +491,7 @@ async def main():
         asyncio.create_task(obstacle_poller(pi, estop)),
         asyncio.create_task(battery_monitor()),
         asyncio.create_task(gui_server.run_gui_server()),
+        asyncio.create_task(heartbeat_loop(input_queue, tool_chain_active)),
     ]
 
     print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
