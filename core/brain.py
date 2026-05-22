@@ -56,14 +56,13 @@ _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_
 continuous_mode: bool = False
 tts_done_event: asyncio.Event = asyncio.Event()
 tts_done_event.set()  # initially ready — no TTS playing at startup
-_pending_speaks: int = 0
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
 # --- Dispatch map ---
 
-dispatch_map = build_dispatch(pi, estop)
+dispatch_map = build_dispatch(pi, estop, mute=MUTE)
 
 
 # --- Message building ---
@@ -128,33 +127,6 @@ def _fire_face(state: str) -> None:
     _emit({"type": "face", "state": state})
     if _pi_reachable:
         asyncio.create_task(pi.set_face(name=state))
-
-
-def _fire_speak_if_content(content: str | None) -> "asyncio.Task | None":
-    """Fire local_speak as a background task. Sets tts_done_event when all pending speaks finish."""
-    global _pending_speaks
-    if not content or not content.strip():
-        return None
-    text = content.strip()
-    print_speak(text, muted=MUTE)
-    if MUTE:
-        if _pending_speaks == 0:
-            tts_done_event.set()
-        return None
-
-    _pending_speaks += 1
-    tts_done_event.clear()
-
-    async def _speak_then_idle():
-        global _pending_speaks
-        from core.tools import local_speak
-        await local_speak(text, face_pi=pi if _pi_reachable else None)
-        _fire_face("idle")
-        _pending_speaks -= 1
-        if _pending_speaks == 0:
-            tts_done_event.set()
-
-    return asyncio.create_task(_speak_then_idle())
 
 
 # --- Obstacle poller ---
@@ -262,7 +234,6 @@ async def _process(user_input: str):
     _fire_face("thinking")
     messages = build_messages(user_input)
     dbg(f"sending {len(messages)} messages to LLM")
-    _spoke = False
 
     try:
         response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
@@ -276,7 +247,7 @@ async def _process(user_input: str):
         _fire_face("idle")
         return
 
-    # Strip think blocks, emit them, and fire speak from clean content
+    # Strip think blocks; clean_content is now the inner monologue.
     if response.choices:
         content = response.choices[0].message.content
         clean_content, think_blocks = _extract_think_blocks(content)
@@ -287,8 +258,8 @@ async def _process(user_input: str):
                 _emit({"type": "think", "text": block})
         if think_blocks and response.choices[0].message.content != clean_content:
             response.choices[0].message.content = clean_content
-        if _fire_speak_if_content(clean_content):
-            _spoke = True
+        if clean_content:
+            print_monologue(clean_content)
 
     # Per-turn hard caps — enforced in code regardless of model behaviour
     set_legs_fired = 0
@@ -377,7 +348,7 @@ async def _process(user_input: str):
             print("  LLM error: empty choices on follow-up")
             return
 
-        # Strip think blocks, emit, and fire speak from clean content
+        # Strip think blocks; clean_content is now the inner monologue.
         if response.choices:
             content = response.choices[0].message.content
             clean_content, think_blocks = _extract_think_blocks(content)
@@ -388,8 +359,8 @@ async def _process(user_input: str):
                     _emit({"type": "think", "text": block})
             if think_blocks and response.choices[0].message.content != clean_content:
                 response.choices[0].message.content = clean_content
-            if _fire_speak_if_content(clean_content):
-                _spoke = True
+            if clean_content:
+                print_monologue(clean_content)
 
         iterations += 1
 
@@ -397,8 +368,7 @@ async def _process(user_input: str):
         print("  [safety] Tool call limit reached, stopping.")
 
     final_text = response.choices[0].message.content
-    if not _spoke:
-        _fire_face("idle")
+    _fire_face("idle")
 
     memory.append({"role": "user", "content": user_input})
     if final_text:
@@ -473,6 +443,8 @@ async def main():
     _sys.modules.setdefault('core.brain', _sys.modules['__main__'])
     from core import gui_server
     loop = asyncio.get_running_loop()
+    from core.tools import register_speak_done_event
+    register_speak_done_event(tts_done_event)
     _shutdown = asyncio.Event()
 
     def _on_signal():

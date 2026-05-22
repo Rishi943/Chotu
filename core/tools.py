@@ -288,6 +288,27 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "speak",
+            "description": (
+                "Speak one short line aloud through the laptop speaker. "
+                "Max one speak per turn. 15 words maximum. "
+                "Your content field is your inner monologue; speak is what you say OUT LOUD."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The line to speak. Short. In character.",
+                    },
+                },
+                "required": ["text"],
+            },
+        },
+    },
 ]
 
 
@@ -427,21 +448,67 @@ async def _do_cast_spell(pi: PiClient, name: str = "") -> dict:
     return await cast_spell(pi, name)
 
 
-def build_dispatch(pi: PiClient, estop: asyncio.Event) -> dict:
-    """Build tool name -> async callable dispatch map. speak is NOT a tool — it's emitted as message content and fired from brain.py."""
+# Shared state with brain.py — set when speech is queued, cleared when all queued speech finishes.
+_speak_state = {"pending": 0, "done_event": None}
+
+
+def register_speak_done_event(event: asyncio.Event) -> None:
+    """Brain calls this on startup so the speak tool can signal TTS-complete to voice_loop."""
+    _speak_state["done_event"] = event
+
+
+async def _do_speak(text: str = "", face_pi=None, muted: bool = False) -> dict:
+    """Fire-and-forget speak dispatcher. Returns immediately; TTS runs in background.
+
+    The LLM sees a success envelope right away so the next tool iteration is not blocked
+    on TTS playback. local_speak runs as a background task and updates _speak_state.done_event.
+    """
+    text = (text or "").strip()
+    if not text:
+        return {
+            "ok": False, "tool": "speak", "result": {},
+            "duration_ms": 0, "timestamp": time.time(),
+            "error": "speak: text is required",
+        }
+
+    ev = _speak_state["done_event"]
+    if ev is not None:
+        ev.clear()
+    _speak_state["pending"] += 1
+
+    async def _runner():
+        try:
+            if not muted:
+                await local_speak(text, face_pi=face_pi)
+        finally:
+            _speak_state["pending"] -= 1
+            if _speak_state["pending"] == 0 and ev is not None:
+                ev.set()
+
+    asyncio.create_task(_runner())
+
     return {
-        "move": lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_coro("move"),
-        # Poses are not estop-blocked — they don't advance the robot's position.
-        "pose": lambda **kw: pi.pose(**kw),
-        "set_legs": lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
-        "do_trick": lambda **kw: pi.do_trick(**kw),
-        "get_distance": lambda **kw: pi.get_distance(),
-        "get_battery": lambda **kw: pi.get_battery(),
+        "ok": True, "tool": "speak",
+        "result": {"text": text, "queued": True, "muted": muted},
+        "duration_ms": 0, "timestamp": time.time(), "error": None,
+    }
+
+
+def build_dispatch(pi: PiClient, estop: asyncio.Event, *, mute: bool = False) -> dict:
+    """Build tool name -> async callable dispatch map."""
+    return {
+        "move":           lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_coro("move"),
+        "pose":           lambda **kw: pi.pose(**kw),
+        "set_legs":       lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
+        "do_trick":       lambda **kw: pi.do_trick(**kw),
+        "get_distance":   lambda **kw: pi.get_distance(),
+        "get_battery":    lambda **kw: pi.get_battery(),
         "capture_vision": lambda **kw: capture_vision_tool(pi),
-        "set_face": lambda **kw: pi.set_face(**kw),
-        "wait": lambda **kw: local_wait(**kw),
+        "set_face":       lambda **kw: pi.set_face(**kw),
+        "wait":           lambda **kw: local_wait(**kw),
         "get_perception": lambda **kw: pi.get_perception(**kw),
         "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),
+        "speak":          lambda **kw: _do_speak(face_pi=pi, muted=mute, **kw),
     }
 
 
