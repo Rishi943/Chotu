@@ -126,3 +126,94 @@ async def test_scoped_record_photo_rejects_double_open_path():
     assert env["ok"] is False
     assert "already" in env["error"].lower() or "one open_path" in env["error"].lower()
     assert len(sc.state.current_node_photos) == 1
+
+
+@pytest.mark.asyncio
+async def test_commit_and_advance_terminal():
+    """No open_path tagged → terminal: commits node, advanced:false."""
+    from core.explore_tools import scoped_commit_node_and_advance
+    from core.scope import open_scope
+    pi = AsyncMock()
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    for i in range(12):
+        sc.state.current_node_photos.append({
+            "x": i, "anchors": [], "objects": [], "description": "",
+            "open_path": False, "forward_steps": None,
+        })
+    sc.state.current_node_open_path = None
+    env = await scoped_commit_node_and_advance(pi, sc)
+    assert env["ok"] is True
+    assert env["result"] == {"advanced": False, "new_node_id": None, "aborted": False, "reason": None}
+    pi.move.assert_not_called()
+    pi.get_distance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_commit_and_advance_happy_path():
+    """open_path set, distance clear, Pi succeeds: turn from current_x to open_path_x via
+    shortest side, walk forward, push edge onto path_stack, reset local state."""
+    from core.explore_tools import scoped_commit_node_and_advance
+    from core.scope import open_scope
+    pi = AsyncMock()
+    pi.get_distance.return_value = _ok("get_distance", {"cm": 200, "reliable": True})
+    pi.move.return_value = _ok("move")
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    sc.state.current_x = 0
+    sc.state.current_node_open_path = {"x": 3, "forward_steps": 8}
+    sc.state.current_node_photos = [{"x": i, "anchors": [], "objects": [], "description": "", "open_path": False, "forward_steps": None} for i in range(12)]
+
+    env = await scoped_commit_node_and_advance(pi, sc)
+    assert env["ok"] is True
+    assert env["result"]["advanced"] is True
+    assert env["result"]["new_node_id"] == 1
+    # Two Pi moves: turn from x=0 to x=3 (3 right), then forward 8.
+    assert pi.move.await_count == 2
+    pi.move.assert_any_await(direction="turn right", steps=3, speed=80)
+    pi.move.assert_any_await(direction="forward", steps=8, speed=80)
+    assert sc.state.path_stack == [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
+    assert sc.state.current_node_id == 1
+    assert sc.state.current_x == 0
+    assert sc.state.current_node_photos == []
+    assert sc.state.current_node_open_path is None
+
+
+@pytest.mark.asyncio
+async def test_commit_and_advance_blocked_by_distance():
+    """Ultrasonic reports obstacle < 15cm: don't walk; clear open_path; bump failed_advances."""
+    from core.explore_tools import scoped_commit_node_and_advance
+    from core.scope import open_scope
+    pi = AsyncMock()
+    pi.get_distance.return_value = _ok("get_distance", {"cm": 8, "reliable": True})
+    pi.move.return_value = _ok("move")
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    sc.state.current_x = 0
+    sc.state.current_node_open_path = {"x": 3, "forward_steps": 8}
+    env = await scoped_commit_node_and_advance(pi, sc)
+    assert env["ok"] is False
+    assert "obstacle" in env["error"].lower()
+    assert sc.state.failed_advances == 1
+    assert sc.state.current_node_open_path is None
+    assert sc.state.current_node_id == 0  # did not advance
+    # Only the turn was executed (turn right 3 to face open_path_x); the forward was skipped after distance check.
+    pi.move.assert_awaited_once_with(direction="turn right", steps=3, speed=80)
+
+
+@pytest.mark.asyncio
+async def test_commit_and_advance_three_failures_force_return():
+    """After 3 cumulative failed advances, the tool returns aborted:true."""
+    from core.explore_tools import scoped_commit_node_and_advance
+    from core.scope import open_scope
+    pi = AsyncMock()
+    pi.get_distance.return_value = _ok("get_distance", {"cm": 5})
+    pi.move.return_value = _ok("move")
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    sc.state.current_x = 0
+    sc.state.failed_advances = 2
+
+    # The third failure triggers abort
+    sc.state.current_node_open_path = {"x": 3, "forward_steps": 8}
+    env = await scoped_commit_node_and_advance(pi, sc)
+    assert env["ok"] is False
+    assert env["result"]["aborted"] is True
+    assert "3 advance failures" in env["result"]["reason"]
+    assert sc.state.failed_advances == 3

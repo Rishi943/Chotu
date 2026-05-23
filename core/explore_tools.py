@@ -13,6 +13,7 @@ from core.pi_client import PiClient
 from core.scope import (
     Scope,
     bump_x,
+    commit_node_state,
     record_photo_state,
 )
 from core.tools import capture_vision_tool
@@ -77,5 +78,117 @@ async def scoped_record_photo(
     return _envelope(
         "record_photo",
         {"recorded": True, "photos_so_far": len(scope.state.current_node_photos)},
+        started,
+    )
+
+
+OBSTACLE_CM = 15
+MAX_FAILED_ADVANCES = 3
+
+
+async def scoped_commit_node_and_advance(pi: PiClient, scope: Scope) -> dict:
+    started = time.time()
+    # Snapshot the open_path and current heading before commit mutates state.
+    open_path = scope.state.current_node_open_path
+    pre_commit_node_id = scope.state.current_node_id
+    pre_commit_photos = list(scope.state.current_node_photos)
+    pre_commit_x = scope.state.current_x
+
+    advanced, _node = commit_node_state(scope.state)
+
+    if not advanced:
+        return _envelope(
+            "commit_node_and_advance",
+            {"advanced": False, "new_node_id": None, "aborted": False, "reason": None},
+            started,
+        )
+
+    # After commit: path_stack has the new edge, current_node_id incremented,
+    # current_x reset to 0, current_node_photos/open_path cleared.
+    edge = scope.state.path_stack[-1]
+
+    def _rollback() -> None:
+        scope.state.path_stack.pop()
+        scope.state.current_node_id = pre_commit_node_id
+        scope.state.current_x = pre_commit_x
+        scope.state.nodes.pop()
+        restored = []
+        for p in pre_commit_photos:
+            q = dict(p)
+            q["open_path"] = False
+            q["forward_steps"] = None
+            restored.append(q)
+        scope.state.current_node_photos = restored
+        scope.state.current_node_open_path = None
+
+    # Turn from current heading (pre-commit x=0 after commit reset) to open_path_x.
+    # post-commit current_x is 0; open_path_x is relative to pre-commit frame.
+    delta = edge["open_path_x"] % 12
+    if delta != 0:
+        if delta <= 6:
+            env_turn = await pi.move(direction="turn right", steps=delta, speed=SPEED)
+        else:
+            env_turn = await pi.move(direction="turn left", steps=12 - delta, speed=SPEED)
+        if not env_turn.get("ok"):
+            _rollback()
+            scope.state.failed_advances += 1
+            if scope.state.failed_advances >= MAX_FAILED_ADVANCES:
+                return _envelope(
+                    "commit_node_and_advance",
+                    {"advanced": False, "new_node_id": None, "aborted": True,
+                     "reason": "3 advance failures — call return_to_origin then conclude"},
+                    started, ok=False, error="advance failed: turn",
+                )
+            return _envelope(
+                "commit_node_and_advance",
+                {"advanced": False, "new_node_id": None, "aborted": False, "reason": None},
+                started, ok=False, error=f"advance failed: turn — {env_turn.get('error')}",
+            )
+
+    dist_env = await pi.get_distance()
+    cm = (dist_env.get("result") or {}).get("cm", 9999)
+    if 0 < cm < OBSTACLE_CM:
+        # Don't turn back — just rollback state; robot stays facing open_path_x direction.
+        _rollback()
+        scope.state.failed_advances += 1
+        if scope.state.failed_advances >= MAX_FAILED_ADVANCES:
+            return _envelope(
+                "commit_node_and_advance",
+                {"advanced": False, "new_node_id": None, "aborted": True,
+                 "reason": "3 advance failures — call return_to_origin then conclude"},
+                started, ok=False, error=f"obstacle at {cm}cm",
+            )
+        return _envelope(
+            "commit_node_and_advance",
+            {"advanced": False, "new_node_id": None, "aborted": False, "reason": None},
+            started, ok=False, error=f"obstacle at {cm}cm — pick a different open_path",
+        )
+
+    fwd_env = await pi.move(direction="forward", steps=edge["forward_steps"], speed=SPEED)
+    if not fwd_env.get("ok"):
+        await pi.move(direction="backward", steps=edge["forward_steps"], speed=SPEED)
+        if delta <= 6:
+            await pi.move(direction="turn left", steps=delta, speed=SPEED)
+        else:
+            await pi.move(direction="turn right", steps=12 - delta, speed=SPEED)
+        _rollback()
+        scope.state.failed_advances += 1
+        if scope.state.failed_advances >= MAX_FAILED_ADVANCES:
+            return _envelope(
+                "commit_node_and_advance",
+                {"advanced": False, "new_node_id": None, "aborted": True,
+                 "reason": "3 advance failures — call return_to_origin then conclude"},
+                started, ok=False, error=f"forward move failed: {fwd_env.get('error')}",
+            )
+        return _envelope(
+            "commit_node_and_advance",
+            {"advanced": False, "new_node_id": None, "aborted": False, "reason": None},
+            started, ok=False, error=f"forward move failed: {fwd_env.get('error')}",
+        )
+
+    new_node_id = scope.state.current_node_id
+    return _envelope(
+        "commit_node_and_advance",
+        {"advanced": True, "new_node_id": new_node_id, "aborted": False, "reason": None},
         started,
     )
