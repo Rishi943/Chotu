@@ -19,7 +19,8 @@ class ExploreState:
     current_x: int = 0
     nodes: list[dict] = field(default_factory=list)
     current_node_photos: list[dict] = field(default_factory=list)
-    current_node_open_path: dict | None = None  # {"x": int, "forward_steps": int}
+    current_node_open_paths: dict[int, dict] = field(default_factory=dict)
+    # keyed by heading (current_x at photo time); value: {"x": int, "forward_steps": int}
     path_stack: list[dict] = field(default_factory=list)  # [{"from_node": int, "open_path_x": int, "forward_steps": int}, ...]
     failed_advances: int = 0
     returned_to_origin: bool | None = None
@@ -57,10 +58,10 @@ def record_photo_state(
     if open_path:
         if forward_steps is None or not isinstance(forward_steps, int) or forward_steps <= 0:
             return "open_path=True requires a positive integer forward_steps"
-        if state.current_node_open_path is not None:
+        if state.current_x in state.current_node_open_paths:
             return (
-                f"open_path already set on this node at x={state.current_node_open_path['x']}; "
-                f"only one open_path per node"
+                f"open_path already set at heading x={state.current_x}; "
+                f"one open_path per heading"
             )
 
     photo = {
@@ -74,7 +75,10 @@ def record_photo_state(
     }
     state.current_node_photos.append(photo)
     if open_path:
-        state.current_node_open_path = {"x": state.current_x, "forward_steps": forward_steps}
+        state.current_node_open_paths[state.current_x] = {
+            "x": state.current_x,
+            "forward_steps": forward_steps,
+        }
     return None
 
 
@@ -105,18 +109,20 @@ def commit_node_state(state: ExploreState) -> tuple[bool, dict]:
     }
     state.nodes.append(node)
 
-    if state.current_node_open_path is None:
+    if not state.current_node_open_paths:
         return False, node
 
+    # Pick the FIRST open_path declared (lowest insertion order in dict; Py3.7+ preserves)
+    chosen = next(iter(state.current_node_open_paths.values()))
     state.path_stack.append({
         "from_node": state.current_node_id,
-        "open_path_x": state.current_node_open_path["x"],
-        "forward_steps": state.current_node_open_path["forward_steps"],
+        "open_path_x": chosen["x"],
+        "forward_steps": chosen["forward_steps"],
     })
     state.current_node_id += 1
     state.current_x = 0
     state.current_node_photos = []
-    state.current_node_open_path = None
+    state.current_node_open_paths = {}
     return True, node
 
 

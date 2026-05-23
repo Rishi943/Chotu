@@ -34,7 +34,7 @@ def test_explore_state_defaults():
     assert s.current_x == 0
     assert s.nodes == []
     assert s.current_node_photos == []
-    assert s.current_node_open_path is None
+    assert s.current_node_open_paths == {}
     assert s.path_stack == []
     assert s.failed_advances == 0
     assert s.returned_to_origin is None
@@ -114,7 +114,7 @@ def test_record_photo_open_path_requires_steps():
     assert err is not None
     assert "forward_steps" in err
     assert s.current_node_photos == []
-    assert s.current_node_open_path is None
+    assert s.current_node_open_paths == {}
 
 
 def test_record_photo_open_path_sets_node_open_path():
@@ -125,7 +125,7 @@ def test_record_photo_open_path_sets_node_open_path():
         open_path=True, forward_steps=8,
     )
     assert err is None
-    assert s.current_node_open_path == {"x": 3, "forward_steps": 8}
+    assert s.current_node_open_paths == {3: {"x": 3, "forward_steps": 8}}
     assert s.current_node_photos[0]["open_path"] is True
     assert s.current_node_photos[0]["forward_steps"] == 8
 
@@ -134,11 +134,11 @@ def test_record_photo_rejects_second_open_path():
     from core.scope import ExploreState, record_photo_state
     s = ExploreState(current_x=3)
     record_photo_state(s, ["desk"], [], "first", open_path=True, forward_steps=8)
-    s.current_x = 7
+    # same heading x=3 — should be rejected
     err = record_photo_state(s, ["chair"], [], "second", open_path=True, forward_steps=5)
     assert err is not None
     assert "already" in err.lower()
-    assert s.current_node_open_path == {"x": 3, "forward_steps": 8}
+    assert s.current_node_open_paths == {3: {"x": 3, "forward_steps": 8}}
     assert len(s.current_node_photos) == 1
 
 
@@ -163,7 +163,7 @@ def test_commit_node_terminal():
     from core.scope import ExploreState, commit_node_state
     s = ExploreState(current_node_id=0)
     s.current_node_photos = [_photo(i, anchors=["bed"]) for i in range(12)]
-    s.current_node_open_path = None
+    # current_node_open_paths defaults to {} — terminal node
     advanced, node = commit_node_state(s)
     assert advanced is False
     assert node["id"] == 0
@@ -177,14 +177,14 @@ def test_commit_node_advance_resets_local_state():
     from core.scope import ExploreState, commit_node_state
     s = ExploreState(current_node_id=0, current_x=3)
     s.current_node_photos = [_photo(i) for i in range(12)]
-    s.current_node_open_path = {"x": 3, "forward_steps": 8}
+    s.current_node_open_paths = {3: {"x": 3, "forward_steps": 8}}
     advanced, node = commit_node_state(s)
     assert advanced is True
     assert node["id"] == 0
     assert s.current_node_id == 1
     assert s.current_x == 0
     assert s.current_node_photos == []
-    assert s.current_node_open_path is None
+    assert s.current_node_open_paths == {}
     assert s.path_stack == [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
 
 
@@ -305,3 +305,40 @@ def test_tag_message_index():
     tag_message_index(sc, 5)
     tag_message_index(sc, 7)
     assert sc.tagged_message_indexes == [5, 7]
+
+
+def test_open_path_allowed_on_distinct_headings():
+    from core.scope import ExploreState, record_photo_state, bump_x
+    state = ExploreState()
+    err = record_photo_state(state, anchors=["a"], objects=[], description="d0",
+                             open_path=True, forward_steps=3)
+    assert err is None
+    bump_x(state, +1)  # heading 1
+    err = record_photo_state(state, anchors=["b"], objects=[], description="d1",
+                             open_path=True, forward_steps=2)
+    assert err is None, f"second heading should accept open_path: {err}"
+
+
+def test_open_path_same_heading_rejected():
+    from core.scope import ExploreState, record_photo_state
+    state = ExploreState()
+    record_photo_state(state, anchors=["a"], objects=[], description="d0",
+                       open_path=True, forward_steps=3)
+    err = record_photo_state(state, anchors=["a2"], objects=[], description="d0b",
+                             open_path=True, forward_steps=4)
+    assert err is not None and "heading" in err.lower()
+
+
+def test_commit_node_advances_first_open_path():
+    from core.scope import ExploreState, record_photo_state, commit_node_state, bump_x
+    state = ExploreState()
+    record_photo_state(state, anchors=["a"], objects=[], description="first",
+                       open_path=True, forward_steps=3)
+    bump_x(state, +1)
+    record_photo_state(state, anchors=["b"], objects=[], description="second",
+                       open_path=True, forward_steps=2)
+    advanced, _ = commit_node_state(state)
+    assert advanced is True
+    # advanced along the FIRST open_path (heading 0, steps=3)
+    assert state.path_stack[-1]["open_path_x"] == 0
+    assert state.path_stack[-1]["forward_steps"] == 3
