@@ -323,11 +323,12 @@ def test_explore_schema_registered():
     assert "explore" in names
 
 
-def test_explore_schema_has_no_params():
+def test_explore_schema_has_reason_param():
     from core.tools import TOOL_SCHEMAS
     explore = [t for t in TOOL_SCHEMAS if t["function"]["name"] == "explore"][0]
-    assert explore["function"]["parameters"]["properties"] == {}
-    assert explore["function"]["parameters"].get("required", []) == []
+    props = explore["function"]["parameters"]["properties"]
+    assert "reason" in props
+    assert props["reason"]["type"] == "string"
 
 
 def test_scope_schemas_have_no_speed_param():

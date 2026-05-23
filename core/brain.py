@@ -20,6 +20,7 @@ from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
 from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
+from core import explore_agent
 
 
 # --- Config ---
@@ -151,6 +152,24 @@ def strip_internal_fields(messages: list[dict]) -> list[dict]:
     return [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
 
 
+# --- Explore subagent dispatch ---
+
+async def dispatch_explore_tool(pi, args: dict) -> dict:
+    import time as _t
+    started = _t.time()
+    reason = args.get("reason", "idle")
+    envelope = await explore_agent.run_explore(pi, reason=reason)
+    ok = envelope["status"] in ("done", "cap_nodes")
+    return {
+        "ok": ok,
+        "tool": "explore",
+        "result": envelope,
+        "duration_ms": int((_t.time() - started) * 1000),
+        "timestamp": _t.time(),
+        "error": None if ok else envelope.get("message"),
+    }
+
+
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
@@ -167,9 +186,6 @@ thinking_enabled: bool = False
 _pi_reachable: bool = False
 _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
 
-# --- Scope (for habit workflows like explore) ---
-active_scope = None  # type: "core.scope.Scope | None"
-
 continuous_mode: bool = False
 tts_done_event: asyncio.Event = asyncio.Event()
 tts_done_event.set()  # initially ready — no TTS playing at startup
@@ -180,6 +196,7 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # --- Dispatch map ---
 
 dispatch_map = build_dispatch(pi, estop, mute=MUTE)
+dispatch_map["explore"] = lambda **kw: dispatch_explore_tool(pi, kw)
 
 
 # --- Message building ---
@@ -370,7 +387,6 @@ def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
 
 
 async def _process(item: dict):
-    global active_scope
     user_input = item["text"]
     kind = item["kind"]
     _emit({"type": kind, "text": user_input})
@@ -410,55 +426,11 @@ async def _process(item: dict):
     failed_tools: set = set()
 
     iterations = 0
-    SCOPE_ITERATION_CAP = 200
-    NORMAL_ITERATION_CAP = MAX_TOOL_ITERATIONS
+    ITERATION_CAP = MAX_TOOL_ITERATIONS
 
-    def _current_cap():
-        return SCOPE_ITERATION_CAP if active_scope is not None else NORMAL_ITERATION_CAP
-
-    def _current_tool_schemas():
-        if active_scope is not None:
-            from core.explore_tools import SCOPE_TOOL_SCHEMAS
-            return SCOPE_TOOL_SCHEMAS
-        return TOOL_SCHEMAS
-
-    def _current_dispatch():
-        if active_scope is not None:
-            from core.explore_tools import build_scope_dispatch
-            return build_scope_dispatch(pi, active_scope)
-        return dispatch_map
-
-    explore_assistant_msg_index: int | None = None
-    explore_originating_tool_call_id: str | None = None
-
-    while response.choices[0].message.tool_calls and iterations < _current_cap():
+    while response.choices[0].message.tool_calls and iterations < ITERATION_CAP:
         assistant_msg = response.choices[0].message
-        assistant_idx = len(messages)
         messages.append(llm_client.format_assistant_message(response))
-        if active_scope is not None:
-            from core.scope import tag_message_index
-            tag_message_index(active_scope, assistant_idx)
-
-        # --- Scope-opener short-circuit ---
-        scope_openers_this_turn = [tc for tc in assistant_msg.tool_calls if tc.function.name == "explore" and active_scope is None]
-        if scope_openers_this_turn:
-            tc = scope_openers_this_turn[0]
-            from core.habits import explore_entry
-            explore_assistant_msg_index = assistant_idx
-            explore_originating_tool_call_id = tc.id
-            doc_msg_idx = len(messages)
-            workflow_msg = await explore_entry(pi, brain_module=None, tool_call_id=tc.id, assistant_idx=assistant_idx)
-            messages.append(workflow_msg)
-            from core.scope import tag_message_index
-            tag_message_index(active_scope, doc_msg_idx)
-            dbg(f"explore scope opened (id={active_scope.scope_id})")
-            try:
-                response = await llm_client.chat_complete(strip_internal_fields(messages), _current_tool_schemas(), thinking=thinking_enabled)
-            except Exception as e:
-                print(f"  LLM error on scope open: {e}")
-                return
-            iterations += 1
-            continue
 
         # --- Split: allowed vs suppressed ---
         to_dispatch = []
@@ -481,7 +453,6 @@ async def _process(item: dict):
                 to_dispatch.append(tc)
 
         deferred_vision = []
-        dispatch_for_run = _current_dispatch()
 
         async def _run_one_scoped(tc, dmap):
             from core.tools import dispatch_tool
@@ -491,17 +462,16 @@ async def _process(item: dict):
             if name not in dmap:
                 env = {"ok": False, "tool": name, "result": {}, "duration_ms": 0,
                        "timestamp": time.time(),
-                       "error": f"'{name}' is not available in {'explore scope' if active_scope else 'this context'}"}
+                       "error": f"'{name}' is not available in this context"}
                 return tc, name, args_json, env
             result = await dispatch_tool(dmap, name, args_json)
             return tc, name, args_json, result
 
-        dispatched = await asyncio.gather(*[_run_one_scoped(tc, dispatch_for_run) for tc in to_dispatch])
+        dispatched = await asyncio.gather(*[_run_one_scoped(tc, dispatch_map) for tc in to_dispatch])
 
         all_results = [(tc, name, result) for tc, name, _, result in dispatched] + \
                       [(None, name, result) for _, name, result in suppressed]
 
-        scope_closed_this_pass = False
         for tool_call, name, result in all_results:
             suppressed_call = tool_call is None
             args_json = tool_call.function.arguments if tool_call else "{}"
@@ -519,45 +489,10 @@ async def _process(item: dict):
             if tool_call is None:
                 continue
 
-            # --- conclude inside a scope: splice + close ---
-            if active_scope is not None and name == "conclude" and result.get("ok"):
-                from core.scope import splice_messages
-                map_dict = result["result"]["map"]
-                originating_id = active_scope.originating_tool_call_id
-                tagged = list(active_scope.tagged_message_indexes)
-                new_messages = splice_messages(
-                    messages, tagged_indexes=tagged,
-                    tool_call_id=originating_id, result_json=json.dumps(map_dict),
-                )
-                messages.clear()
-                messages.extend(new_messages)
-                if explore_assistant_msg_index is not None:
-                    explore_pair_assistant = {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "id": originating_id, "type": "function",
-                            "function": {"name": "explore", "arguments": "{}"},
-                        }],
-                    }
-                    explore_pair_assistant["_origin"] = kind
-                    memory.append(explore_pair_assistant)
-                    memory.append({"role": "tool", "tool_call_id": originating_id,
-                                   "content": json.dumps(map_dict), "_origin": kind})
-                active_scope = None
-                explore_assistant_msg_index = None
-                explore_originating_tool_call_id = None
-                scope_closed_this_pass = True
-                continue
-
             # --- normal tool result handling ---
             if name == "capture_vision" and result.get("ok"):
                 image_b64 = result["result"].get("image_base64", "")
-                tool_result_idx = len(messages)
                 messages.append(llm_client.format_tool_result(tool_call.id, "Camera snapshot taken."))
-                if active_scope is not None:
-                    from core.scope import tag_message_index
-                    tag_message_index(active_scope, tool_result_idx)
                 if image_b64:
                     deferred_vision.append({
                         "role": "user",
@@ -571,29 +506,17 @@ async def _process(item: dict):
                     gallery_store.append({"label": "capture", "image_b64": image_b64, "ts": time.time()})
                     _emit({"type": "image", "label": "capture", "image_b64": image_b64})
             else:
-                tool_result_idx = len(messages)
                 messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
-                if active_scope is not None:
-                    from core.scope import tag_message_index
-                    tag_message_index(active_scope, tool_result_idx)
 
         for tool_id, name, result in suppressed:
-            sup_idx = len(messages)
             messages.append(llm_client.format_tool_result(tool_id, json.dumps(result)))
-            if active_scope is not None:
-                from core.scope import tag_message_index
-                tag_message_index(active_scope, sup_idx)
 
         for msg in deferred_vision:
-            vis_idx = len(messages)
             messages.append(msg)
-            if active_scope is not None:
-                from core.scope import tag_message_index
-                tag_message_index(active_scope, vis_idx)
 
         dbg(f"follow-up LLM call (iteration {iterations + 1})")
         try:
-            response = await llm_client.chat_complete(strip_internal_fields(messages), _current_tool_schemas(), thinking=thinking_enabled)
+            response = await llm_client.chat_complete(strip_internal_fields(messages), TOOL_SCHEMAS, thinking=thinking_enabled)
         except Exception as e:
             print(f"  LLM error on follow-up: {e}")
             return
@@ -617,7 +540,7 @@ async def _process(item: dict):
 
         iterations += 1
 
-    if iterations >= _current_cap():
+    if iterations >= ITERATION_CAP:
         print("  [safety] Tool call limit reached, stopping.")
 
     final_text = response.choices[0].message.content

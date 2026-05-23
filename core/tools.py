@@ -313,13 +313,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "explore",
-            "description": (
-                "Map the room you are in as a chain of vantage points. "
-                "Long-running (minutes). Once it returns, you will have a structured "
-                "map with per-photo anchors and objects for later use. Call when you "
-                "have no spatial awareness or have moved to a new space."
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "description": "Open a fresh mapping subagent that explores and builds the world map. Blocking; returns a summary when done.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Why you're exploring (idle, user-asked, etc)"},
+                },
+            },
         },
     },
 ]
