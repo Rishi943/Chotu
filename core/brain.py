@@ -6,6 +6,7 @@ session; today this runs as a single reactive-equivalent loop.
 """
 
 import asyncio
+import itertools
 import json
 import os
 import re
@@ -37,6 +38,32 @@ VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 listen_and_transcribe = None
 if VOICE_ENABLED:
     from core.voice import listen_and_transcribe
+
+
+# --- Priority input queue ---
+
+_priority_counter = itertools.count()
+
+class _PriorityQueue:
+    """Queue that gives user/event/boot items priority over heartbeats."""
+
+    def __init__(self):
+        self._q: asyncio.PriorityQueue = asyncio.PriorityQueue()
+
+    def put_nowait(self, item: dict):
+        kind = item.get("kind", "heartbeat")
+        priority = 0 if kind in ("user", "event", "boot") else 1
+        self._q.put_nowait((priority, next(_priority_counter), item))
+
+    async def get(self) -> dict:
+        _, _, item = await self._q.get()
+        return item
+
+    def empty(self) -> bool:
+        return self._q.empty()
+
+    def qsize(self) -> int:
+        return self._q.qsize()
 
 
 # --- Tagged input items ---
@@ -108,7 +135,8 @@ def trim_memory(items: list[dict], max_tokens: int = None) -> list[dict]:
 pi = PiClient(PI_HOST)
 llm_client = LLMClient()
 memory: list[dict] = []  # rolling window; trimmed by trim_memory()
-input_queue: asyncio.Queue = asyncio.Queue()
+input_queue: _PriorityQueue = _PriorityQueue()
+user_input_pending: asyncio.Event = asyncio.Event()
 tool_chain_active: asyncio.Event = asyncio.Event()
 OBSTACLE_CM = 15
 estop: asyncio.Event = asyncio.Event()
@@ -117,6 +145,9 @@ gallery_store: list[dict] = []
 thinking_enabled: bool = False
 _pi_reachable: bool = False
 _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
+
+# --- Scope (for habit workflows like explore) ---
+active_scope = None  # type: "core.scope.Scope | None"
 
 continuous_mode: bool = False
 tts_done_event: asyncio.Event = asyncio.Event()
@@ -268,6 +299,8 @@ async def live_loop():
         text = item.get("text", "").strip()
         if not text:
             continue
+        if item.get("kind") in ("user", "event"):
+            user_input_pending.clear()
         print(f"\n--- Chotu thinking ({item['kind']}) ---")
         tool_chain_active.set()
         try:
@@ -300,6 +333,7 @@ def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
 
 
 async def _process(item: dict):
+    global active_scope
     user_input = item["text"]
     kind = item["kind"]
     _emit({"type": kind, "text": user_input})
@@ -319,7 +353,6 @@ async def _process(item: dict):
         _fire_face("idle")
         return
 
-    # Strip think blocks; clean_content is now the inner monologue.
     if response.choices:
         content = response.choices[0].message.content
         clean_content, think_blocks = _extract_think_blocks(content)
@@ -333,18 +366,62 @@ async def _process(item: dict):
         if clean_content:
             print_monologue(clean_content)
 
-    # Per-turn hard caps — enforced in code regardless of model behaviour
     set_legs_fired = 0
     waits_fired = 0
     failed_tools: set[str] = set()
 
     iterations = 0
-    while response.choices[0].message.tool_calls and iterations < MAX_TOOL_ITERATIONS:
-        assistant_msg = response.choices[0].message
-        messages.append(llm_client.format_assistant_message(response))
+    SCOPE_ITERATION_CAP = 200
+    NORMAL_ITERATION_CAP = MAX_TOOL_ITERATIONS
 
-        # --- Split: allowed vs suppressed (checked before any Pi traffic) ---
-        # Counters incremented HERE (not after results) so batched same-type calls are caught.
+    def _current_cap():
+        return SCOPE_ITERATION_CAP if active_scope is not None else NORMAL_ITERATION_CAP
+
+    def _current_tool_schemas():
+        if active_scope is not None:
+            from core.explore_tools import SCOPE_TOOL_SCHEMAS
+            return SCOPE_TOOL_SCHEMAS
+        return TOOL_SCHEMAS
+
+    def _current_dispatch():
+        if active_scope is not None:
+            from core.explore_tools import build_scope_dispatch
+            return build_scope_dispatch(pi, active_scope)
+        return dispatch_map
+
+    explore_assistant_msg_index: int | None = None
+    explore_originating_tool_call_id: str | None = None
+
+    while response.choices[0].message.tool_calls and iterations < _current_cap():
+        assistant_msg = response.choices[0].message
+        assistant_idx = len(messages)
+        messages.append(llm_client.format_assistant_message(response))
+        if active_scope is not None:
+            from core.scope import tag_message_index
+            tag_message_index(active_scope, assistant_idx)
+
+        # --- Scope-opener short-circuit ---
+        scope_openers_this_turn = [tc for tc in assistant_msg.tool_calls if tc.function.name == "explore" and active_scope is None]
+        if scope_openers_this_turn:
+            tc = scope_openers_this_turn[0]
+            from core.habits import explore_entry
+            explore_assistant_msg_index = assistant_idx
+            explore_originating_tool_call_id = tc.id
+            doc_msg_idx = len(messages)
+            workflow_msg = await explore_entry(pi, brain_module=None, tool_call_id=tc.id, assistant_idx=assistant_idx)
+            messages.append(workflow_msg)
+            from core.scope import tag_message_index
+            tag_message_index(active_scope, doc_msg_idx)
+            dbg(f"explore scope opened (id={active_scope.scope_id})")
+            try:
+                response = await llm_client.chat_complete(messages, _current_tool_schemas(), thinking=thinking_enabled)
+            except Exception as e:
+                print(f"  LLM error on scope open: {e}")
+                return
+            iterations += 1
+            continue
+
+        # --- Split: allowed vs suppressed ---
         to_dispatch = []
         suppressed = []
         for tc in assistant_msg.tool_calls:
@@ -361,12 +438,27 @@ async def _process(item: dict):
                 to_dispatch.append(tc)
 
         deferred_vision = []
-        dispatched = await asyncio.gather(*[_run_one(tc) for tc in to_dispatch])
+        dispatch_for_run = _current_dispatch()
 
-        # Combine dispatched + suppressed into one pass
+        async def _run_one_scoped(tc, dmap):
+            from core.tools import dispatch_tool
+            name = tc.function.name
+            args_json = tc.function.arguments
+            dbg(f"dispatching {name}({args_json})")
+            if name not in dmap:
+                env = {"ok": False, "tool": name, "result": {}, "duration_ms": 0,
+                       "timestamp": time.time(),
+                       "error": f"'{name}' is not available in {'explore scope' if active_scope else 'this context'}"}
+                return tc, name, args_json, env
+            result = await dispatch_tool(dmap, name, args_json)
+            return tc, name, args_json, result
+
+        dispatched = await asyncio.gather(*[_run_one_scoped(tc, dispatch_for_run) for tc in to_dispatch])
+
         all_results = [(tc, name, result) for tc, name, _, result in dispatched] + \
                       [(None, name, result) for _, name, result in suppressed]
 
+        scope_closed_this_pass = False
         for tool_call, name, result in all_results:
             suppressed_call = tool_call is None
             args_json = tool_call.function.arguments if tool_call else "{}"
@@ -384,9 +476,44 @@ async def _process(item: dict):
             if tool_call is None:
                 continue
 
+            # --- conclude inside a scope: splice + close ---
+            if active_scope is not None and name == "conclude" and result.get("ok"):
+                from core.scope import splice_messages
+                map_dict = result["result"]["map"]
+                originating_id = active_scope.originating_tool_call_id
+                tagged = list(active_scope.tagged_message_indexes)
+                new_messages = splice_messages(
+                    messages, tagged_indexes=tagged,
+                    tool_call_id=originating_id, result_json=json.dumps(map_dict),
+                )
+                messages.clear()
+                messages.extend(new_messages)
+                if explore_assistant_msg_index is not None:
+                    explore_pair_assistant = {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": originating_id, "type": "function",
+                            "function": {"name": "explore", "arguments": "{}"},
+                        }],
+                    }
+                    memory.append(explore_pair_assistant)
+                    memory.append({"role": "tool", "tool_call_id": originating_id,
+                                   "content": json.dumps(map_dict)})
+                active_scope = None
+                explore_assistant_msg_index = None
+                explore_originating_tool_call_id = None
+                scope_closed_this_pass = True
+                continue
+
+            # --- normal tool result handling ---
             if name == "capture_vision" and result.get("ok"):
                 image_b64 = result["result"].get("image_base64", "")
+                tool_result_idx = len(messages)
                 messages.append(llm_client.format_tool_result(tool_call.id, "Camera snapshot taken."))
+                if active_scope is not None:
+                    from core.scope import tag_message_index
+                    tag_message_index(active_scope, tool_result_idx)
                 if image_b64:
                     deferred_vision.append({
                         "role": "user",
@@ -400,18 +527,29 @@ async def _process(item: dict):
                     gallery_store.append({"label": "capture", "image_b64": image_b64, "ts": time.time()})
                     _emit({"type": "image", "label": "capture", "image_b64": image_b64})
             else:
+                tool_result_idx = len(messages)
                 messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
+                if active_scope is not None:
+                    from core.scope import tag_message_index
+                    tag_message_index(active_scope, tool_result_idx)
 
-        # Add suppressed tool results to message history (model must see a result for every call it made)
         for tool_id, name, result in suppressed:
+            sup_idx = len(messages)
             messages.append(llm_client.format_tool_result(tool_id, json.dumps(result)))
+            if active_scope is not None:
+                from core.scope import tag_message_index
+                tag_message_index(active_scope, sup_idx)
 
         for msg in deferred_vision:
+            vis_idx = len(messages)
             messages.append(msg)
+            if active_scope is not None:
+                from core.scope import tag_message_index
+                tag_message_index(active_scope, vis_idx)
 
         dbg(f"follow-up LLM call (iteration {iterations + 1})")
         try:
-            response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
+            response = await llm_client.chat_complete(messages, _current_tool_schemas(), thinking=thinking_enabled)
         except Exception as e:
             print(f"  LLM error on follow-up: {e}")
             return
@@ -420,7 +558,6 @@ async def _process(item: dict):
             print("  LLM error: empty choices on follow-up")
             return
 
-        # Strip think blocks; clean_content is now the inner monologue.
         if response.choices:
             content = response.choices[0].message.content
             clean_content, think_blocks = _extract_think_blocks(content)
@@ -436,21 +573,17 @@ async def _process(item: dict):
 
         iterations += 1
 
-    if iterations >= MAX_TOOL_ITERATIONS:
+    if iterations >= _current_cap():
         print("  [safety] Tool call limit reached, stopping.")
 
     final_text = response.choices[0].message.content
     _fire_face("idle")
 
-    # Empty-turn drop: heartbeat ticks that produced no monologue AND no tool calls
-    # leave no trace in memory. The transcript stays meaningful.
-    produced_anything = bool(final_text) or (iterations > 0)
-    if kind == "heartbeat" and not produced_anything:
+    if kind == "heartbeat" and iterations == 0:
         return
 
     memory.append({"role": "user", "content": user_input})
-    if final_text:
-        memory.append({"role": "assistant", "content": final_text})
+    memory.append({"role": "assistant", "content": final_text or ""})
 
 
 
@@ -461,6 +594,7 @@ async def input_loop():
         try:
             text = await asyncio.to_thread(input, "you> ")
             input_queue.put_nowait(wrap_user_input(text))
+            user_input_pending.set()
         except EOFError:
             break
 
@@ -496,6 +630,8 @@ async def voice_loop():
                 from core.events import inject_event
                 if not inject_event(input_queue, tool_chain_active, "wake_word", payload=text):
                     print(f"  [voice] dropped wake_word during tool chain: {text!r}")
+                else:
+                    user_input_pending.set()
 
         except Exception as e:
             print(f"  [voice error] {e}")
