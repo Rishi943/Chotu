@@ -313,3 +313,42 @@ def test_scope_schemas_include_required_tools():
     names = {t["function"]["name"] for t in SCOPE_TOOL_SCHEMAS}
     assert {"move", "capture_vision", "record_photo",
             "commit_node_and_advance", "return_to_origin", "conclude"} <= names
+
+
+@pytest.mark.asyncio
+async def test_scope_dispatch_routes_record_photo():
+    from core.explore_tools import build_scope_dispatch
+    from core.scope import open_scope
+    pi = AsyncMock()
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    dispatch = build_scope_dispatch(pi, sc)
+    assert "record_photo" in dispatch
+    env = await dispatch["record_photo"](anchors=["bed"], objects=[], description="head")
+    assert env["ok"] is True
+    assert sc.state.current_node_photos[0]["anchors"] == ["bed"]
+
+
+@pytest.mark.asyncio
+async def test_scope_dispatch_passive_tools_pass_through():
+    """get_distance, get_battery, set_face, speak, wait stay available unchanged."""
+    from core.explore_tools import build_scope_dispatch
+    from core.scope import open_scope
+    pi = AsyncMock()
+    pi.get_distance.return_value = _ok("get_distance", {"cm": 100})
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    dispatch = build_scope_dispatch(pi, sc)
+    assert "get_distance" in dispatch
+    env = await dispatch["get_distance"]()
+    assert env["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_scope_dispatch_blocks_pose_do_trick_investigate():
+    """pose, do_trick, get_perception, investigate, explore are NOT in the scope dispatch."""
+    from core.explore_tools import build_scope_dispatch
+    from core.scope import open_scope
+    pi = AsyncMock()
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    dispatch = build_scope_dispatch(pi, sc)
+    for name in ("pose", "do_trick", "get_perception", "investigate", "explore", "set_legs", "cast_spell"):
+        assert name not in dispatch, f"{name} must not be available in explore scope"

@@ -242,6 +242,26 @@ async def scoped_conclude(scope: Scope, *, status: str, notes: str = "") -> dict
     return _envelope("conclude", {"status": status, "map": map_dict}, started)
 
 
+def build_scope_dispatch(pi: PiClient, scope: Scope) -> dict:
+    """Build the name -> async callable map active while a scope is open."""
+    from core.tools import local_wait, _do_speak
+
+    return {
+        "move":                     lambda **kw: scoped_move(pi, scope, **kw),
+        "capture_vision":           lambda **kw: scoped_capture_vision(pi, scope),
+        "record_photo":             lambda **kw: scoped_record_photo(scope, **kw),
+        "commit_node_and_advance":  lambda **kw: scoped_commit_node_and_advance(pi, scope),
+        "return_to_origin":         lambda **kw: scoped_return_to_origin(pi, scope),
+        "conclude":                 lambda **kw: scoped_conclude(scope, **kw),
+        # Pass-through passive tools
+        "get_distance":             lambda **kw: pi.get_distance(),
+        "get_battery":              lambda **kw: pi.get_battery(),
+        "set_face":                 lambda **kw: pi.set_face(**kw),
+        "speak":                    lambda **kw: _do_speak(face_pi=pi, muted=False, **kw),
+        "wait":                     lambda **kw: local_wait(**kw),
+    }
+
+
 SCOPE_TOOL_SCHEMAS = [
     {
         "type": "function",
