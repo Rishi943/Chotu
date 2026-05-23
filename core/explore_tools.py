@@ -16,6 +16,7 @@ from core.scope import (
     commit_node_state,
     record_photo_state,
     plan_return_steps,
+    build_map,
 )
 from core.tools import capture_vision_tool
 
@@ -225,3 +226,17 @@ async def scoped_return_to_origin(pi: PiClient, scope: Scope) -> dict:
         {"success": True, "last_node_reached": 0, "error": None},
         started,
     )
+
+
+VALID_CONCLUDE_STATUS = {"done", "inconclusive"}
+
+
+async def scoped_conclude(scope: Scope, *, status: str, notes: str = "") -> dict:
+    started = time.time()
+    if status not in VALID_CONCLUDE_STATUS:
+        return _envelope(
+            "conclude", {}, started, ok=False,
+            error=f"status must be one of {sorted(VALID_CONCLUDE_STATUS)}; got {status!r}",
+        )
+    map_dict = build_map(scope.state, notes=notes)
+    return _envelope("conclude", {"status": status, "map": map_dict}, started)

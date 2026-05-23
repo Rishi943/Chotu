@@ -257,3 +257,32 @@ async def test_return_to_origin_stops_on_failure():
     assert env["result"]["success"] is False
     assert env["result"]["last_node_reached"] == 1  # never made it to 0
     assert sc.state.returned_to_origin is False
+
+
+@pytest.mark.asyncio
+async def test_conclude_builds_map_and_signals_done():
+    from core.explore_tools import scoped_conclude
+    from core.scope import open_scope
+    sc = open_scope(originating_tool_call_id="call_99", originating_tool_name="explore")
+    sc.state.nodes = [{"id": 0, "anchors_summary": ["bed"], "photos": []}]
+    sc.state.returned_to_origin = True
+
+    env = await scoped_conclude(sc, status="done", notes="cozy room")
+    assert env["ok"] is True
+    assert env["result"]["status"] == "done"
+    assert env["result"]["map"] == {
+        "nodes": [{"id": 0, "anchors_summary": ["bed"], "photos": []}],
+        "returned_to_origin": True,
+        "node_count": 1,
+        "notes": "cozy room",
+    }
+
+
+@pytest.mark.asyncio
+async def test_conclude_rejects_bad_status():
+    from core.explore_tools import scoped_conclude
+    from core.scope import open_scope
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    env = await scoped_conclude(sc, status="bogus", notes="")
+    assert env["ok"] is False
+    assert "status" in env["error"].lower()
