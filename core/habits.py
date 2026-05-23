@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from core.pi_client import PiClient
 
@@ -62,3 +63,27 @@ async def investigate(pi: PiClient) -> dict:
     }
     return _envelope("investigate", summary, started, ok=cap_env.get("ok", False),
                      error=None if cap_env.get("ok") else "investigate: capture_vision failed")
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOWS_DIR = REPO_ROOT / "workflows"
+
+
+async def explore_entry(pi, *, brain_module=None, tool_call_id: str, assistant_idx: int) -> dict:
+    """Open an explore scope and return the workflow-doc user message for _process to append.
+
+    Mutates brain_module.active_scope. Caller (brain._process) is responsible for
+    appending the returned message to the local `messages` list and tagging its
+    index via tag_message_index().
+    """
+    from core.scope import open_scope
+    if brain_module is None:
+        from core import brain as brain_module_default
+        brain_module = brain_module_default
+    workflow_path = WORKFLOWS_DIR / "explore.md"
+    workflow_doc = workflow_path.read_text(encoding="utf-8")
+    brain_module.active_scope = open_scope(
+        originating_tool_call_id=tool_call_id,
+        originating_tool_name="explore",
+    )
+    return {"role": "user", "content": workflow_doc}
