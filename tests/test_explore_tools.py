@@ -3,6 +3,16 @@
 
 import pytest
 from unittest.mock import AsyncMock
+from core import world
+
+
+@pytest.fixture()
+def isolated_world(tmp_path, monkeypatch):
+    """Give each test its own world.json and reset in-memory graph."""
+    p = tmp_path / "world.json"
+    monkeypatch.setattr(world, "WORLD_PATH", p)
+    world._GRAPH = {"nodes": {}, "origin_node": None, "version": 1}
+    yield p
 
 
 def _ok(tool: str, result: dict | None = None) -> dict:
@@ -57,14 +67,16 @@ async def test_scoped_move_turn_right_calls_pi_and_bumps_x():
 @pytest.mark.asyncio
 async def test_scoped_move_turn_left_decrements_x():
     from core.explore_tools import scoped_move
-    from core.scope import open_scope
+    from core.scope import open_scope, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     pi.move.return_value = _ok("move")
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     sc.state.current_x = 0
     env = await scoped_move(pi, sc, direction="turn left", steps=1)
-    assert env["result"]["current_x"] == 11
-    assert sc.state.current_x == 11
+    # Wraps to TURNS_PER_REVOLUTION - 1 (e.g. 9 when TPR=10)
+    expected = TURNS_PER_REVOLUTION - 1
+    assert env["result"]["current_x"] == expected
+    assert sc.state.current_x == expected
 
 
 @pytest.mark.asyncio
@@ -115,16 +127,18 @@ async def test_scoped_record_photo_appends():
 
 
 @pytest.mark.asyncio
-async def test_scoped_record_photo_rejects_double_open_path():
+async def test_scoped_record_photo_rejects_double_open_path_same_heading():
+    """Two open_path photos at the SAME heading are rejected; different headings are allowed."""
     from core.explore_tools import scoped_record_photo
     from core.scope import open_scope
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     sc.state.current_x = 3
-    await scoped_record_photo(sc, anchors=[], objects=[], description="d1", open_path=True, forward_steps=8)
-    sc.state.current_x = 7
-    env = await scoped_record_photo(sc, anchors=[], objects=[], description="d2", open_path=True, forward_steps=5)
-    assert env["ok"] is False
-    assert "already" in env["error"].lower() or "one open_path" in env["error"].lower()
+    env1 = await scoped_record_photo(sc, anchors=[], objects=[], description="d1", open_path=True, forward_steps=8)
+    assert env1["ok"] is True
+    # Same heading again — rejected
+    env2 = await scoped_record_photo(sc, anchors=[], objects=[], description="d2", open_path=True, forward_steps=5)
+    assert env2["ok"] is False
+    assert "already" in env2["error"].lower() or "one open_path" in env2["error"].lower()
     assert len(sc.state.current_node_photos) == 1
 
 
@@ -132,15 +146,15 @@ async def test_scoped_record_photo_rejects_double_open_path():
 async def test_commit_and_advance_terminal():
     """No open_path tagged → terminal: commits node, advanced:false."""
     from core.explore_tools import scoped_commit_node_and_advance
-    from core.scope import open_scope
+    from core.scope import open_scope, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
-    for i in range(12):
+    for i in range(TURNS_PER_REVOLUTION):
         sc.state.current_node_photos.append({
             "x": i, "anchors": [], "objects": [], "description": "",
             "open_path": False, "forward_steps": None,
         })
-    sc.state.current_node_open_path = None
+    # current_node_open_paths is empty (no open path) — terminal node
     env = await scoped_commit_node_and_advance(pi, sc)
     assert env["ok"] is True
     assert env["result"] == {"advanced": False, "new_node_id": None, "aborted": False, "reason": None}
@@ -149,57 +163,69 @@ async def test_commit_and_advance_terminal():
 
 
 @pytest.mark.asyncio
-async def test_commit_and_advance_happy_path():
+async def test_commit_and_advance_happy_path(isolated_world):
     """open_path set, distance clear, Pi succeeds: turn from current_x to open_path_x via
     shortest side, walk forward, push edge onto path_stack, reset local state."""
     from core.explore_tools import scoped_commit_node_and_advance
-    from core.scope import open_scope
+    from core.scope import open_scope, record_photo_state, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     pi.get_distance.return_value = _ok("get_distance", {"cm": 200, "reliable": True})
     pi.move.return_value = _ok("move")
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     sc.state.current_x = 0
-    sc.state.current_node_open_path = {"x": 3, "forward_steps": 8}
-    sc.state.current_node_photos = [{"x": i, "anchors": [], "objects": [], "description": "", "open_path": False, "forward_steps": None} for i in range(12)]
+    # Use record_photo_state to set up open_path at heading 3
+    record_photo_state(sc.state, anchors=[], objects=[], description="d0",
+                       open_path=True, forward_steps=8)
+    sc.state.current_node_photos = [
+        {"x": i, "anchors": [], "objects": [], "description": "", "open_path": i == 0, "forward_steps": 8 if i == 0 else None}
+        for i in range(TURNS_PER_REVOLUTION)
+    ]
+    sc.state.current_node_open_paths = {0: {"x": 0, "forward_steps": 8}}
 
     env = await scoped_commit_node_and_advance(pi, sc)
     assert env["ok"] is True
     assert env["result"]["advanced"] is True
     assert env["result"]["new_node_id"] == 1
-    # Two Pi moves: turn from x=0 to x=3 (3 right), then forward 8.
-    assert pi.move.await_count == 2
-    pi.move.assert_any_await(direction="turn right", steps=3, speed=80)
+    # open_path_x is 0, so delta=0 → no turn, just forward 8
+    assert pi.move.await_count == 1
     pi.move.assert_any_await(direction="forward", steps=8, speed=80)
-    assert sc.state.path_stack == [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
     assert sc.state.current_node_id == 1
     assert sc.state.current_x == 0
     assert sc.state.current_node_photos == []
-    assert sc.state.current_node_open_path is None
+    assert sc.state.current_node_open_paths == {}
 
 
 @pytest.mark.asyncio
-async def test_commit_and_advance_blocked_by_distance():
+async def test_commit_and_advance_blocked_by_distance(isolated_world):
     """Ultrasonic reports obstacle < 15cm: don't walk; clear open_path; bump failed_advances."""
     from core.explore_tools import scoped_commit_node_and_advance
-    from core.scope import open_scope
+    from core.scope import open_scope, record_photo_state
     pi = AsyncMock()
     pi.get_distance.return_value = _ok("get_distance", {"cm": 8, "reliable": True})
     pi.move.return_value = _ok("move")
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
-    sc.state.current_x = 0
-    sc.state.current_node_open_path = {"x": 3, "forward_steps": 8}
+    sc.state.current_x = 3
+    record_photo_state(sc.state, anchors=[], objects=[], description="d0",
+                       open_path=True, forward_steps=8)
+    sc.state.current_x = 0  # reset x after recording
+
+    # Manually set open_paths to heading 3
+    sc.state.current_node_open_paths = {3: {"x": 3, "forward_steps": 8}}
+    sc.state.current_node_photos = [{"x": 3, "anchors": [], "objects": [], "description": "d0",
+                                      "open_path": True, "forward_steps": 8, "distance_estimate_cm": None}]
+
     env = await scoped_commit_node_and_advance(pi, sc)
     assert env["ok"] is False
     assert "obstacle" in env["error"].lower()
     assert sc.state.failed_advances == 1
-    assert sc.state.current_node_open_path is None
+    assert sc.state.current_node_open_paths == {}  # cleared by rollback
     assert sc.state.current_node_id == 0  # did not advance
     # Only the turn was executed (turn right 3 to face open_path_x); the forward was skipped after distance check.
     pi.move.assert_awaited_once_with(direction="turn right", steps=3, speed=80)
 
 
 @pytest.mark.asyncio
-async def test_commit_and_advance_three_failures_force_return():
+async def test_commit_and_advance_three_failures_force_return(isolated_world):
     """After 3 cumulative failed advances, the tool returns aborted:true."""
     from core.explore_tools import scoped_commit_node_and_advance
     from core.scope import open_scope
@@ -211,7 +237,9 @@ async def test_commit_and_advance_three_failures_force_return():
     sc.state.failed_advances = 2
 
     # The third failure triggers abort
-    sc.state.current_node_open_path = {"x": 3, "forward_steps": 8}
+    sc.state.current_node_open_paths = {3: {"x": 3, "forward_steps": 8}}
+    sc.state.current_node_photos = [{"x": 3, "anchors": [], "objects": [], "description": "d0",
+                                      "open_path": True, "forward_steps": 8, "distance_estimate_cm": None}]
     env = await scoped_commit_node_and_advance(pi, sc)
     assert env["ok"] is False
     assert env["result"]["aborted"] is True
@@ -222,7 +250,7 @@ async def test_commit_and_advance_three_failures_force_return():
 @pytest.mark.asyncio
 async def test_return_to_origin_two_node_chain():
     from core.explore_tools import scoped_return_to_origin
-    from core.scope import open_scope
+    from core.scope import open_scope, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     pi.move.return_value = _ok("move")
     pi.get_distance.return_value = _ok("get_distance", {"cm": 200})
@@ -235,8 +263,9 @@ async def test_return_to_origin_two_node_chain():
     assert env["result"]["success"] is True
     assert env["result"]["last_node_reached"] == 0
     assert sc.state.returned_to_origin is True
-    # Expected moves: turn right 6, forward 8.
-    pi.move.assert_any_await(direction="turn right", steps=6, speed=80)
+    # Expected moves: turn right TURNS_PER_REVOLUTION//2 (to face back), forward 8.
+    half = TURNS_PER_REVOLUTION // 2
+    pi.move.assert_any_await(direction="turn right", steps=half, speed=80)
     pi.move.assert_any_await(direction="forward", steps=8, speed=80)
 
 

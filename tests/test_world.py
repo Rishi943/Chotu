@@ -79,3 +79,26 @@ def test_load_corrupt_file_starts_empty(isolated_world):
     isolated_world.write_text("not json{")
     world.load()  # must not raise
     assert world.list_nodes() == []
+
+
+def test_world_records_commit_from_scope(isolated_world):
+    """When scope commits a node, persist_committed_node should write to world."""
+    from core.scope import ExploreState, record_photo_state, commit_node_state, bump_x
+    from core import world as world_mod
+    from core.explore_tools import persist_committed_node
+
+    state = ExploreState()
+    record_photo_state(state, anchors=["wall"], objects=["chair"], description="d0",
+                       open_path=True, forward_steps=3)
+    bump_x(state, +1)
+    record_photo_state(state, anchors=["lamp"], objects=[], description="d1",
+                       open_path=False)
+    advanced, info = commit_node_state(state)
+    persist_committed_node(state.nodes[-1])
+
+    nodes = world_mod.list_nodes()
+    assert len(nodes) == 1
+    n = nodes[0]
+    assert "wall" in n["anchors"] and "lamp" in n["anchors"]
+    assert len(n["photos"]) == 2
+    assert len(n["exits"]) >= 1

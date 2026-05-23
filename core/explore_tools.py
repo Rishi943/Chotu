@@ -12,6 +12,7 @@ import time
 from core.pi_client import PiClient
 from core.scope import (
     Scope,
+    TURNS_PER_REVOLUTION,
     bump_x,
     commit_node_state,
     record_photo_state,
@@ -19,6 +20,7 @@ from core.scope import (
     build_map,
 )
 from core.tools import capture_vision_tool
+from core import world
 
 
 SPEED = 80
@@ -86,14 +88,43 @@ async def scoped_record_photo(
     )
 
 
+def persist_committed_node(node_record: dict) -> str:
+    """Translate a scope node dict into world.py rows. Returns world node_id."""
+    nid = world.add_node(
+        x=node_record.get("x", 0),
+        y=node_record.get("y", 0),
+        heading=node_record.get("heading_at_scan_start", 0),
+    )
+    for i, p in enumerate(node_record.get("photos", [])):
+        world.add_photo(
+            nid,
+            photo_idx=i,
+            heading=p.get("x", 0),
+            description=p.get("description", ""),
+            anchors_in_photo=p.get("anchors", []),
+            objects_in_photo=p.get("objects", []),
+            open_path=bool(p.get("open_path", False)),
+            forward_steps=p.get("forward_steps"),
+            distance_cm=p.get("distance_estimate_cm"),
+        )
+    for p in node_record.get("photos", []):
+        if p.get("open_path"):
+            world.add_exit(
+                nid,
+                heading=p.get("x", 0),
+                to_node="",
+                forward_steps=p.get("forward_steps", 0),
+            )
+    return nid
+
+
 OBSTACLE_CM = 15
 MAX_FAILED_ADVANCES = 3
 
 
 async def scoped_commit_node_and_advance(pi: PiClient, scope: Scope) -> dict:
     started = time.time()
-    # Snapshot the open_path and current heading before commit mutates state.
-    open_path = scope.state.current_node_open_path
+    # Snapshot current heading before commit mutates state.
     pre_commit_node_id = scope.state.current_node_id
     pre_commit_photos = list(scope.state.current_node_photos)
     pre_commit_x = scope.state.current_x
@@ -123,16 +154,17 @@ async def scoped_commit_node_and_advance(pi: PiClient, scope: Scope) -> dict:
             q["forward_steps"] = None
             restored.append(q)
         scope.state.current_node_photos = restored
-        scope.state.current_node_open_path = None
+        scope.state.current_node_open_paths = {}
 
     # Turn from current heading (pre-commit x=0 after commit reset) to open_path_x.
     # post-commit current_x is 0; open_path_x is relative to pre-commit frame.
-    delta = edge["open_path_x"] % 12
+    half = TURNS_PER_REVOLUTION // 2
+    delta = edge["open_path_x"] % TURNS_PER_REVOLUTION
     if delta != 0:
-        if delta <= 6:
+        if delta <= half:
             env_turn = await pi.move(direction="turn right", steps=delta, speed=SPEED)
         else:
-            env_turn = await pi.move(direction="turn left", steps=12 - delta, speed=SPEED)
+            env_turn = await pi.move(direction="turn left", steps=TURNS_PER_REVOLUTION - delta, speed=SPEED)
         if not env_turn.get("ok"):
             _rollback()
             scope.state.failed_advances += 1
@@ -171,10 +203,10 @@ async def scoped_commit_node_and_advance(pi: PiClient, scope: Scope) -> dict:
     fwd_env = await pi.move(direction="forward", steps=edge["forward_steps"], speed=SPEED)
     if not fwd_env.get("ok"):
         await pi.move(direction="backward", steps=edge["forward_steps"], speed=SPEED)
-        if delta <= 6:
+        if delta <= half:
             await pi.move(direction="turn left", steps=delta, speed=SPEED)
         else:
-            await pi.move(direction="turn right", steps=12 - delta, speed=SPEED)
+            await pi.move(direction="turn right", steps=TURNS_PER_REVOLUTION - delta, speed=SPEED)
         _rollback()
         scope.state.failed_advances += 1
         if scope.state.failed_advances >= MAX_FAILED_ADVANCES:
@@ -191,6 +223,24 @@ async def scoped_commit_node_and_advance(pi: PiClient, scope: Scope) -> dict:
         )
 
     new_node_id = scope.state.current_node_id
+
+    # Persist to world.py and backfill exit
+    committed_record = scope.state.nodes[-1]  # the node we just committed
+    world_nid = persist_committed_node(committed_record)
+    # Stash world id on path stack for later backfill
+    scope.state.path_stack[-1]["world_node_id"] = world_nid
+    # Backfill previous node's open exit (empty to_node) with this new world_nid
+    if len(scope.state.path_stack) >= 2:
+        prev_edge = scope.state.path_stack[-2]
+        prev_world_nid = prev_edge.get("world_node_id")
+        if prev_world_nid:
+            prev_node = world.get_node(prev_world_nid)
+            for ex in prev_node["exits"]:
+                if ex["heading"] == prev_edge["open_path_x"] and ex["to_node"] == "":
+                    ex["to_node"] = world_nid
+                    break
+            world.save()
+
     return _envelope(
         "commit_node_and_advance",
         {"advanced": True, "new_node_id": new_node_id, "aborted": False, "reason": None},
