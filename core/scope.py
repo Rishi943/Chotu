@@ -28,3 +28,9 @@ class Scope:
     originating_tool_name: str
     state: ExploreState
     tagged_message_indexes: list[int] = field(default_factory=list)
+
+
+def bump_x(state: ExploreState, delta: int) -> int:
+    """Update current_x by delta, wrapping mod 12. Returns the new x."""
+    state.current_x = (state.current_x + delta) % 12
+    return state.current_x
