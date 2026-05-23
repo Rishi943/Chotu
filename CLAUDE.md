@@ -8,12 +8,13 @@ PALIV is an open agent framework for always-on embodied robot pets. Chotu (SunFo
 
 ## Authoritative docs
 
-- **`PALIV.md`** — framework contract: state machine (IDLE/PLAY/LISTEN), tool budgets, hard interrupts, speech contract, tool definitions. Loaded into every system prompt.
+- **`PALIV.md`** — framework contract: loop model, tool budgets, hard interrupts, speech contract, tool definitions. Loaded into every system prompt.
 - **`CHOTU.md`** — Chotu's persona: voice, personality probability table, examples, physical constraints. Loaded into every system prompt alongside PALIV.md.
+- **`HEARTBEAT.md`** — checklist consulted on each `[heartbeat]` tick. Loaded into every system prompt alongside PALIV.md and CHOTU.md.
 - **`PALIV_CC_CONTEXT.md`** — pivot context, useful while v1 lands. Drop after the state machine ships.
 - **`docs/superpowers/specs/`** — design specs for in-flight refactors (gitignored except when force-added).
 
-The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md`, loaded by `core/prompts.py`.
+The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md + "\n\n" + HEARTBEAT.md`, loaded by `core/prompts.py`.
 
 ## Stack
 
@@ -42,14 +43,16 @@ The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md`, loaded by `core/
 | Path | Side | Purpose |
 |---|---|---|
 | `core/brain.py` | laptop | Live loop, memory, terminal/voice input, tool dispatch |
-| `core/prompts.py` | laptop | Loads PALIV.md + CHOTU.md as `SYSTEM_PROMPT` |
+| `core/prompts.py` | laptop | Loads PALIV.md + CHOTU.md + HEARTBEAT.md as `SYSTEM_PROMPT` |
+| `core/heartbeat.py` | laptop | Heartbeat scheduler + tool-chain guard |
+| `core/events.py` | laptop | Event injectors (wake_word, battery_low, stop_word) |
+| `core/habits.py` | laptop | Habit-tool bodies (placeholder; will hold investigate/explore once workflow sub-agent lands) |
 | `core/pi_client.py` | laptop | Async httpx wrapper for every Pi bridge endpoint |
 | `core/tools.py` | laptop | OpenAI tool schemas + dispatch map + `capture_vision_tool` |
 | `core/spells.py` | laptop | Spell implementations (wand pose + soundbite + Tuya/HA call) |
 | `core/voice.py` | laptop | Wake word + Whisper STT |
 | `core/gui_server.py` | laptop | Browser GUI (FastAPI + SSE) |
 | `core/llm_client.py` | laptop | LLM provider abstraction (local llama / Anthropic) |
-| `habits/` | laptop | PLAY-state skill prompts (scaffolded; not yet wired) |
 | `pi_bridge/server.py` | Pi | FastAPI bridge — `/move`, `/pose`, `/set_legs`, `/trick`, `/distance`, `/capture`, `/battery`, `/perception`, `/face`, `/health`, `/speak` |
 
 The Pi-side `pi_bridge/chotu/` (face.py) is a separate package shipped to the Pi alongside `server.py` — do not rename it; it has nothing to do with the laptop `chotu`→`core` rename.
@@ -57,8 +60,15 @@ The Pi-side `pi_bridge/chotu/` (face.py) is a separate package shipped to the Pi
 ## Conventions
 
 - **Standard Pi response envelope:** `{ "ok": true, "tool": "...", "result": {...}, "duration_ms": N, "timestamp": N, "error": null }`
-- **Speech is not a tool.** What Chotu says aloud is the LLM's `message.content` — `brain.py` parses it and fires `local_speak()` as `asyncio.create_task` (parallel with tool dispatch). Empty content = silent turn.
+- **Speech is a tool.** `speak(text)` is a registered tool; `brain.py` dispatches it like any other tool. The LLM's `content` field is the inner monologue — visible in the transcript but not spoken aloud.
 - Failure modes: Pi unreachable → error envelope returned to LLM (no crash). LLM unreachable → log, no crash. Tool errors → error string returned to LLM.
+
+## Hardware quirks
+
+- **Two power rails.** Pi 5 USB-C feeds *only* the Pi. Servos draw from the 2S LiPo via `robot_hat`. If tricks brown out at full speed, the HAT charge port needs power — plugging the Pi alone won't help.
+- **Trick speed cap = 100** (`MAX_TRICK_SPEED` in `pi_bridge/server.py`). Matches official PiCrawler examples; works on a charged servo rail. `MAX_MOTION_SPEED=60` still applies to `move`/`set_legs`.
+- **Startup pose.** Bridge `lifespan` does `crawler.do_step("stand", 40)` + 1.0s settle before serving. All habits assume start = stand and end with `crawler.do_step("stand", 40)`.
+- **Bridge-died signature.** A `/trick` envelope returning `duration_ms < 100` means the bridge process crashed (likely brownout) and is replying with a cached/stale ok. Real tricks take 5–10s.
 
 ## Known LLM quirks (Qwen3.5 + llama-server)
 
