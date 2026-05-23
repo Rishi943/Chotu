@@ -12,8 +12,6 @@ import re
 import signal
 import time
 import traceback
-from collections import deque
-
 from dotenv import load_dotenv
 
 from core.heartbeat import heartbeat_loop
@@ -28,6 +26,7 @@ from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_visi
 load_dotenv()
 
 PI_HOST = os.getenv("PI_HOST", "http://chotu.local:7000")
+MEMORY_TOKEN_BUDGET = int(os.getenv("PALIV_MEMORY_TOKENS", "12000"))
 MAX_TOOL_ITERATIONS = 6
 DEBUG = os.getenv("PALIV_DEBUG", "0") == "1"
 MUTE = os.getenv("PALIV_MUTE", "0") == "1"
@@ -56,11 +55,59 @@ def wrap_boot() -> dict:
     return {"kind": "boot", "text": "[boot] You just woke up. You don't know where you are. The session starts here."}
 
 
+# --- Memory helpers ---
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    """Rough char/4 token estimate. Cheap upper bound that's fine for budget enforcement."""
+    n = 0
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            n += len(content) // 4
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    txt = part.get("text") or ""
+                    n += len(txt) // 4
+        for tc in m.get("tool_calls", []) or []:
+            args = (tc.get("function") or {}).get("arguments", "")
+            n += len(args) // 4
+        if m.get("tool_call_id"):
+            n += 4  # small bookkeeping
+    return n
+
+
+def trim_memory(items: list[dict], max_tokens: int = None) -> list[dict]:
+    """Drop oldest items until under budget. Tool call/result pairs are dropped as units.
+
+    A "pair" is an assistant message with `tool_calls` plus all subsequent `role=tool` messages
+    whose `tool_call_id` matches one of those calls. Pairs are scanned from the front; the whole
+    pair is dropped or kept.
+    """
+    budget = max_tokens if max_tokens is not None else MEMORY_TOKEN_BUDGET
+    if _estimate_tokens(items) <= budget:
+        return list(items)
+
+    work = list(items)
+    while _estimate_tokens(work) > budget and work:
+        head = work[0]
+        if head.get("role") == "assistant" and head.get("tool_calls"):
+            ids = {tc["id"] for tc in head["tool_calls"]}
+            # drop head + any immediately-following tool results whose id matches
+            i = 1
+            while i < len(work) and work[i].get("role") == "tool" and work[i].get("tool_call_id") in ids:
+                i += 1
+            del work[:i]
+        else:
+            del work[0]
+    return work
+
+
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
 llm_client = LLMClient()
-memory: deque = deque(maxlen=15)
+memory: list[dict] = []  # rolling window; trimmed by trim_memory()
 input_queue: asyncio.Queue = asyncio.Queue()
 tool_chain_active: asyncio.Event = asyncio.Event()
 OBSTACLE_CM = 15
@@ -86,9 +133,10 @@ dispatch_map = build_dispatch(pi, estop, mute=MUTE)
 # --- Message building ---
 
 def build_messages(user_input: str) -> list[dict]:
+    global memory
+    memory = trim_memory(memory)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for entry in memory:
-        messages.append(entry)
+    messages.extend(memory)
     messages.append({"role": "user", "content": user_input})
     return messages
 
