@@ -49,10 +49,10 @@ There is **no separate LLMClient, no sub-agent, and no second message thread.** 
       target_x = node.open_path_x      # x at this node pointing to next-younger node
       # We arrived back at this node facing x((target_x + 6) % 12). Re-orient:
       delta = (target_x - current_x) % 12
-      move("turn right", delta, speed=60)   # always non-negative; delta=0 is a no-op
+      move("turn right", delta, speed=80)   # always non-negative; delta=0 is a no-op
       # Now facing the original exit direction. Reverse it:
-      move("turn right", 6, speed=60)       # 180°
-      move("forward", node.forward_steps, speed=60)
+      move("turn right", 6, speed=80)       # 180°
+      move("forward", node.forward_steps, speed=80)
       # Arrived at the previous (parent) node.
   ```
 
@@ -140,7 +140,8 @@ One scope active at a time (`brain.active_scope: Scope | None`). Nesting is reje
 Async tool functions, each takes `(pi, scope)` and returns a standard envelope. The scope-local dispatch map wraps them with the right signatures.
 
 - `capture_vision(pi, scope)` — wraps the existing `capture_vision_tool`. Result envelope's `result` dict gains `current_x: int`.
-- `move(pi, scope, direction, steps=1, speed=60)` — **restricted**:
+- `move(pi, scope, direction, steps=1)` — **restricted, no `speed` parameter exposed to the LLM**:
+  - Python always passes `speed=80` to `pi.move(...)`. The LLM cannot set or override it.
   - `direction == "turn left"` or `"turn right"`: must have `steps == 1`. Updates `scope.state.current_x` (`+1` for right, `−1` for left, mod 12). Returns `{current_x}`.
   - Any other direction or `steps != 1`: returns error envelope `"move restricted in explore scope: only single turn-left/turn-right steps allowed; use commit_node_and_advance for forward motion."` — does **not** touch the Pi.
 - `record_photo(scope, anchors, objects, description, open_path=False, forward_steps=None)`:
@@ -150,12 +151,12 @@ Async tool functions, each takes `(pi, scope)` and returns a standard envelope. 
 - `commit_node_and_advance(pi, scope)`:
   - Builds the node dict (id, anchors_summary as deduped union of per-photo anchors, photos) and appends to `state.nodes`.
   - If `current_node_open_path` is None → terminal node. Return `{advanced: false}`. State retained as the last node; subsequent records will be rejected ("commit a return_to_origin or conclude next").
-  - Else: attempt the exit move atomically:
+  - Else: attempt the exit move atomically. All Pi moves below use `speed=80` (hardcoded; LLM has no influence).
     1. Turn from `current_x` to `open_path_x` via shortest-side (Python picks right or left).
     2. `pi.get_distance()` — if obstacle < 15cm, treat as failure (don't walk).
-    3. Otherwise `pi.move("forward", forward_steps, 60)`.
+    3. Otherwise `pi.move("forward", forward_steps, speed=80)`.
     4. If the envelope reports ok and no obstacle mid-walk: push `{from_node, open_path_x, forward_steps}` onto `path_stack`, increment `current_node_id`, reset `current_x=0`, reset `current_node_photos=[]`, `current_node_open_path=None`. Return `{advanced: true, new_node_id: ...}`.
-    5. **On failure** (obstacle, bridge error, partial walk): walk back to the current node — `pi.move("backward", steps_taken_before_failure, 60)`, then turn back to `current_x` so the LLM resumes its scan state. Clear the open_path on the current node so LLM can pick a new one. Increment `state.failed_advances`.
+    5. **On failure** (obstacle, bridge error, partial walk): walk back to the current node — `pi.move("backward", steps_taken_before_failure, speed=80)`, then turn back to `current_x` so the LLM resumes its scan state. Clear the open_path on the current node so LLM can pick a new one. Increment `state.failed_advances`.
     6. If `state.failed_advances >= 3` (global count across the run): force-end — automatically call `return_to_origin()` then return `{advanced: false, aborted: true, reason: "3 advance failures"}`. The LLM will see this and is expected to call `conclude(status="inconclusive", ...)`.
 - `return_to_origin(pi, scope)`:
   - Walks `path_stack` in reverse using the recipe above. On each step:
