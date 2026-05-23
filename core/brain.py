@@ -33,6 +33,7 @@ DEBUG = os.getenv("PALIV_DEBUG", "0") == "1"
 MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
+HEARTBEAT_WINDOW = int(os.getenv("PALIV_HEARTBEAT_WINDOW", "5"))
 
 
 listen_and_transcribe = None
@@ -130,6 +131,26 @@ def trim_memory(items: list[dict], max_tokens: int = None) -> list[dict]:
     return work
 
 
+def evict_old_heartbeats(messages: list[dict]) -> None:
+    """Trim heartbeat blocks so at most HEARTBEAT_WINDOW user[heartbeat] markers remain. Mutates in place."""
+    hb_starts = [i for i, m in enumerate(messages)
+                 if m.get("_origin") == "heartbeat" and m.get("role") == "user"]
+    if len(hb_starts) <= HEARTBEAT_WINDOW:
+        return
+    to_evict = hb_starts[: len(hb_starts) - HEARTBEAT_WINDOW]
+    boundaries = []
+    for k, start in enumerate(to_evict):
+        end = hb_starts[k + 1] if k + 1 < len(hb_starts) else len(messages)
+        boundaries.append((start, end))
+    for start, end in reversed(boundaries):
+        del messages[start:end]
+
+
+def strip_internal_fields(messages: list[dict]) -> list[dict]:
+    """Return copy with _origin (and any _ prefix fields) removed — safe to send to LLM."""
+    return [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
+
+
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
@@ -163,12 +184,12 @@ dispatch_map = build_dispatch(pi, estop, mute=MUTE)
 
 # --- Message building ---
 
-def build_messages(user_input: str) -> list[dict]:
+def build_messages(user_input: str, *, origin: str = "user") -> list[dict]:
     global memory
     memory = trim_memory(memory)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT, "_origin": "boot"}]
     messages.extend(memory)
-    messages.append({"role": "user", "content": user_input})
+    messages.append({"role": "user", "content": user_input, "_origin": origin})
     return messages
 
 
@@ -354,11 +375,13 @@ async def _process(item: dict):
     kind = item["kind"]
     _emit({"type": kind, "text": user_input})
     _fire_face("thinking")
-    messages = build_messages(user_input)
+    messages = build_messages(user_input, origin=kind)
+    if kind == "heartbeat":
+        evict_old_heartbeats(messages)
     dbg(f"sending {len(messages)} messages to LLM")
 
     try:
-        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
+        response = await llm_client.chat_complete(strip_internal_fields(messages), TOOL_SCHEMAS, thinking=thinking_enabled)
     except Exception as e:
         print(f"  LLM error: {e}")
         _fire_face("idle")
@@ -430,7 +453,7 @@ async def _process(item: dict):
             tag_message_index(active_scope, doc_msg_idx)
             dbg(f"explore scope opened (id={active_scope.scope_id})")
             try:
-                response = await llm_client.chat_complete(messages, _current_tool_schemas(), thinking=thinking_enabled)
+                response = await llm_client.chat_complete(strip_internal_fields(messages), _current_tool_schemas(), thinking=thinking_enabled)
             except Exception as e:
                 print(f"  LLM error on scope open: {e}")
                 return
@@ -517,9 +540,10 @@ async def _process(item: dict):
                             "function": {"name": "explore", "arguments": "{}"},
                         }],
                     }
+                    explore_pair_assistant["_origin"] = kind
                     memory.append(explore_pair_assistant)
                     memory.append({"role": "tool", "tool_call_id": originating_id,
-                                   "content": json.dumps(map_dict)})
+                                   "content": json.dumps(map_dict), "_origin": kind})
                 active_scope = None
                 explore_assistant_msg_index = None
                 explore_originating_tool_call_id = None
@@ -569,7 +593,7 @@ async def _process(item: dict):
 
         dbg(f"follow-up LLM call (iteration {iterations + 1})")
         try:
-            response = await llm_client.chat_complete(messages, _current_tool_schemas(), thinking=thinking_enabled)
+            response = await llm_client.chat_complete(strip_internal_fields(messages), _current_tool_schemas(), thinking=thinking_enabled)
         except Exception as e:
             print(f"  LLM error on follow-up: {e}")
             return
@@ -602,8 +626,8 @@ async def _process(item: dict):
     if kind == "heartbeat" and iterations == 0:
         return
 
-    memory.append({"role": "user", "content": user_input})
-    memory.append({"role": "assistant", "content": final_text or ""})
+    memory.append({"role": "user", "content": user_input, "_origin": kind})
+    memory.append({"role": "assistant", "content": final_text or "", "_origin": kind})
 
 
 
