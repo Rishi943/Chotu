@@ -204,11 +204,9 @@ async def battery_monitor() -> None:
                 if streak[threshold] >= BATTERY_CONSECUTIVE_REQUIRED and threshold not in fired:
                     fired.add(threshold)
                     print(f"[battery] {pct:.0f}% ({voltage:.2f}V) — warning at {threshold}%")
-                    if not MUTE:
-                        from core.tools import local_speak
-                        await local_speak(msg)
-                    else:
-                        print(f"[battery][muted] {msg}")
+                    from core.events import inject_event
+                    inject_event(input_queue, tool_chain_active, "battery_low",
+                                 payload=f"{pct:.0f}% ({voltage:.2f}V) — {msg}")
         await asyncio.sleep(BATTERY_POLL_INTERVAL)
 
 
@@ -447,7 +445,9 @@ async def voice_loop():
 
             if text.strip():
                 last_speech_time = _time.monotonic()
-                input_queue.put_nowait(wrap_user_input(text))
+                from core.events import inject_event
+                if not inject_event(input_queue, tool_chain_active, "wake_word", payload=text):
+                    print(f"  [voice] dropped wake_word during tool chain: {text!r}")
 
         except Exception as e:
             print(f"  [voice error] {e}")
@@ -486,6 +486,15 @@ async def main():
 
     loop.add_signal_handler(signal.SIGINT, _on_signal)
     loop.add_signal_handler(signal.SIGTERM, _on_signal)
+
+    def _on_stop_word():
+        from core.events import inject_event
+        inject_event(input_queue, tool_chain_active, "stop_word")
+
+    try:
+        loop.add_signal_handler(signal.SIGUSR1, _on_stop_word)
+    except (NotImplementedError, RuntimeError):
+        pass  # not all platforms support SIGUSR1
 
     tasks = [
         asyncio.create_task(obstacle_poller(pi, estop)),

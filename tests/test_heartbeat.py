@@ -62,3 +62,43 @@ async def test_heartbeat_loop_skips_when_active():
     except asyncio.CancelledError: pass
 
     assert queue.empty(), "heartbeat fired while tool chain was active"
+
+
+@pytest.mark.asyncio
+async def test_inject_event_wake_word_respects_guard():
+    from core.events import inject_event
+    queue: asyncio.Queue = asyncio.Queue()
+    active = asyncio.Event(); active.set()  # busy
+
+    inject_event(queue, active, "wake_word", payload="hey chotu")
+    assert queue.empty(), "wake_word fired while tool chain active"
+
+    active.clear()
+    inject_event(queue, active, "wake_word", payload="hey chotu")
+    item = queue.get_nowait()
+    assert item["kind"] == "event"
+    assert item["subkind"] == "wake_word"
+    assert "hey chotu" in item["text"]
+
+
+@pytest.mark.asyncio
+async def test_inject_event_battery_low_bypasses_guard():
+    from core.events import inject_event
+    queue: asyncio.Queue = asyncio.Queue()
+    active = asyncio.Event(); active.set()  # busy
+
+    inject_event(queue, active, "battery_low", payload="14%")
+    item = queue.get_nowait()
+    assert item["subkind"] == "battery_low"
+    assert "14%" in item["text"]
+
+
+@pytest.mark.asyncio
+async def test_inject_event_stop_word_bypasses_guard():
+    from core.events import inject_event
+    queue: asyncio.Queue = asyncio.Queue()
+    active = asyncio.Event(); active.set()
+
+    inject_event(queue, active, "stop_word")
+    item = queue.get_nowait()
+    assert item["subkind"] == "stop_word"
