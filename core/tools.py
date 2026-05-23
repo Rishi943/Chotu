@@ -309,6 +309,19 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "explore",
+            "description": (
+                "Map the room you are in as a chain of vantage points. "
+                "Long-running (minutes). Once it returns, you will have a structured "
+                "map with per-photo anchors and objects for later use. Call when you "
+                "have no spatial awareness or have moved to a new space."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 ]
 
 
@@ -356,14 +369,29 @@ async def capture_vision_tool(pi: PiClient) -> dict:
 # --- Local tools (no Pi call) ---
 
 async def local_wait(seconds: int = 5, reason: str = "") -> dict:
-    """Wait locally. No Pi call."""
+    """Wait locally. Bails early if user input arrives. No Pi call."""
     seconds = max(1, min(30, seconds))
-    await asyncio.sleep(seconds)
+    start = time.time()
+    deadline = start + seconds
+
+    try:
+        from core.brain import user_input_pending
+        while time.time() < deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(0.25, remaining))
+            if user_input_pending.is_set():
+                break
+    except ImportError:
+        await asyncio.sleep(seconds)
+
+    actual = time.time() - start
     return {
         "ok": True,
         "tool": "wait",
-        "result": {"waited_seconds": seconds, "reason": reason},
-        "duration_ms": seconds * 1000,
+        "result": {"waited_seconds": round(actual, 1), "reason": reason},
+        "duration_ms": int(actual * 1000),
         "timestamp": time.time(),
         "error": None,
     }

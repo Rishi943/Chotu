@@ -286,3 +286,30 @@ async def test_conclude_rejects_bad_status():
     env = await scoped_conclude(sc, status="bogus", notes="")
     assert env["ok"] is False
     assert "status" in env["error"].lower()
+
+
+def test_explore_schema_registered():
+    from core.tools import TOOL_SCHEMAS
+    names = [t["function"]["name"] for t in TOOL_SCHEMAS]
+    assert "explore" in names
+
+
+def test_explore_schema_has_no_params():
+    from core.tools import TOOL_SCHEMAS
+    explore = [t for t in TOOL_SCHEMAS if t["function"]["name"] == "explore"][0]
+    assert explore["function"]["parameters"]["properties"] == {}
+    assert explore["function"]["parameters"].get("required", []) == []
+
+
+def test_scope_schemas_have_no_speed_param():
+    from core.explore_tools import SCOPE_TOOL_SCHEMAS
+    for t in SCOPE_TOOL_SCHEMAS:
+        params = t["function"]["parameters"].get("properties", {})
+        assert "speed" not in params, f"{t['function']['name']} must not expose speed"
+
+
+def test_scope_schemas_include_required_tools():
+    from core.explore_tools import SCOPE_TOOL_SCHEMAS
+    names = {t["function"]["name"] for t in SCOPE_TOOL_SCHEMAS}
+    assert {"move", "capture_vision", "record_photo",
+            "commit_node_and_advance", "return_to_origin", "conclude"} <= names

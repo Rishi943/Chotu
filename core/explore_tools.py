@@ -240,3 +240,93 @@ async def scoped_conclude(scope: Scope, *, status: str, notes: str = "") -> dict
         )
     map_dict = build_map(scope.state, notes=notes)
     return _envelope("conclude", {"status": status, "map": map_dict}, started)
+
+
+SCOPE_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "move",
+            "description": (
+                "Inside explore: only single-step turn left or turn right is allowed. "
+                "Forward motion happens through commit_node_and_advance."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {"type": "string", "enum": ["turn left", "turn right"]},
+                    "steps": {"type": "integer", "enum": [1], "default": 1},
+                },
+                "required": ["direction"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_vision",
+            "description": "Take a photo at your current heading. Returns image + current_x.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_photo",
+            "description": (
+                "Record the photo you just looked at, at your current x. "
+                "Set open_path=true on at most ONE photo per node — the direction you want "
+                "to explore next. forward_steps is required when open_path=true."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "anchors": {"type": "array", "items": {"type": "string"},
+                                "description": "Fixed landmarks visible in this photo (vents, frames, doors)."},
+                    "objects": {"type": "array", "items": {"type": "string"},
+                                "description": "Movable items visible in this photo."},
+                    "description": {"type": "string", "description": "One-line description."},
+                    "open_path": {"type": "boolean", "default": False},
+                    "forward_steps": {"type": "integer",
+                                      "description": "Required if open_path=true. How many steps to walk to the next node."},
+                },
+                "required": ["anchors", "objects", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "commit_node_and_advance",
+            "description": (
+                "Finalize the current node. If you tagged an open_path, also walks to "
+                "the next node and resets for a new 360° scan. If not, this is a terminal node — "
+                "next step is return_to_origin."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "return_to_origin",
+            "description": "Walk back to Node 0 atomically. Required before conclude on a successful run.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "conclude",
+            "description": "End the explore. Returns the assembled map to Chotu.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["done", "inconclusive"]},
+                    "notes": {"type": "string", "description": "One-line summary of the room."},
+                },
+                "required": ["status"],
+            },
+        },
+    },
+]
