@@ -66,6 +66,7 @@ async def run_explore(pi: PiClient, *, reason: str = "idle") -> dict:
 
     messages: list[dict] = [
         {"role": "system", "content": EXPLORE_PROMPT, "_origin": "boot"},
+        {"role": "user", "content": f"Begin exploring. Reason: {reason}", "_origin": "boot"},
     ]
 
     dispatch_map = build_scope_dispatch(pi, scope)
