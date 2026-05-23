@@ -10,11 +10,10 @@ PALIV is an open agent framework for always-on embodied robot pets. Chotu (SunFo
 
 - **`PALIV.md`** — framework contract: loop model, tool budgets, hard interrupts, speech contract, tool definitions. Loaded into every system prompt.
 - **`CHOTU.md`** — Chotu's persona: voice, personality probability table, examples, physical constraints. Loaded into every system prompt alongside PALIV.md.
-- **`HEARTBEAT.md`** — checklist consulted on each `[heartbeat]` tick. Loaded into every system prompt alongside PALIV.md and CHOTU.md.
 - **`PALIV_CC_CONTEXT.md`** — pivot context, useful while v1 lands. Drop after the state machine ships.
 - **`docs/superpowers/specs/`** — design specs for in-flight refactors (gitignored except when force-added).
 
-The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md + "\n\n" + HEARTBEAT.md`, loaded by `core/prompts.py`.
+The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md`, loaded by `core/prompts.py`.
 
 ## Stack
 
@@ -30,7 +29,7 @@ The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md + "\n\n" + HEARTBE
 - Laptop venv: `.venv/` at project root.
 - Pi venv: `~/chotu-bridge/.venv` (created with `--system-site-packages`).
 - Pi access: SSH only. Hostname `chotu.local` via mDNS, fallback to IP in `.env`.
-- Start llama-server: `llama-server -m <model.gguf> --mmproj <mmproj.gguf> --port 8080 -ngl 99 -c 16384 --parallel 1`
+- Start llama-server: `llama-server -m <model.gguf> --mmproj <mmproj.gguf> --port 8080 -ngl 99 -c 32768 --parallel 1`
 - Start Pi bridge: `ssh chotu@chotu.local 'sudo ~/chotu-bridge/.venv/bin/python3 ~/chotu-bridge/server.py'`
 - Start brain: `source .venv/bin/activate && python3 -m core.brain`
 - Voice input: `PALIV_VOICE=1 python3 -m core.brain`
