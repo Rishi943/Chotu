@@ -97,3 +97,32 @@ async def test_scoped_capture_vision_attaches_current_x(monkeypatch):
     assert env["ok"] is True
     assert env["result"]["current_x"] == 4
     assert env["result"]["image_base64"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_scoped_record_photo_appends():
+    from core.explore_tools import scoped_record_photo
+    from core.scope import open_scope
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    sc.state.current_x = 2
+    env = await scoped_record_photo(
+        sc, anchors=["bed"], objects=["pillow"], description="head of bed",
+        open_path=False, forward_steps=None,
+    )
+    assert env["ok"] is True
+    assert env["result"] == {"recorded": True, "photos_so_far": 1}
+    assert sc.state.current_node_photos[0]["x"] == 2
+
+
+@pytest.mark.asyncio
+async def test_scoped_record_photo_rejects_double_open_path():
+    from core.explore_tools import scoped_record_photo
+    from core.scope import open_scope
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    sc.state.current_x = 3
+    await scoped_record_photo(sc, anchors=[], objects=[], description="d1", open_path=True, forward_steps=8)
+    sc.state.current_x = 7
+    env = await scoped_record_photo(sc, anchors=[], objects=[], description="d2", open_path=True, forward_steps=5)
+    assert env["ok"] is False
+    assert "already" in env["error"].lower() or "one open_path" in env["error"].lower()
+    assert len(sc.state.current_node_photos) == 1

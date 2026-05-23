@@ -55,3 +55,27 @@ async def scoped_capture_vision(pi: PiClient, scope: Scope) -> dict:
     if env.get("ok"):
         env["result"] = {**env.get("result", {}), "current_x": scope.state.current_x}
     return env
+
+
+async def scoped_record_photo(
+    scope: Scope,
+    *,
+    anchors: list[str],
+    objects: list[str],
+    description: str = "",
+    open_path: bool = False,
+    forward_steps: int | None = None,
+) -> dict:
+    started = time.time()
+    err = record_photo_state(
+        scope.state,
+        anchors=anchors, objects=objects, description=description,
+        open_path=open_path, forward_steps=forward_steps,
+    )
+    if err is not None:
+        return _envelope("record_photo", {}, started, ok=False, error=err)
+    return _envelope(
+        "record_photo",
+        {"recorded": True, "photos_so_far": len(scope.state.current_node_photos)},
+        started,
+    )
