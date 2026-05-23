@@ -173,3 +173,34 @@ def test_anchors_summary_dedup_preserves_order():
     ]
     advanced, node = commit_node_state(s)
     assert node["anchors_summary"] == ["bed", "vent", "desk", "lamp"]
+
+
+def test_plan_return_two_node_chain():
+    """Path: node 0 → (x=3, 8 steps) → node 1 (terminal).
+    Robot is at node 1, current_x=0 (arrival heading).
+    Return = turn right 6 (180°), forward 8."""
+    from core.scope import plan_return_steps
+    path_stack = [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
+    current_x = 0
+    steps = plan_return_steps(path_stack, current_x)
+    assert steps == [
+        ("turn right", 6),
+        ("forward", 8),
+    ]
+
+
+def test_plan_return_three_node_chain():
+    from core.scope import plan_return_steps
+    path_stack = [
+        {"from_node": 0, "open_path_x": 3, "forward_steps": 8},
+        {"from_node": 1, "open_path_x": 1, "forward_steps": 6},
+    ]
+    current_x = 0
+    steps = plan_return_steps(path_stack, current_x)
+    assert steps == [
+        ("turn right", 6),
+        ("forward", 6),
+        ("turn right", 6),
+        ("turn right", 6),
+        ("forward", 8),
+    ]

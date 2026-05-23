@@ -112,3 +112,35 @@ def commit_node_state(state: ExploreState) -> tuple[bool, dict]:
     state.current_node_photos = []
     state.current_node_open_path = None
     return True, node
+
+
+def plan_return_steps(path_stack: list[dict], current_x: int) -> list[tuple[str, int]]:
+    """Plan the move sequence to walk back to node 0.
+
+    path_stack is the list of edges in order [node_0→node_1, node_1→node_2, ...].
+    current_x is the robot's current heading in the last (terminal) node's frame.
+
+    Returns a flat list of (direction, steps) Pi moves. direction ∈ {"turn right", "forward"}.
+    """
+    if not path_stack:
+        return []
+    steps: list[tuple[str, int]] = []
+    # Start arrived_at_x as the terminal edge's outbound_x — this is the canonical
+    # representation of the robot's arrival heading in the parent's frame after a 360° scan.
+    arrived_at_x = path_stack[-1]["open_path_x"]
+    prev_open_path_x = None
+    for edge in reversed(path_stack):
+        outbound_x = edge["open_path_x"]
+        forward_steps = edge["forward_steps"]
+        if prev_open_path_x is None:
+            reorient = (outbound_x - arrived_at_x) % 12  # 0 on first iteration by construction
+        else:
+            reorient = (prev_open_path_x - arrived_at_x) % 12
+        steps.append(("turn right", reorient))
+        steps.append(("turn right", 6))
+        steps.append(("forward", forward_steps))
+        arrived_at_x = (outbound_x + 6) % 12
+        prev_open_path_x = outbound_x
+    if steps and steps[0] == ("turn right", 0):
+        steps.pop(0)
+    return steps
