@@ -325,6 +325,22 @@ async def _run_one(tc):
     return tc, name, args_json, result
 
 
+def _guard_key(name: str, args: dict) -> tuple:
+    """Stable hash key for per-args fail guard."""
+    import hashlib
+    blob = json.dumps(args or {}, sort_keys=True, default=str)
+    h = hashlib.sha1(blob.encode()).hexdigest()[:16]
+    return (name, h)
+
+
+def _record_failure(failed_set: set, name: str, args: dict) -> None:
+    failed_set.add(_guard_key(name, args))
+
+
+def _should_suppress(failed_set: set, name: str, args: dict) -> bool:
+    return _guard_key(name, args) in failed_set
+
+
 def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
     """Fake ok envelope for a suppressed tool call — model sees success, doesn't retry."""
     result = {"ok": True, "tool": name, "result": {"suppressed": True}, "duration_ms": 0, "timestamp": time.time(), "error": None}
@@ -368,7 +384,7 @@ async def _process(item: dict):
 
     set_legs_fired = 0
     waits_fired = 0
-    failed_tools: set[str] = set()
+    failed_tools: set = set()
 
     iterations = 0
     SCOPE_ITERATION_CAP = 200
@@ -426,11 +442,15 @@ async def _process(item: dict):
         suppressed = []
         for tc in assistant_msg.tool_calls:
             name = tc.function.name
+            try:
+                tc_args = json.loads(tc.function.arguments or "{}") if tc.function.arguments else {}
+            except json.JSONDecodeError:
+                tc_args = {}
             if name == "set_legs" and set_legs_fired >= 12:
                 suppressed.append(_suppressed(tc.id, name, "12 set_legs per turn max"))
             elif name == "wait" and waits_fired >= 1:
                 suppressed.append(_suppressed(tc.id, name, "1 wait per turn max"))
-            elif name in failed_tools:
+            elif _should_suppress(failed_tools, name, tc_args):
                 suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
             else:
                 if name == "set_legs": set_legs_fired += 1
@@ -471,7 +491,7 @@ async def _process(item: dict):
                 print_tool_call(name, args, result)
 
             if not result.get("ok"):
-                failed_tools.add(name)
+                _record_failure(failed_tools, name, args)
 
             if tool_call is None:
                 continue
