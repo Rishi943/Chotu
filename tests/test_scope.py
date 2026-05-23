@@ -262,3 +262,21 @@ def test_splice_messages_preserves_input_when_no_tags():
         {"role": "user", "content": "hi"},
         {"role": "tool", "tool_call_id": "call_x", "content": "{}"},
     ]
+
+
+def test_open_scope_returns_scope_with_state():
+    from core.scope import open_scope
+    sc = open_scope(originating_tool_call_id="call_99", originating_tool_name="explore")
+    assert sc.originating_tool_call_id == "call_99"
+    assert sc.originating_tool_name == "explore"
+    assert sc.state.current_node_id == 0
+    assert sc.tagged_message_indexes == []
+    assert sc.scope_id.startswith("explore-")
+
+
+def test_tag_message_index():
+    from core.scope import open_scope, tag_message_index
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    tag_message_index(sc, 5)
+    tag_message_index(sc, 7)
+    assert sc.tagged_message_indexes == [5, 7]

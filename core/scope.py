@@ -6,6 +6,7 @@ that call these mutators live in core/explore_tools.py.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
 
@@ -167,3 +168,16 @@ def splice_messages(
     out = [m for i, m in enumerate(messages) if i not in drop]
     out.append({"role": "tool", "tool_call_id": tool_call_id, "content": result_json})
     return out
+
+
+def open_scope(*, originating_tool_call_id: str, originating_tool_name: str) -> Scope:
+    return Scope(
+        scope_id=f"{originating_tool_name}-{uuid.uuid4().hex[:8]}",
+        originating_tool_call_id=originating_tool_call_id,
+        originating_tool_name=originating_tool_name,
+        state=ExploreState(),
+    )
+
+
+def tag_message_index(scope: Scope, index: int) -> None:
+    scope.tagged_message_indexes.append(index)
