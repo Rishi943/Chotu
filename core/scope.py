@@ -144,3 +144,26 @@ def plan_return_steps(path_stack: list[dict], current_x: int) -> list[tuple[str,
     if steps and steps[0] == ("turn right", 0):
         steps.pop(0)
     return steps
+
+
+def build_map(state: ExploreState, notes: str) -> dict:
+    return {
+        "nodes": list(state.nodes),
+        "returned_to_origin": bool(state.returned_to_origin),
+        "node_count": len(state.nodes),
+        "notes": notes,
+    }
+
+
+def splice_messages(
+    messages: list[dict],
+    *,
+    tagged_indexes: list[int],
+    tool_call_id: str,
+    result_json: str,
+) -> list[dict]:
+    """Return a new list with tagged_indexes removed and a synthetic tool result appended."""
+    drop = set(tagged_indexes)
+    out = [m for i, m in enumerate(messages) if i not in drop]
+    out.append({"role": "tool", "tool_call_id": tool_call_id, "content": result_json})
+    return out

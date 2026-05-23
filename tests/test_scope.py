@@ -204,3 +204,61 @@ def test_plan_return_three_node_chain():
         ("turn right", 6),
         ("forward", 8),
     ]
+
+
+def test_build_map_minimal():
+    from core.scope import ExploreState, build_map
+    s = ExploreState()
+    s.nodes = [
+        {"id": 0, "anchors_summary": ["bed"], "photos": [{"x": 0}]},
+    ]
+    s.returned_to_origin = True
+    m = build_map(s, notes="test room")
+    assert m == {
+        "nodes": [{"id": 0, "anchors_summary": ["bed"], "photos": [{"x": 0}]}],
+        "returned_to_origin": True,
+        "node_count": 1,
+        "notes": "test room",
+    }
+
+
+def test_build_map_returned_false_when_unset():
+    """If return_to_origin was never called (e.g. LLM concluded without it),
+    returned_to_origin should serialize as False, not None."""
+    from core.scope import ExploreState, build_map
+    s = ExploreState()
+    s.nodes = [{"id": 0, "anchors_summary": [], "photos": []}]
+    s.returned_to_origin = None
+    m = build_map(s, notes="")
+    assert m["returned_to_origin"] is False
+
+
+def test_splice_messages_removes_tagged_and_appends_tool_result():
+    from core.scope import splice_messages
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "calling explore", "tool_calls": [{"id": "call_42", "type": "function", "function": {"name": "explore", "arguments": "{}"}}]},
+        {"role": "user", "content": "<workflow doc>"},            # tagged
+        {"role": "assistant", "content": "ok", "tool_calls": []}, # tagged
+        {"role": "tool", "tool_call_id": "inner1", "content": "{}"},  # tagged
+    ]
+    tagged = [3, 4, 5]
+    result_json = '{"nodes": [], "node_count": 0}'
+    spliced = splice_messages(messages, tagged_indexes=tagged, tool_call_id="call_42", result_json=result_json)
+    assert spliced == [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "calling explore", "tool_calls": [{"id": "call_42", "type": "function", "function": {"name": "explore", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_42", "content": result_json},
+    ]
+
+
+def test_splice_messages_preserves_input_when_no_tags():
+    from core.scope import splice_messages
+    messages = [{"role": "user", "content": "hi"}]
+    spliced = splice_messages(messages, tagged_indexes=[], tool_call_id="call_x", result_json="{}")
+    assert spliced == [
+        {"role": "user", "content": "hi"},
+        {"role": "tool", "tool_call_id": "call_x", "content": "{}"},
+    ]
