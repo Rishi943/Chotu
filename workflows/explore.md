@@ -31,9 +31,14 @@ your `current_x`. You just turn and record.
    - is this an **open path**? — clear floor in front of you, somewhere
      worth going next.
 3. `record_photo(anchors=[...], objects=[...], description="...",
-                  open_path=true|false, forward_steps=N)`
+                  open_path=true|false, forward_steps=N,
+                  distance_estimate_cm=N)`
    - `forward_steps` is REQUIRED whenever `open_path=true`. It's how many
      forward steps you commit to walking to drop the next node there.
+   - `distance_estimate_cm`: your best guess at the distance in cm to the
+     nearest visible object or anchor. Use perspective cues — floor texture,
+     object size, camera height. Leave null only if genuinely ambiguous
+     (e.g. looking at a flat ceiling or uniform wall).
 4. `move(direction="turn right", steps=1)` — turns 30°. `current_x`
    increments to your new heading.
 5. Repeat from step 1. After twelve right turns you're back at `x0`.
@@ -95,7 +100,8 @@ record_photo(
   objects=["laptop", "mug"],
   description="desk ahead, laptop centered, floor clear ~8 steps",
   open_path=true,
-  forward_steps=8
+  forward_steps=8,
+  distance_estimate_cm=80
 )
 move(direction="turn right", steps=1)
 ```

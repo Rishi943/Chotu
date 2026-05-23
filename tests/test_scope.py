@@ -76,6 +76,7 @@ def test_record_photo_appends_with_current_x():
     assert p == {
         "x": 3, "anchors": ["desk"], "objects": ["laptop"],
         "description": "desk ahead", "open_path": False, "forward_steps": None,
+        "distance_estimate_cm": None,
     }
 
 

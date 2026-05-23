@@ -68,12 +68,14 @@ async def scoped_record_photo(
     description: str = "",
     open_path: bool = False,
     forward_steps: int | None = None,
+    distance_estimate_cm: int | None = None,
 ) -> dict:
     started = time.time()
     err = record_photo_state(
         scope.state,
         anchors=anchors, objects=objects, description=description,
         open_path=open_path, forward_steps=forward_steps,
+        distance_estimate_cm=distance_estimate_cm,
     )
     if err is not None:
         return _envelope("record_photo", {}, started, ok=False, error=err)
@@ -296,7 +298,8 @@ SCOPE_TOOL_SCHEMAS = [
             "description": (
                 "Record the photo you just looked at, at your current x. "
                 "Set open_path=true on at most ONE photo per node — the direction you want "
-                "to explore next. forward_steps is required when open_path=true."
+                "to explore next. forward_steps is required when open_path=true. "
+                "Estimate distance_estimate_cm to the nearest object/anchor if you can judge it from perspective."
             ),
             "parameters": {
                 "type": "object",
@@ -309,6 +312,8 @@ SCOPE_TOOL_SCHEMAS = [
                     "open_path": {"type": "boolean", "default": False},
                     "forward_steps": {"type": "integer",
                                       "description": "Required if open_path=true. How many steps to walk to the next node."},
+                    "distance_estimate_cm": {"type": "integer",
+                                             "description": "Best-guess distance in cm to the nearest object or anchor. Null if too ambiguous."},
                 },
                 "required": ["anchors", "objects", "description"],
             },

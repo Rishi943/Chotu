@@ -44,6 +44,7 @@ def record_photo_state(
     description: str,
     open_path: bool = False,
     forward_steps: int | None = None,
+    distance_estimate_cm: int | None = None,
 ) -> str | None:
     """Append a photo entry at current_x. Returns None on success, error string on failure.
 
@@ -66,6 +67,7 @@ def record_photo_state(
         "description": description,
         "open_path": bool(open_path),
         "forward_steps": forward_steps if open_path else None,
+        "distance_estimate_cm": distance_estimate_cm,
     }
     state.current_node_photos.append(photo)
     if open_path:
