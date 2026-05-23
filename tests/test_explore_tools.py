@@ -217,3 +217,43 @@ async def test_commit_and_advance_three_failures_force_return():
     assert env["result"]["aborted"] is True
     assert "3 advance failures" in env["result"]["reason"]
     assert sc.state.failed_advances == 3
+
+
+@pytest.mark.asyncio
+async def test_return_to_origin_two_node_chain():
+    from core.explore_tools import scoped_return_to_origin
+    from core.scope import open_scope
+    pi = AsyncMock()
+    pi.move.return_value = _ok("move")
+    pi.get_distance.return_value = _ok("get_distance", {"cm": 200})
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    sc.state.path_stack = [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
+    sc.state.current_x = 0  # at terminal node 1, facing arrival heading
+
+    env = await scoped_return_to_origin(pi, sc)
+    assert env["ok"] is True
+    assert env["result"]["success"] is True
+    assert env["result"]["last_node_reached"] == 0
+    assert sc.state.returned_to_origin is True
+    # Expected moves: turn right 6, forward 8.
+    pi.move.assert_any_await(direction="turn right", steps=6, speed=80)
+    pi.move.assert_any_await(direction="forward", steps=8, speed=80)
+
+
+@pytest.mark.asyncio
+async def test_return_to_origin_stops_on_failure():
+    from core.explore_tools import scoped_return_to_origin
+    from core.scope import open_scope
+    pi = AsyncMock()
+    pi.get_distance.return_value = _ok("get_distance", {"cm": 200})
+    # First move ok, second move (forward) fails.
+    pi.move.side_effect = [_ok("move"), _fail("move", "bridge down")]
+    sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
+    sc.state.path_stack = [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
+    sc.state.current_x = 0
+
+    env = await scoped_return_to_origin(pi, sc)
+    assert env["ok"] is False
+    assert env["result"]["success"] is False
+    assert env["result"]["last_node_reached"] == 1  # never made it to 0
+    assert sc.state.returned_to_origin is False

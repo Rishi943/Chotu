@@ -15,6 +15,7 @@ from core.scope import (
     bump_x,
     commit_node_state,
     record_photo_state,
+    plan_return_steps,
 )
 from core.tools import capture_vision_tool
 
@@ -190,5 +191,37 @@ async def scoped_commit_node_and_advance(pi: PiClient, scope: Scope) -> dict:
     return _envelope(
         "commit_node_and_advance",
         {"advanced": True, "new_node_id": new_node_id, "aborted": False, "reason": None},
+        started,
+    )
+
+
+async def scoped_return_to_origin(pi: PiClient, scope: Scope) -> dict:
+    started = time.time()
+    plan = plan_return_steps(scope.state.path_stack, scope.state.current_x)
+    last_node_reached = len(scope.state.path_stack)  # we're at node N if path_stack has N edges
+
+    forward_steps_remaining = list(scope.state.path_stack)
+
+    for direction, n in plan:
+        if n == 0:
+            continue
+        env = await pi.move(direction=direction, steps=n, speed=SPEED)
+        if not env.get("ok"):
+            scope.state.returned_to_origin = False
+            return _envelope(
+                "return_to_origin",
+                {"success": False, "last_node_reached": last_node_reached,
+                 "error": env.get("error") or "move failed"},
+                started, ok=False, error="return aborted partway",
+            )
+        if direction == "forward":
+            if forward_steps_remaining:
+                edge = forward_steps_remaining.pop()
+                last_node_reached = edge["from_node"]
+
+    scope.state.returned_to_origin = True
+    return _envelope(
+        "return_to_origin",
+        {"success": True, "last_node_reached": 0, "error": None},
         started,
     )
