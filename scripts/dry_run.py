@@ -61,10 +61,19 @@ def fake_result(tool: str, args: dict) -> dict:
         return {**base, "result": result}
     if tool == "wait":
         return {**base, "result": {"waited_seconds": args.get("seconds", 1), "reason": args.get("reason", "")}}
+    if tool == "speak":
+        return {**base, "result": {"text": args.get("text", ""), "played": True}}
     if tool == "set_face":
         return {**base, "result": {"name": args.get("name", "idle"), "ok": True}}
     if tool == "cast_spell":
         return {**base, "result": {"spell": args.get("name", "")}}
+    if tool == "explore":
+        return {**base, "result": {
+            "status": "done",
+            "nodes_added": ["node-001", "node-002"],
+            "anchors_seen": ["blue sheet", "laptop"],
+            "message": "[dry-run] Mapped 2 nodes.",
+        }}
     return {**base, "ok": False, "result": {}, "error": f"unknown tool: {tool}"}
 
 
@@ -134,8 +143,7 @@ async def process(user_input: str):
     final = response.choices[0].message.content or ""
 
     memory.append({"role": "user", "content": user_input})
-    if final:
-        memory.append({"role": "assistant", "content": final})
+    memory.append({"role": "assistant", "content": final or ""})
 
 
 async def main():
