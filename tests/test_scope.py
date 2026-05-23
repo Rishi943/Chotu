@@ -1,6 +1,30 @@
 """Unit tests for core/scope.py — pure state machine for explore habit."""
 
 import pytest
+import os
+from core.scope import ExploreState, bump_x, TURNS_PER_REVOLUTION
+
+
+def test_turns_per_revolution_default_is_10():
+    assert TURNS_PER_REVOLUTION == 10
+
+
+def test_bump_x_wraps_at_turns_per_revolution():
+    state = ExploreState()
+    state.current_x = 9
+    assert bump_x(state, +1) == 0  # wraps mod 10
+    assert bump_x(state, -1) == 9
+
+
+def test_turns_per_revolution_env_override(monkeypatch):
+    # constant is module-level; re-import after monkeypatch
+    monkeypatch.setenv("PALIV_EXPLORE_TURNS_PER_REVOLUTION", "12")
+    import importlib, core.scope
+    importlib.reload(core.scope)
+    assert core.scope.TURNS_PER_REVOLUTION == 12
+    # reset for other tests
+    monkeypatch.delenv("PALIV_EXPLORE_TURNS_PER_REVOLUTION")
+    importlib.reload(core.scope)
 
 
 def test_explore_state_defaults():
@@ -43,7 +67,7 @@ def test_bump_x_right():
 
 def test_bump_x_wraps_right():
     from core.scope import ExploreState, bump_x
-    s = ExploreState(current_x=11)
+    s = ExploreState(current_x=9)
     bump_x(s, +1)
     assert s.current_x == 0
 
@@ -52,7 +76,7 @@ def test_bump_x_left_wraps():
     from core.scope import ExploreState, bump_x
     s = ExploreState(current_x=0)
     bump_x(s, -1)
-    assert s.current_x == 11
+    assert s.current_x == 9
 
 
 def test_bump_x_multi_step():
@@ -60,8 +84,8 @@ def test_bump_x_multi_step():
     s = ExploreState(current_x=3)
     bump_x(s, +5)
     assert s.current_x == 8
-    bump_x(s, -10)
-    assert s.current_x == 10
+    bump_x(s, -9)
+    assert s.current_x == 9
 
 
 def test_record_photo_appends_with_current_x():
@@ -179,13 +203,13 @@ def test_anchors_summary_dedup_preserves_order():
 def test_plan_return_two_node_chain():
     """Path: node 0 → (x=3, 8 steps) → node 1 (terminal).
     Robot is at node 1, current_x=0 (arrival heading).
-    Return = turn right 6 (180°), forward 8."""
+    Return = turn right 5 (180° with mod 10), forward 8."""
     from core.scope import plan_return_steps
     path_stack = [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
     current_x = 0
     steps = plan_return_steps(path_stack, current_x)
     assert steps == [
-        ("turn right", 6),
+        ("turn right", 5),
         ("forward", 8),
     ]
 
@@ -199,10 +223,10 @@ def test_plan_return_three_node_chain():
     current_x = 0
     steps = plan_return_steps(path_stack, current_x)
     assert steps == [
-        ("turn right", 6),
+        ("turn right", 5),
         ("forward", 6),
-        ("turn right", 6),
-        ("turn right", 6),
+        ("turn right", 5),
+        ("turn right", 5),
         ("forward", 8),
     ]
 

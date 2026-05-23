@@ -6,8 +6,11 @@ that call these mutators live in core/explore_tools.py.
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass, field
+
+TURNS_PER_REVOLUTION = int(os.getenv("PALIV_EXPLORE_TURNS_PER_REVOLUTION", "10"))
 
 
 @dataclass
@@ -32,8 +35,8 @@ class Scope:
 
 
 def bump_x(state: ExploreState, delta: int) -> int:
-    """Update current_x by delta, wrapping mod 12. Returns the new x."""
-    state.current_x = (state.current_x + delta) % 12
+    """Update current_x by delta, wrapping mod TURNS_PER_REVOLUTION. Returns the new x."""
+    state.current_x = (state.current_x + delta) % TURNS_PER_REVOLUTION
     return state.current_x
 
 
@@ -136,13 +139,13 @@ def plan_return_steps(path_stack: list[dict], current_x: int) -> list[tuple[str,
         outbound_x = edge["open_path_x"]
         forward_steps = edge["forward_steps"]
         if prev_open_path_x is None:
-            reorient = (outbound_x - arrived_at_x) % 12  # 0 on first iteration by construction
+            reorient = (outbound_x - arrived_at_x) % TURNS_PER_REVOLUTION  # 0 on first iteration by construction
         else:
-            reorient = (prev_open_path_x - arrived_at_x) % 12
+            reorient = (prev_open_path_x - arrived_at_x) % TURNS_PER_REVOLUTION
         steps.append(("turn right", reorient))
-        steps.append(("turn right", 6))
+        steps.append(("turn right", TURNS_PER_REVOLUTION // 2))
         steps.append(("forward", forward_steps))
-        arrived_at_x = (outbound_x + 6) % 12
+        arrived_at_x = (outbound_x + TURNS_PER_REVOLUTION // 2) % TURNS_PER_REVOLUTION
         prev_open_path_x = outbound_x
     if steps and steps[0] == ("turn right", 0):
         steps.pop(0)
