@@ -125,3 +125,51 @@ def test_record_photo_requires_positive_forward_steps():
     assert "positive" in err.lower() or "steps" in err.lower()
     err = record_photo_state(s, [], [], "", open_path=True, forward_steps=-3)
     assert err is not None
+
+
+def _photo(x, anchors=(), objects=(), open_path=False, forward_steps=None, description=""):
+    return {
+        "x": x, "anchors": list(anchors), "objects": list(objects),
+        "description": description, "open_path": open_path, "forward_steps": forward_steps,
+    }
+
+
+def test_commit_node_terminal():
+    from core.scope import ExploreState, commit_node_state
+    s = ExploreState(current_node_id=0)
+    s.current_node_photos = [_photo(i, anchors=["bed"]) for i in range(12)]
+    s.current_node_open_path = None
+    advanced, node = commit_node_state(s)
+    assert advanced is False
+    assert node["id"] == 0
+    assert node["anchors_summary"] == ["bed"]
+    assert len(node["photos"]) == 12
+    assert s.nodes == [node]
+    assert s.current_node_id == 0
+
+
+def test_commit_node_advance_resets_local_state():
+    from core.scope import ExploreState, commit_node_state
+    s = ExploreState(current_node_id=0, current_x=3)
+    s.current_node_photos = [_photo(i) for i in range(12)]
+    s.current_node_open_path = {"x": 3, "forward_steps": 8}
+    advanced, node = commit_node_state(s)
+    assert advanced is True
+    assert node["id"] == 0
+    assert s.current_node_id == 1
+    assert s.current_x == 0
+    assert s.current_node_photos == []
+    assert s.current_node_open_path is None
+    assert s.path_stack == [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
+
+
+def test_anchors_summary_dedup_preserves_order():
+    from core.scope import ExploreState, commit_node_state
+    s = ExploreState(current_node_id=0)
+    s.current_node_photos = [
+        _photo(0, anchors=["bed", "vent"]),
+        _photo(1, anchors=["vent", "desk"]),
+        _photo(2, anchors=["desk", "bed", "lamp"]),
+    ]
+    advanced, node = commit_node_state(s)
+    assert node["anchors_summary"] == ["bed", "vent", "desk", "lamp"]

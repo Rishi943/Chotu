@@ -70,3 +70,45 @@ def record_photo_state(
     if open_path:
         state.current_node_open_path = {"x": state.current_x, "forward_steps": forward_steps}
     return None
+
+
+def _ordered_unique(items: list[str]) -> list[str]:
+    """Dedup a flat list, preserving first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def commit_node_state(state: ExploreState) -> tuple[bool, dict]:
+    """Finalize current node into state.nodes. Returns (advanced, node_dict).
+
+    advanced=True iff current_node_open_path is set; in that case state is rolled
+    forward (node_id+1, current_x=0, photos/open_path cleared, path_stack pushed).
+    advanced=False iff terminal — node committed but state left in place for
+    return_to_origin or conclude.
+    """
+    anchors_flat = [a for p in state.current_node_photos for a in p["anchors"]]
+    node = {
+        "id": state.current_node_id,
+        "anchors_summary": _ordered_unique(anchors_flat),
+        "photos": list(state.current_node_photos),
+    }
+    state.nodes.append(node)
+
+    if state.current_node_open_path is None:
+        return False, node
+
+    state.path_stack.append({
+        "from_node": state.current_node_id,
+        "open_path_x": state.current_node_open_path["x"],
+        "forward_steps": state.current_node_open_path["forward_steps"],
+    })
+    state.current_node_id += 1
+    state.current_x = 0
+    state.current_node_photos = []
+    state.current_node_open_path = None
+    return True, node
