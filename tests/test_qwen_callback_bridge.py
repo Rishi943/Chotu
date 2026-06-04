@@ -20,7 +20,10 @@ async def test_text_done_emits_assistant_text():
     assert ev.text == "Hello, world."
 
 
-async def test_function_call_done_emits_toolcall():
+async def test_function_call_buffered_until_response_done():
+    """Tool calls must be deferred until response.done so the brain doesn't
+    send tool results while the model's response is still active (server
+    rejects with "Conversation already has an active response")."""
     loop = asyncio.get_running_loop()
     bridge = _QwenEventBridge(loop)
     bridge.on_event({
@@ -29,6 +32,9 @@ async def test_function_call_done_emits_toolcall():
         "name": "move",
         "arguments": '{"direction": "forward", "steps": 2}',
     })
+    # Should NOT be emitted yet.
+    assert bridge.queue.empty()
+    bridge.on_event({"type": "response.done"})
 
     ev = await asyncio.wait_for(bridge.queue.get(), timeout=1.0)
     assert isinstance(ev, ToolCall)

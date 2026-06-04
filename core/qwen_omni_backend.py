@@ -42,6 +42,10 @@ class _QwenEventBridge:
         self.queue: asyncio.Queue[Event] = asyncio.Queue()
         self._partial_text: str = ""
         self._partial_calls: dict[str, dict] = {}
+        # Tool calls finalized in the current response — deferred until
+        # response.done so the brain doesn't trigger create_response while
+        # the model's response is still active.
+        self._pending_tool_calls: list[ToolCall] = []
 
     def _emit(self, event: Event) -> None:
         self.loop.call_soon_threadsafe(self.queue.put_nowait, event)
@@ -78,12 +82,25 @@ class _QwenEventBridge:
                 except json.JSONDecodeError as e:
                     log.warning("tool call %s: bad JSON args %r (%s)", name, raw, e)
                     args = {}
-                self._emit(ToolCall(id=call_id, name=name, args=args))
+                self._pending_tool_calls.append(ToolCall(id=call_id, name=name, args=args))
             elif t == "response.done":
-                return
+                # Flush any tool calls accumulated during this response.
+                for call in self._pending_tool_calls:
+                    self._emit(call)
+                self._pending_tool_calls.clear()
             elif t == "error":
                 err = msg.get("error", msg)
-                self._emit(BackendError(message=str(err), recoverable=False))
+                err_msg = str(err.get("message", err) if isinstance(err, dict) else err)
+                # Benign races we recover from rather than tearing down:
+                #   - "Conversation already has an active response": fires when
+                #     the brain dispatches multiple tool calls from a single
+                #     response and calls create_response per result. The model
+                #     already has each tool output via create_item and will
+                #     continue the active response.
+                if "active response" in err_msg.lower():
+                    log.info("qwen recoverable error (ignored): %s", err_msg)
+                    return
+                self._emit(BackendError(message=err_msg, recoverable=False))
             else:
                 log.debug("qwen unknown event type %r", t)
         except Exception as e:
@@ -119,6 +136,13 @@ class QwenOmniBackend:
         self._bridge: Optional[_QwenEventBridge] = None
         self._conv = None
         self._closed = asyncio.Event()
+        # 100 ms of silence at 16 kHz mono PCM16, pre-encoded to base64.
+        # Streamed continuously by a background task so the audio-input
+        # timeline (which Qwen-Omni Realtime treats as the master clock)
+        # always stays ahead of image inserts. Without this the server
+        # rejects images with "Error append image before append audio".
+        self._silence_b64 = base64.b64encode(b"\x00" * (16000 // 10 * 2)).decode("ascii")
+        self._silence_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         import dashscope
@@ -160,18 +184,41 @@ class QwenOmniBackend:
         conv = OmniRealtimeConversation(**kwargs)
 
         await self._loop.run_in_executor(None, conv.connect)
+        # Server rejects voice=null even in text-only mode, so pass a real
+        # voice name. Audio output is requested by the server even when we
+        # only consume the audio_transcript stream — the audio bytes are
+        # ignored by our bridge.
+        voice = os.getenv("PALIV_QWEN_OMNI_VOICE", "Tina")
         await self._loop.run_in_executor(
             None,
             lambda: conv.update_session(
                 output_modalities=[MultiModality.TEXT],
-                voice=None,
+                voice=voice,
                 enable_turn_detection=False,
                 instructions=self._system,
                 tools=self._tools,
             ),
         )
         self._conv = conv
+        self._silence_task = asyncio.create_task(self._stream_silence(), name="QwenSilencePump")
         log.info("QwenOmniBackend connected to %s", self._model)
+
+    async def _stream_silence(self) -> None:
+        """Continuously push 100 ms silence chunks every 100 ms so the
+        server's audio input timeline always stays ahead of video frames."""
+        assert self._conv is not None and self._loop is not None
+        try:
+            while not self._closed.is_set():
+                try:
+                    await self._loop.run_in_executor(
+                        None, self._conv.append_audio, self._silence_b64
+                    )
+                except Exception as e:
+                    log.debug("silence pump send failed: %s", e)
+                    return
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            raise
 
     async def send_user_text(self, text: str) -> None:
         if not self._conv or not self._loop:
@@ -212,6 +259,12 @@ class QwenOmniBackend:
 
     async def close(self) -> None:
         self._closed.set()
+        if self._silence_task:
+            self._silence_task.cancel()
+            try:
+                await self._silence_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if self._conv and self._loop:
             try:
                 await self._loop.run_in_executor(None, self._conv.close)

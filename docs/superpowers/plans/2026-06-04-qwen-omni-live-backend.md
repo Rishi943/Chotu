@@ -492,6 +492,40 @@ git commit -m "docs(spec): Qwen-Omni live backend Phase 1 results"
 - [ ] Clean Ctrl+C shutdown.
 - [ ] Phase 1 results appendix written to this spec.
 
+## Phase 1 results (2026-06-04)
+
+End-to-end run against the Pi at `192.168.0.190:7000` with `DASHSCOPE_API_KEY` set, `PALIV_LIVE_PROVIDER=qwen`, model `qwen3.5-omni-flash-realtime`.
+
+**Spec corrections required at runtime — all now reflected in code:**
+
+1. **Wrong WS URL.** The workspace URL in the spec (`wss://ws-co0vxhxnl0xu0007.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime`) accepts the handshake and emits `session.created`, but the gateway then closes with `"Service route not found."` — the model isn't deployed at that route. **Correct URL: `wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime`** (International DashScope, Singapore region — matches the `sk-ws-*` key format). The main-China URL `dashscope.aliyuncs.com` returns 401 InvalidApiKey for this key.
+2. **`voice=None` rejected.** Server returns `Voice 'null' is not supported.` even with `output_modalities=[TEXT]`. SDK always serializes the field, so we now pass `voice="Tina"` (default; env-overridable via `PALIV_QWEN_OMNI_VOICE`). Audio output bytes (`response.audio.delta`) are ignored by the bridge; we consume `response.audio_transcript.delta/done` as text.
+3. **Risk #2 confirmed — image-only doesn't work.** Server rejects every `append_video` with `Error append image before append audio` unless an audio stream precedes it on the timeline. Single-shot silence-anchor on `start()` is **not enough**: the buffer falls behind real time and the error returns after a few frames. **Implemented fix:** background `_stream_silence()` task pushes 100 ms of PCM16 zero-audio every 100 ms for the life of the session. Wastes a small amount of upload bandwidth; eliminates the error. v1.5 alternative is feeding the laptop mic.
+4. **"Conversation already has an active response" race.** Model regularly emits multiple `function_call_arguments.done` events inside a single response. The brain dispatches them serially and `send_tool_result` calls `create_response` after each — the second collides with the response started by the first. **Implemented fixes:** (a) bridge now buffers tool calls until `response.done` and emits them as a batch; (b) the specific error message `"active response"` is treated as recoverable in the bridge (log + continue) since the model already has the tool output via `create_item`. Both together stop the crash; the model continues the active response.
+5. **Event schema.** Server emits `response.audio_transcript.delta/done` (not `response.text.delta/done`) because default modality is text+audio with a voice. Bridge handles both.
+
+**Definition-of-Done outcomes:**
+
+- ✅ Connect + session.created against `dashscope-intl.aliyuncs.com`.
+- ✅ Tool calls dispatched from typed prompts. Verified `move({direction: forward, steps: 2})` from "walk forward two steps".
+- ✅ Tools work on `qwen3.5-omni-flash-realtime` (Risk #1 resolved — no need to fall back to non-flash or JSON-in-monologue).
+- ✅ Frames flow at 1 FPS once the silence pump is in place. Model references what it sees (commented on lighting changes from a vision capture).
+- ✅ Clean kill: `pkill` of brain process; manual `pose("sit")` over HTTP restores Chotu.
+- ⚠️ **Motion-lock contention test not completed.** Cut short due to unrelated model misbehavior (over-eager tool calling, see Persona findings below). Backend-level overlap rejection path is unchanged and still proven via existing `MotionLock` unit tests.
+- ⚠️ **Frame-reactivity test not completed.** Same reason. Frames are confirmed flowing and being referenced; obstacle-reaction timing not measured.
+
+**Persona findings (out of scope for this plan — to address in `CHOTU_LIVE.md`):**
+
+- `qwen3.5-omni-flash-realtime` is more impulsive with tools than Gemini Live. On the user prompt "walk forward two steps" it correctly emitted `move` and then unprompted emitted **5 consecutive `cast_spell(lumos/nox/lumos/nox/lumos)`** calls, flashing the user's room lights repeatedly. User had to kill the physical switch to stop the chaos.
+- The model also produced a single combined `content: ... speak: ...` AssistantText rather than separating monologue from a `speak` tool invocation — persona prompt may need to specify the speak-tool contract more explicitly for this model.
+- Recommended follow-ups: (a) tighten the "only invoke tools the user asked for" rule in `CHOTU_LIVE.md`; (b) consider not exposing `cast_spell` to the live brain by default, or gating it behind a wand-pose precondition; (c) restate the speak-as-tool contract for non-Gemini backends.
+
+**Code deltas vs. spec (committed):**
+
+- `core/qwen_omni_backend.py`: added `_stream_silence()` background task, per-frame audio pairing removed in favor of continuous pump; `voice="Tina"` default with env override; bridge buffers tool calls until `response.done`; recoverable handling of `"active response"` server errors.
+- `tests/test_qwen_callback_bridge.py`: tool-call test now exercises the buffer-until-`response.done` contract.
+- `.env`: `PALIV_QWEN_OMNI_WS_URL` updated to the intl endpoint.
+
 ## Out of scope (v2 / later)
 
 - Audio modality (Qwen voice). Replaces Piper TTS; deferred until v1 stable.
