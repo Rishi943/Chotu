@@ -100,13 +100,16 @@
 
     /* Event row styles */
     .ev { padding: 2px 0; border-bottom: 1px solid #1a1a1a; word-break: break-word; }
-    .ev-user     { color: #d4d4d4; }
-    .ev-think    { color: #6b9bd2; }
+    .ev-user      { color: #d4d4d4; }
+    .ev-think     { color: #6b9bd2; }
     .ev-monologue { color: #aaaaaa; font-style: italic; }
-    .ev-speak    { color: #7ec87e; }
-    .ev-tool     { color: #888; }
-    .ev-estop    { color: #e06c75; }
-    .ev-mode     { color: #c678dd; }
+    .ev-speak     { color: #7ec87e; }
+    .ev-tool      { color: #888; }
+    .ev-estop     { color: #e06c75; }
+    .ev-mode      { color: #c678dd; }
+    .ev-heartbeat { color: #2d2d2d; }
+    .ev-event     { color: #d4a017; }
+    .ev-boot      { color: #555; font-style: italic; }
 
     /* Legacy event classes (kept for compatibility) */
     .event { margin-bottom: 2px; }
@@ -200,21 +203,6 @@
       white-space: nowrap;
     }
 
-    .mode-select {
-      background: #0d0d0d;
-      color: #d4d4d4;
-      border: 1px solid #333;
-      font-family: monospace;
-      font-size: 13px;
-      padding: 2px 6px;
-      outline: none;
-      cursor: pointer;
-    }
-
-    .mode-select option {
-      background: #0d0d0d;
-    }
-
     .checkbox-label {
       display: flex;
       align-items: center;
@@ -227,22 +215,6 @@
     .checkbox-label input[type="checkbox"] {
       accent-color: #d4d4d4;
       cursor: pointer;
-    }
-
-    #goal-input {
-      flex: 1;
-      background: #0d0d0d;
-      color: #d4d4d4;
-      border: 1px solid #333;
-      font-family: monospace;
-      font-size: 13px;
-      padding: 2px 6px;
-      outline: none;
-      min-width: 0;
-    }
-
-    #goal-input::placeholder {
-      color: #444;
     }
 
     /* Input bar */
@@ -433,16 +405,8 @@
       </div>
     </div>
 
-    <!-- Mode controls -->
+    <!-- Controls -->
     <div class="controls-bar">
-      <div class="controls-row">
-        <span class="controls-label">Mode:</span>
-        <select class="mode-select" id="mode-select">
-          <option value="reactive">reactive</option>
-          <option value="goal">goal</option>
-        </select>
-        <input id="goal-input" type="text" placeholder="enter goal..." style="display:none;">
-      </div>
       <div class="controls-row">
         <label class="checkbox-label">
           <input type="checkbox" id="thinking-checkbox"> thinking
@@ -578,6 +542,15 @@
 
       if (type === 'user') {
         appendEvent('ev-user', '[user] ' + data.text);
+      } else if (type === 'boot') {
+        appendEvent('ev-boot', '[boot] ' + data.text);
+      } else if (type === 'heartbeat') {
+        appendEvent('ev-heartbeat', '· heartbeat');
+      } else if (type === 'event') {
+        appendEvent('ev-event', '[event] ' + data.text);
+      } else if (type === 'face') {
+        // face state changes are silent in the log — shown in status bar if added later
+        return;
       } else if (type === 'think') {
         appendEvent('ev-think', '[think] ' + data.text);
       } else if (type === 'monologue') {
@@ -617,47 +590,6 @@
   }
 
   connectSSE();
-
-  // ── Mode dropdown ─────────────────────────────────────────
-  var modeSelect = document.getElementById('mode-select');
-  var goalInput = document.getElementById('goal-input');
-
-  modeSelect.addEventListener('change', function() {
-    var mode = modeSelect.value;
-    if (mode === 'goal') {
-      goalInput.style.display = '';
-      goalInput.focus();
-    } else {
-      goalInput.style.display = 'none';
-      fetch('/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'reactive' })
-      }).catch(function() {});
-    }
-  });
-
-  goalInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-      var goalText = goalInput.value.trim();
-      if (!goalText) return;
-      fetch('/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'goal', goal_text: goalText })
-      }).catch(function() {});
-      goalInput.value = '';
-    }
-    if (e.key === 'Escape') {
-      modeSelect.value = 'reactive';
-      goalInput.style.display = 'none';
-      fetch('/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'reactive' })
-      }).catch(function() {});
-    }
-  });
 
   // ── Thinking checkbox ─────────────────────────────────────
   var thinkingCb = document.getElementById('thinking-checkbox');
