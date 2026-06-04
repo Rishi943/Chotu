@@ -398,16 +398,21 @@ async def local_wait(seconds: int = 5, reason: str = "") -> dict:
 
 
 async def local_speak(text: str, face_pi=None) -> dict:
-    """Run piper TTS on laptop and play via sounddevice. No Pi call.
+    """Run piper TTS on laptop, then play locally or send WAV to Pi.
 
-    face_pi: if provided, animates speak_open/speak_close on OLED during playback.
-    Serialized via _tts_lock — concurrent callers queue up rather than overlap.
+    Set PALIV_SPEAK_OUTPUT=pi to route audio to Pi's /play_wav endpoint
+    (face animation is handled by the Pi bridge in that case).
+    Set PALIV_SPEAK_OUTPUT=laptop (default) to play via sounddevice.
+
+    face_pi: PiClient instance — used for OLED animation on laptop-output mode only.
+    Serialized via _tts_lock so concurrent callers queue rather than overlap.
     """
     import re
+    import struct
     import numpy as np
-    import sounddevice as sd
 
     model = os.environ.get("LOCALIS_PIPER_MODEL", "")
+    speak_output = os.environ.get("PALIV_SPEAK_OUTPUT", "laptop")
     text_tts = re.sub(r"\bChotu\b", "Chaw-too", text, flags=re.IGNORECASE)
     start = time.time()
 
@@ -419,44 +424,66 @@ async def local_speak(text: str, face_pi=None) -> dict:
         stderr=asyncio.subprocess.DEVNULL,
     )
     pcm, _ = await proc.communicate(input=text_tts.encode())
-    audio = np.frombuffer(pcm, dtype=np.int16)
-    pad = np.zeros(int(0.1 * 22050), dtype=np.int16)
-    audio = np.concatenate([pad, audio])
 
-    async with _get_tts_lock():
-        sd.stop()
-        sd.play(audio, samplerate=22050)
+    if speak_output == "pi" and face_pi is not None:
+        # Wrap raw PCM in a WAV header and POST to Pi's /play_wav
+        num_samples = len(pcm) // 2
+        sample_rate = 22050
+        wav_header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + len(pcm), b"WAVE",
+            b"fmt ", 16, 1, 1,
+            sample_rate, sample_rate * 2, 2, 16,
+            b"data", len(pcm),
+        )
+        wav_bytes = wav_header + pcm
 
-        if face_pi is not None:
-            async def _anim(stop_ev: asyncio.Event):
-                frames = ["speak_open", "speak_close"]
-                i = 0
-                while not stop_ev.is_set():
-                    try:
-                        await face_pi.set_face(name=frames[i % 2])
-                    except Exception:
-                        pass
-                    i += 1
-                    await asyncio.sleep(0.125)
+        async with _get_tts_lock():
+            result = await face_pi.play_wav(wav_bytes)
 
-            stop_ev = asyncio.Event()
-            anim_task = asyncio.create_task(_anim(stop_ev))
-            try:
-                await asyncio.to_thread(sd.wait)
-            finally:
-                stop_ev.set()
-                anim_task.cancel()
+        backend = "piper-pi"
+    else:
+        import sounddevice as sd
+        audio = np.frombuffer(pcm, dtype=np.int16)
+        pad = np.zeros(int(0.1 * 22050), dtype=np.int16)
+        audio = np.concatenate([pad, audio])
+
+        async with _get_tts_lock():
+            sd.stop()
+            sd.play(audio, samplerate=22050)
+
+            if face_pi is not None:
+                async def _anim(stop_ev: asyncio.Event):
+                    frames = ["speak_open", "speak_close"]
+                    i = 0
+                    while not stop_ev.is_set():
+                        try:
+                            await face_pi.set_face(name=frames[i % 2])
+                        except Exception:
+                            pass
+                        i += 1
+                        await asyncio.sleep(0.125)
+
+                stop_ev = asyncio.Event()
+                anim_task = asyncio.create_task(_anim(stop_ev))
                 try:
-                    await anim_task
-                except asyncio.CancelledError:
-                    pass
-        else:
-            await asyncio.to_thread(sd.wait)
+                    await asyncio.to_thread(sd.wait)
+                finally:
+                    stop_ev.set()
+                    anim_task.cancel()
+                    try:
+                        await anim_task
+                    except asyncio.CancelledError:
+                        pass
+            else:
+                await asyncio.to_thread(sd.wait)
+
+        backend = "piper-laptop"
 
     ms = int((time.time() - start) * 1000)
     return {
         "ok": True, "tool": "speak",
-        "result": {"text": text, "backend": "piper-laptop"},
+        "result": {"text": text, "backend": backend},
         "duration_ms": ms, "timestamp": time.time(), "error": None,
     }
 
