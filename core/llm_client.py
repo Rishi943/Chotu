@@ -45,6 +45,7 @@ class NormalizedChoice:
 @dataclass
 class LLMResponse:
     choices: list[NormalizedChoice]
+    usage: Optional[dict] = None  # {"prompt_tokens": N, "completion_tokens": N, "timings": {...}}
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +199,16 @@ class LLMClient:
             choices.append(NormalizedChoice(message=NormalizedMessage(
                 content=m.content, tool_calls=tcs,
             )))
-        return LLMResponse(choices=choices)
+        usage = None
+        if raw.usage:
+            usage = {
+                "prompt_tokens": raw.usage.prompt_tokens,
+                "completion_tokens": raw.usage.completion_tokens,
+            }
+            timings = (raw.model_extra or {}).get("timings", {})
+            if timings:
+                usage["timings"] = timings
+        return LLMResponse(choices=choices, usage=usage)
 
     # -----------------------------------------------------------------------
     # Claude (Anthropic) backend
@@ -278,7 +288,13 @@ class LLMClient:
                         arguments=json.dumps(block.input),
                     ),
                 ))
+        usage = None
+        if hasattr(raw, "usage") and raw.usage:
+            usage = {
+                "prompt_tokens": raw.usage.input_tokens,
+                "completion_tokens": raw.usage.output_tokens,
+            }
         return LLMResponse(choices=[NormalizedChoice(message=NormalizedMessage(
             content=content_text,
             tool_calls=tool_calls or None,
-        ))])
+        ))], usage=usage)
