@@ -8,3 +8,4 @@ openwakeword
 sounddevice
 numpy
 tinytuya
+google-genai>=0.3.0
