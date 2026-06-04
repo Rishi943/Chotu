@@ -113,7 +113,7 @@ async def _run(command: str, args: dict) -> dict | str:
                 speed=int(args.get("speed", 80)),
             )
         elif command == "speak":
-            return await _cmd_speak(args.get("text", ""))
+            return await _cmd_speak(args.get("text", ""), pi=pi)
         elif command == "capture_vision":
             return await _cmd_capture(pi)
         elif command == "get_distance":
@@ -131,6 +131,11 @@ async def _run(command: str, args: dict) -> dict | str:
             await asyncio.sleep(secs)
             return {"ok": True, "tool": "wait", "result": {"seconds": secs},
                     "duration_ms": int(secs * 1000), "timestamp": time.time(), "error": None}
+        elif command == "set_face":
+            return await pi.set_face(name=args.get("name", "idle"))
+        elif command == "set_light":
+            from core.spells import cast_spell
+            return await cast_spell(pi, args.get("spell", "lumos"))
         elif command == "log":
             msg = args.get("message", "")
             print(f"[log] {msg}")
@@ -162,13 +167,16 @@ async def _cmd_state(pi) -> str:
     return "\n".join(lines)
 
 
-async def _cmd_speak(text: str) -> dict:
-    from core.tools import local_speak
+async def _cmd_speak(text: str, pi=None) -> dict:
     text = text.strip()
     if not text:
         return {"ok": False, "tool": "speak", "result": {}, "duration_ms": 0,
                 "timestamp": time.time(), "error": "speak: text is empty"}
     print(f'[speaks] "{text}"')
+    if pi is not None:
+        # Use Pi's onboard speaker via /speak (espeak)
+        return await pi.speak(text)
+    from core.tools import local_speak
     return await local_speak(text, face_pi=None)
 
 

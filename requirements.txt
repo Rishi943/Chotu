@@ -8,3 +8,5 @@ openwakeword
 sounddevice
 numpy
 tinytuya
+google-genai>=0.3.0
+dashscope>=1.25.17

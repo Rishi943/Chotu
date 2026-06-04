@@ -4,8 +4,6 @@ import asyncio
 import os
 import time
 
-_WAND_POSE = [[80, 0, 20], [60, 0, -30], [60, 0, -30], [60, 0, -30]]  # FR raised
-_NEUTRAL   = [[60, 0, -30] for _ in range(4)]
 
 
 def _tuya_device():
@@ -73,9 +71,7 @@ async def _play_soundbite(spell: str) -> None:
 
 async def _wand_pose(pi) -> None:
     try:
-        await pi.set_legs(_WAND_POSE, speed=40)
-        await asyncio.sleep(0.5)
-        await pi.set_legs(_NEUTRAL, speed=40)
+        await pi.do_trick("wand")
     except Exception:
         pass  # Pi unreachable — skip pose, proceed to spell
 

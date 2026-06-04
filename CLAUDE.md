@@ -9,11 +9,13 @@ PALIV is an open agent framework for always-on embodied robot pets. Chotu (SunFo
 ## Authoritative docs
 
 - **`PALIV.md`** — framework contract: loop model, tool budgets, hard interrupts, speech contract, tool definitions. Loaded into every system prompt.
-- **`CHOTU.md`** — Chotu's persona: voice, personality probability table, examples, physical constraints. Loaded into every system prompt alongside PALIV.md.
+- **`CHOTU_BASE.md`** — Chotu's persona: voice, personality probability table, examples, physical constraints. Shared across all modes.
+- **`CHOTU_STATELESS.md`** — heartbeat-rhythm rules. Loaded when `PALIV_BRAIN_MODE=stateless` (default).
+- **`CHOTU_LIVE.md`** — continuous-reactivity rules for the persistent backend. Loaded when `PALIV_BRAIN_MODE=live`.
 - **`PALIV_CC_CONTEXT.md`** — pivot context, useful while v1 lands. Drop after the state machine ships.
 - **`docs/superpowers/specs/`** — design specs for in-flight refactors (gitignored except when force-added).
 
-The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md`, loaded by `core/prompts.py`.
+The system prompt at runtime is `PALIV.md + CHOTU_BASE.md + CHOTU_{MODE}.md`, composed by `core/prompts.py` based on `PALIV_BRAIN_MODE`.
 
 ## Stack
 
@@ -42,7 +44,7 @@ The system prompt at runtime is `PALIV.md + "\n\n" + CHOTU.md`, loaded by `core/
 | Path | Side | Purpose |
 |---|---|---|
 | `core/brain.py` | laptop | Live loop, memory, terminal/voice input, tool dispatch |
-| `core/prompts.py` | laptop | Loads PALIV.md + CHOTU.md + HEARTBEAT.md as `SYSTEM_PROMPT` |
+| `core/prompts.py` | laptop | Composes PALIV.md + CHOTU_BASE.md + mode overlay (CHOTU_STATELESS.md or CHOTU_LIVE.md) as `SYSTEM_PROMPT` |
 | `core/heartbeat.py` | laptop | Heartbeat scheduler + tool-chain guard |
 | `core/events.py` | laptop | Event injectors (wake_word, battery_low, stop_word) |
 | `core/habits.py` | laptop | Habit-tool bodies (placeholder; will hold investigate/explore once workflow sub-agent lands) |

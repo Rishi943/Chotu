@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 # Suppress uvicorn access-log noise for high-frequency poll endpoints.
 class _PollFilter(logging.Filter):
-    _MUTED = {"/distance", "/health", "/battery"}
+    _MUTED = {"/distance", "/health", "/battery", "/stream"}
     def filter(self, record):
         msg = record.getMessage()
         return not any(p in msg for p in self._MUTED)
@@ -28,11 +28,13 @@ logging.getLogger("uvicorn.access").addFilter(_PollFilter())
 import cv2
 import pygame
 import robot_hat
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from picrawler import Picrawler
-from robot_hat import Ultrasonic, Pin, ADC
+from robot_hat import Ultrasonic, Pin, ADC, Music
+
+_music = Music()
 from vilib import Vilib
 
 # ---------------------------------------------------------------------------
@@ -44,6 +46,14 @@ time.sleep(0.2)
 
 crawler = Picrawler()
 us = Ultrasonic(Pin("D2"), Pin("D3"))
+
+# Shared latest JPEG frame for /stream consumers (laptop FrameSampler).
+# Re-encoded ~10 FPS by a background grab loop in lifespan.
+_latest_frame_jpeg: bytes | None = None
+_latest_frame_lock = asyncio.Lock()
+_FRAME_GRAB_HZ = 10.0
+_FRAME_GRAB_QUALITY = 80
+
 _bat_adc = ADC("A4")
 pygame.mixer.init()  # must run before speak uses pygame.mixer.Sound
 
@@ -87,9 +97,34 @@ async def lifespan(app: FastAPI):
         logging.info("Startup pose: stand")
     except Exception as e:
         logging.warning(f"Startup stand failed: {e}")
-    yield
-    _face.set_face("sleeping")
-    Vilib.camera_close()
+
+    grab_period = 1.0 / _FRAME_GRAB_HZ
+
+    async def _grab_loop():
+        global _latest_frame_jpeg
+        while True:
+            try:
+                frame = Vilib.img
+                if frame is not None:
+                    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _FRAME_GRAB_QUALITY])
+                    if ok:
+                        async with _latest_frame_lock:
+                            _latest_frame_jpeg = buf.tobytes()
+            except Exception as e:
+                logging.warning(f"frame grab error: {e}")
+            await asyncio.sleep(grab_period)
+
+    grab_task = asyncio.create_task(_grab_loop(), name="frame-grab")
+    try:
+        yield
+    finally:
+        grab_task.cancel()
+        try:
+            await grab_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _face.set_face("sleeping")
+        Vilib.camera_close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -278,6 +313,40 @@ async def set_legs(req: SetLegsRequest):
         return _envelope("set_legs", {"legs": req.legs, "speed": speed}, start, str(e))
 
 
+@app.post("/play_wav")
+async def play_wav(request: Request):
+    """Accept raw WAV bytes from laptop (piper output) and play via pygame."""
+    start = time.time()
+    data = await request.body()
+    logging.info(f"POST /play_wav  bytes={len(data)}")
+    try:
+        loop = asyncio.get_event_loop()
+
+        def _do_play():
+            _face.start_speak_animation()
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    f.write(data)
+                    tmpfile = f.name
+                try:
+                    _music.sound_play(tmpfile)
+                finally:
+                    try:
+                        os.unlink(tmpfile)
+                    except OSError:
+                        pass
+            finally:
+                _face.stop_speak_animation()
+
+        await loop.run_in_executor(None, _do_play)
+        result = _envelope("play_wav", {"bytes": len(data), "played": True}, start)
+        logging.info(f"  play_wav ok ({result['duration_ms']}ms)")
+        return result
+    except Exception as e:
+        logging.error(f"  play_wav error: {e}")
+        return _envelope("play_wav", {"bytes": len(data), "played": False}, start, str(e))
+
+
 @app.post("/speak")
 async def speak(req: SpeakRequest):
     start = time.time()
@@ -292,9 +361,7 @@ async def speak(req: SpeakRequest):
                     tmpfile = f.name
                 try:
                     subprocess.run(["espeak", "-w", tmpfile, "-v", "en", req.text], check=True, timeout=30)
-                    channel = pygame.mixer.Sound(tmpfile).play()
-                    while channel.get_busy():
-                        time.sleep(0.05)
+                    _music.sound_play(tmpfile)
                 finally:
                     try:
                         os.unlink(tmpfile)
@@ -332,10 +399,11 @@ async def capture():
         if frame is None:
             logging.warning("  capture: no frame available")
             return _envelope("capture", {}, start, "no frame available from camera")
-        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        small = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_LINEAR)
+        _, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 40])
         image_b64 = base64.b64encode(buf).decode()
         kb = len(image_b64) * 3 // 4 // 1024
-        logging.info(f"  capture ok (~{kb}KB, {int((time.time()-start)*1000)}ms)")
+        logging.info(f"  capture ok (~{kb}KB 320x240q40, {int((time.time()-start)*1000)}ms)")
         return _envelope("capture", {"image_base64": image_b64}, start)
     except Exception as e:
         logging.error(f"  capture error: {e}")
@@ -468,11 +536,90 @@ def _trick_handwork(speed: int):
     crawler.do_step("stand", 40)
 
 
+def _trick_fluid_swim(speed: int, cycles: int = 5):
+    import math
+    FRAMES = 32  # frames per cycle
+    DT = 0.022   # ~45 fps on-Pi
+
+    crawler.do_step([[60, 0, -60]] * 4, 35)
+    time.sleep(0.6)
+
+    for i in range(cycles * FRAMES):
+        t = (i / FRAMES) * 2 * math.pi
+        def lp(phase):
+            x = round(60 + 22 * math.sin(phase), 1)
+            z = round(-60 + 20 * math.sin(phase + math.pi / 2), 1)
+            return [x, 0, z]
+        # diagonal gait: FL+RR in phase, FR+RL antiphase
+        crawler.do_step([lp(t), lp(t + math.pi), lp(t + math.pi), lp(t)], speed)
+        time.sleep(DT)
+
+    crawler.do_step("stand", 40)
+
+
+def _trick_wand(speed: int):
+    """Raise left-front leg (index 1) to wand position: up, hold, down.
+
+    Uses leg 1 (same stable side as wave) so the tripod (legs 0, 2, 3) doesn't tip.
+    Leg 0 and 3 are diagonal (Y_DEFAULT=45, Z_DEFAULT=-50); leg 2 is forward (Y_START=0).
+    Transition uses Z_UP=-30 to lift leg 1 off the ground before raising to Z_WAVE=60.
+    No initial stand — already standing. No animated stand at end — explicit return.
+    """
+    stand_diag = [45, 45, -50]  # legs 0, 3 (Z_DEFAULT, diagonal)
+    stand_fwd  = [45,  0, -50]  # leg 2 (Z_DEFAULT, forward)
+
+    transition = [70,  0, -30]  # leg 1: lift off (X_TURN, Y_START, Z_UP)
+    raised     = [ 0, 120,  60]  # leg 1: wand position (X_START, Y_WAVE, Z_WAVE)
+
+    crawler.do_step([stand_diag, transition, stand_fwd, stand_diag], speed)
+    time.sleep(0.3)
+
+    crawler.do_step([stand_diag, raised, stand_fwd, stand_diag], speed)
+    time.sleep(1.2)  # hold — spell fires here
+
+    crawler.do_step([stand_diag, transition, stand_fwd, stand_diag], speed)
+    time.sleep(0.3)
+
+    crawler.do_step([stand_diag, stand_fwd, stand_fwd, stand_diag], speed)
+
+
+def _trick_point(speed: int):
+    """Extend left-front leg (index 1) forward as a point while standing, hold, return.
+
+    Uses leg 1 (same stable side as wave) so the tripod doesn't tip.
+    Transition uses Z_UP=-30 to lift off; pointed uses Z=0 (mid-height, horizontal).
+    No initial stand — already standing. No animated stand at end — explicit return.
+    """
+    stand_diag = [45, 45, -50]  # legs 0, 3 (Z_DEFAULT, diagonal)
+    stand_fwd  = [45,  0, -50]  # leg 2 (Z_DEFAULT, forward)
+
+    transition = [70,  0, -30]  # leg 1: lift off (X_TURN, Y_START, Z_UP)
+    pointed    = [ 0, 120,   0]  # leg 1: extended forward, mid-height — the point
+
+    crawler.do_step([stand_diag, transition, stand_fwd, stand_diag], speed)
+    time.sleep(0.3)
+
+    crawler.do_step([stand_diag, pointed, stand_fwd, stand_diag], speed)
+    time.sleep(2.5)
+
+    crawler.do_step([stand_diag, transition, stand_fwd, stand_diag], speed)
+    time.sleep(0.3)
+
+    crawler.do_step([stand_diag, stand_fwd, stand_fwd, stand_diag], speed)
+
+
+def _trick_wave(speed: int):
+    crawler.do_action("wave", step=1, speed=speed)
+
+
 _TRICKS = {
-    "pushup":   _trick_pushup,
-    "twist":    _trick_twist,
-    "swimming": _trick_swimming,
-    "handwork": _trick_handwork,
+    "pushup":      _trick_pushup,
+    "twist":       _trick_twist,
+    "swimming":    _trick_swimming,
+    "handwork":    _trick_handwork,
+    "fluid_swim":  _trick_fluid_swim,
+    "wand":        _trick_wand,    # internal — triggered by lumos/nox/avada_kedavra spells
+    "wave":        _trick_wave,
 }
 
 
@@ -500,17 +647,20 @@ async def trick(req: TrickRequest):
 # ---------------------------------------------------------------------------
 
 async def _mjpeg_frames():
+    """Stream the shared latest JPEG. Emits Content-Length so consumers
+    (laptop FrameSampler) can length-prefix-parse each part."""
+    period = 1.0 / _FRAME_GRAB_HZ
     while True:
-        frame = Vilib.img
+        async with _latest_frame_lock:
+            frame = _latest_frame_jpeg
         if frame is not None:
-            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            if ok:
-                yield (
-                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                    + buf.tobytes()
-                    + b"\r\n"
-                )
-        await asyncio.sleep(0.05)
+            header = (
+                f"--frame\r\n"
+                f"Content-Type: image/jpeg\r\n"
+                f"Content-Length: {len(frame)}\r\n\r\n"
+            ).encode("ascii")
+            yield header + frame + b"\r\n"
+        await asyncio.sleep(period)
 
 
 @app.get("/stream")

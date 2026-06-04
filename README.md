@@ -193,7 +193,9 @@ core/
   voice.py          Wake word detection + Whisper STT
   gui_server.py     Browser UI server (FastAPI + SSE)
 PALIV.md            Framework contract (states, tool budgets, hard interrupts)
-CHOTU.md            Chotu persona (loaded with PALIV.md as system prompt)
+CHOTU_BASE.md       Chotu persona (shared; loaded with PALIV.md as system prompt)
+CHOTU_STATELESS.md  Heartbeat-rhythm overlay (stateless mode, default)
+CHOTU_LIVE.md       Continuous-reactivity overlay (live mode)
 habits/             PLAY-state skill prompts (scaffolded for next session)
 pi_bridge/
   server.py         Pi-side FastAPI bridge (servos, camera, sensors)

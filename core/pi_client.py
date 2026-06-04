@@ -34,6 +34,17 @@ class PiClient:
     async def speak(self, text: str) -> dict:
         return await self._post("/speak", "speak", {"text": text})
 
+    async def play_wav(self, wav_bytes: bytes) -> dict:
+        try:
+            r = await self._slow.post(
+                "/play_wav",
+                content=wav_bytes,
+                headers={"content-type": "application/octet-stream"},
+            )
+            return r.json()
+        except Exception as e:
+            return self._error_envelope("play_wav", e)
+
     async def get_distance(self) -> dict:
         return await self._get("/distance", "get_distance")
 

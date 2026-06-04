@@ -72,17 +72,9 @@ async def chat(request: Request):
     body = await request.json()
     text = body.get("text", "")
     if text:
-        brain.input_queue.put_nowait(text)
+        brain.input_queue.put_nowait(brain.wrap_user_input(text))
     return JSONResponse({"ok": True})
 
-
-@app.post("/mode")
-async def mode(request: Request):
-    body = await request.json()
-    mode_str = body.get("mode", "reactive")
-    goal_text = body.get("goal_text")
-    await brain.set_mode(mode_str, goal_text)
-    return JSONResponse({"ok": True})
 
 
 @app.post("/thinking")

@@ -17,6 +17,7 @@ def _get_tts_lock() -> asyncio.Lock:
     return _tts_lock
 
 from core.pi_client import PiClient
+from core.motion_lock import MotionLock
 
 _ALL_SPELLS = ["lumos", "nox", "avada_kedavra"]
 _raw = os.getenv("SPELLS_ENABLED", "lumos,nox,avada_kedavra")
@@ -345,9 +346,21 @@ async def _blocked_coro(tool_name: str) -> dict:
 
 # --- Vision tool ---
 
-async def capture_vision_tool(pi: PiClient) -> dict:
-    """Fetch a JPEG from the Pi camera. Brain loop injects it directly into the LLM context."""
+async def capture_vision_tool(pi: PiClient, frame_sampler=None) -> dict:
+    """Fetch a JPEG. In live mode the FrameSampler buffer is read directly
+    (sub-millisecond, no Pi round-trip). Falls back to pi.capture() when no
+    sampler is wired or its buffer is empty."""
     start = time.time()
+    if frame_sampler is not None:
+        jpeg = frame_sampler.latest()
+        if jpeg is not None:
+            import base64 as _b64
+            return {
+                "ok": True, "tool": "capture_vision",
+                "result": {"image_base64": _b64.b64encode(jpeg).decode("ascii"), "format": "jpeg"},
+                "duration_ms": int((time.time() - start) * 1000),
+                "timestamp": time.time(), "error": None,
+            }
     capture = await pi.capture()
     if not capture.get("ok"):
         return capture  # propagate pi error as-is
@@ -398,16 +411,21 @@ async def local_wait(seconds: int = 5, reason: str = "") -> dict:
 
 
 async def local_speak(text: str, face_pi=None) -> dict:
-    """Run piper TTS on laptop and play via sounddevice. No Pi call.
+    """Run piper TTS on laptop, then play locally or send WAV to Pi.
 
-    face_pi: if provided, animates speak_open/speak_close on OLED during playback.
-    Serialized via _tts_lock — concurrent callers queue up rather than overlap.
+    Set PALIV_SPEAK_OUTPUT=pi to route audio to Pi's /play_wav endpoint
+    (face animation is handled by the Pi bridge in that case).
+    Set PALIV_SPEAK_OUTPUT=laptop (default) to play via sounddevice.
+
+    face_pi: PiClient instance — used for OLED animation on laptop-output mode only.
+    Serialized via _tts_lock so concurrent callers queue rather than overlap.
     """
     import re
+    import struct
     import numpy as np
-    import sounddevice as sd
 
     model = os.environ.get("LOCALIS_PIPER_MODEL", "")
+    speak_output = os.environ.get("PALIV_SPEAK_OUTPUT", "laptop")
     text_tts = re.sub(r"\bChotu\b", "Chaw-too", text, flags=re.IGNORECASE)
     start = time.time()
 
@@ -419,44 +437,66 @@ async def local_speak(text: str, face_pi=None) -> dict:
         stderr=asyncio.subprocess.DEVNULL,
     )
     pcm, _ = await proc.communicate(input=text_tts.encode())
-    audio = np.frombuffer(pcm, dtype=np.int16)
-    pad = np.zeros(int(0.1 * 22050), dtype=np.int16)
-    audio = np.concatenate([pad, audio])
 
-    async with _get_tts_lock():
-        sd.stop()
-        sd.play(audio, samplerate=22050)
+    if speak_output == "pi" and face_pi is not None:
+        # Wrap raw PCM in a WAV header and POST to Pi's /play_wav
+        num_samples = len(pcm) // 2
+        sample_rate = 22050
+        wav_header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + len(pcm), b"WAVE",
+            b"fmt ", 16, 1, 1,
+            sample_rate, sample_rate * 2, 2, 16,
+            b"data", len(pcm),
+        )
+        wav_bytes = wav_header + pcm
 
-        if face_pi is not None:
-            async def _anim(stop_ev: asyncio.Event):
-                frames = ["speak_open", "speak_close"]
-                i = 0
-                while not stop_ev.is_set():
-                    try:
-                        await face_pi.set_face(name=frames[i % 2])
-                    except Exception:
-                        pass
-                    i += 1
-                    await asyncio.sleep(0.125)
+        async with _get_tts_lock():
+            result = await face_pi.play_wav(wav_bytes)
 
-            stop_ev = asyncio.Event()
-            anim_task = asyncio.create_task(_anim(stop_ev))
-            try:
-                await asyncio.to_thread(sd.wait)
-            finally:
-                stop_ev.set()
-                anim_task.cancel()
+        backend = "piper-pi"
+    else:
+        import sounddevice as sd
+        audio = np.frombuffer(pcm, dtype=np.int16)
+        pad = np.zeros(int(0.1 * 22050), dtype=np.int16)
+        audio = np.concatenate([pad, audio])
+
+        async with _get_tts_lock():
+            sd.stop()
+            sd.play(audio, samplerate=22050)
+
+            if face_pi is not None:
+                async def _anim(stop_ev: asyncio.Event):
+                    frames = ["speak_open", "speak_close"]
+                    i = 0
+                    while not stop_ev.is_set():
+                        try:
+                            await face_pi.set_face(name=frames[i % 2])
+                        except Exception:
+                            pass
+                        i += 1
+                        await asyncio.sleep(0.125)
+
+                stop_ev = asyncio.Event()
+                anim_task = asyncio.create_task(_anim(stop_ev))
                 try:
-                    await anim_task
-                except asyncio.CancelledError:
-                    pass
-        else:
-            await asyncio.to_thread(sd.wait)
+                    await asyncio.to_thread(sd.wait)
+                finally:
+                    stop_ev.set()
+                    anim_task.cancel()
+                    try:
+                        await anim_task
+                    except asyncio.CancelledError:
+                        pass
+            else:
+                await asyncio.to_thread(sd.wait)
+
+        backend = "piper-laptop"
 
     ms = int((time.time() - start) * 1000)
     return {
         "ok": True, "tool": "speak",
-        "result": {"text": text, "backend": "piper-laptop"},
+        "result": {"text": text, "backend": backend},
         "duration_ms": ms, "timestamp": time.time(), "error": None,
     }
 
@@ -522,16 +562,62 @@ async def _do_speak(text: str = "", face_pi=None, muted: bool = False) -> dict:
     }
 
 
-def build_dispatch(pi: PiClient, estop: asyncio.Event, *, mute: bool = False) -> dict:
-    """Build tool name -> async callable dispatch map."""
+def _motion_eta_ms(tool: str, kw: dict) -> int:
+    """Rough motion duration estimates, used by MotionLock for rejection messages."""
+    if tool == "move":
+        return max(1500, int(kw.get("steps", 1)) * 800)
+    if tool == "do_trick":
+        return 7000  # tricks are 5–10 s per CLAUDE.md
+    return 1200  # pose, set_legs — single pose change
+
+
+def _gated(motion_lock: MotionLock | None, tool: str, fn):
+    """Wrap a motion-tool dispatch callable with MotionLock.
+
+    If no lock is wired, runs unchanged. If the lock is held by another motion,
+    returns a rejection envelope (model sees it in the tool-result stream and
+    can replan). Otherwise acquires for the duration of the call."""
+    async def _run(**kw):
+        if motion_lock is None:
+            return await fn(**kw)
+        eta = _motion_eta_ms(tool, kw)
+        rejection = motion_lock.try_acquire(tool, kw, eta_ms=eta)
+        if rejection is not None:
+            return rejection
+        async with motion_lock.acquire(tool, kw, eta_ms=eta) as ok:
+            if not ok:
+                # Raced with another caller — re-probe for a fresh rejection.
+                return motion_lock.try_acquire(tool, kw, eta_ms=eta) or {
+                    "ok": False, "tool": tool, "result": {}, "duration_ms": 0,
+                    "timestamp": time.time(), "error": "motion contention",
+                }
+            return await fn(**kw)
+    return _run
+
+
+def build_dispatch(
+    pi: PiClient,
+    estop: asyncio.Event,
+    *,
+    mute: bool = False,
+    motion_lock: MotionLock | None = None,
+    frame_sampler=None,
+) -> dict:
+    """Build tool name -> async callable dispatch map.
+
+    motion_lock: enforces single-motion-at-a-time. When passed, move/pose/
+        set_legs/do_trick reject overlapping calls with an envelope.
+    frame_sampler: if provided, capture_vision reads its buffer instead of
+        round-tripping to /capture.
+    """
     return {
-        "move":           lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_coro("move"),
-        "pose":           lambda **kw: pi.pose(**kw),
-        "set_legs":       lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
-        "do_trick":       lambda **kw: pi.do_trick(**kw),
+        "move":           lambda **kw: _gated(motion_lock, "move",     lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
+        "pose":           lambda **kw: _gated(motion_lock, "pose",     lambda **k: pi.pose(**k))(**kw),
+        "set_legs":       lambda **kw: _gated(motion_lock, "set_legs", lambda **k: pi.set_legs(**k))(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
+        "do_trick":       lambda **kw: _gated(motion_lock, "do_trick", lambda **k: pi.do_trick(**k))(**kw),
         "get_distance":   lambda **kw: pi.get_distance(),
         "get_battery":    lambda **kw: pi.get_battery(),
-        "capture_vision": lambda **kw: capture_vision_tool(pi),
+        "capture_vision": lambda **kw: capture_vision_tool(pi, frame_sampler=frame_sampler),
         "set_face":       lambda **kw: pi.set_face(**kw),
         "wait":           lambda **kw: local_wait(**kw),
         "get_perception": lambda **kw: pi.get_perception(**kw),
