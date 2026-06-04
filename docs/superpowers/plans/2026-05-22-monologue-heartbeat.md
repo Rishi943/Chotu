@@ -2,13 +2,31 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the IDLE/PLAY/LISTEN state machine and picker model with a single monologue-driven brain loop on a 10s heartbeat, with `speak`, `investigate`, and `sweep` as new tools.
+**Goal:** Replace the IDLE/PLAY/LISTEN state machine and picker model with a single monologue-driven brain loop on a 10s heartbeat, with `speak` and `sweep` as new tools.
 
-**Architecture:** One async loop in `core/brain.py` consumes an `input_queue` of `(kind, text)` items. A new `core/heartbeat.py` produces `[heartbeat]` items every 10s when no tool chain is active. Wake-word and battery/stop events also inject items. The LLM's `content` is now a free-form monologue (not parsed for speech); speech moves to a `speak(text)` tool. Habit-tools `investigate` and `sweep` are scripted multi-step Pi sequences that look like single tool calls to the LLM.
+**Architecture:** One async loop in `core/brain.py` consumes an `input_queue` of `(kind, text)` items. A new `core/heartbeat.py` produces `[heartbeat]` items every 10s when no tool chain is active. Wake-word and battery/stop events also inject items. The LLM's `content` is now a free-form monologue (not parsed for speech); speech moves to a `speak(text)` tool.
 
 **Tech Stack:** Python 3.12, asyncio, OpenAI-compatible tool-calling via `LLMClient`, FastAPI on Pi (unchanged), pytest+pytest-asyncio.
 
 **Spec:** `docs/superpowers/specs/2026-05-22-monologue-heartbeat-design.md`
+
+---
+
+## Status (2026-05-22)
+
+| Task | Status | Commit |
+|---|---|---|
+| Task 0: speak becomes a tool | ✅ DONE | `d159486` + `48d60ca` |
+| Task 1: tagged input queue + tool-chain guard | ✅ DONE | `8500975` |
+| Task 2: heartbeat scheduler firing | ✅ DONE | `8e10591` |
+| Task 3: HEARTBEAT.md + boot message | ✅ DONE | `39147c7` |
+| Task 4: `investigate` habit-tool | ⚠️ PARTIAL — `core/habits.py` body written + tests pass, but tool excluded from `TOOL_SCHEMAS`/dispatch. Will be redesigned as workflow sub-agent after Task 8. | `a06059d` |
+| Task 5: `sweep` | ⏳ next | — |
+| Task 6: event triggers | ⏳ pending | — |
+| Task 7: rolling context window | ⏳ pending | — |
+| Task 8: kill picker + doc collapse | ⏳ pending | — |
+
+> **Note:** `investigate` and `explore` (future rename of `sweep`) are being redesigned as workflow sub-agents. See spec: `docs/superpowers/specs/2026-05-22-workflow-agent-investigate-design.md`. Implement after Task 8 once Chotu is running end-to-end on the heartbeat model.
 
 ---
 
@@ -1557,4 +1575,15 @@ git commit -m "chore: kill picker/habits-scaffold; rewrite PALIV.md for monologu
 
 ## Done
 
-After Task 8, chotu runs on the new model: monologue-driven, 10s heartbeat, habit-tools, event-driven interrupts, no state machine. PALIV.md and CLAUDE.md describe the system that actually exists.
+After Task 8, Chotu runs on the new model: monologue-driven, 10s heartbeat, event-driven interrupts, no state machine. PALIV.md and CLAUDE.md describe the system that actually exists.
+
+## Next after Task 8: Workflow sub-agent + investigate + explore
+
+With Chotu running end-to-end, implement the workflow sub-agent architecture:
+
+1. Read spec: `docs/superpowers/specs/2026-05-22-workflow-agent-investigate-design.md`
+2. Build `core/workflow_agent.py` — universal sub-agent loop with `conclude()` tool
+3. Create `workflows/` folder at repo root; add `workflows/investigate.md`
+4. Redesign `investigate` in `core/habits.py` to use WorkflowAgent
+5. Redesign `sweep` → `explore` as a workflow sub-agent (separate spec needed)
+6. Re-register `investigate` (and later `explore`) in `TOOL_SCHEMAS` once workflow agent is solid
