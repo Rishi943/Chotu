@@ -1,8 +1,8 @@
 """Chotu's brain — live loop, memory buffer, terminal input.
 
-Loads PALIV.md (framework contract) and CHOTU.md (persona) into the system
-prompt at import time. State machine (IDLE/PLAY/LISTEN) will land in a later
-session; today this runs as a single reactive-equivalent loop.
+Loads PALIV.md (framework contract) + CHOTU_BASE.md (persona) + a
+mode-specific overlay (CHOTU_STATELESS.md or CHOTU_LIVE.md per
+PALIV_BRAIN_MODE) into the system prompt at import time.
 """
 
 import asyncio
