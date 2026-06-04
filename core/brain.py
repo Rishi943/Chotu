@@ -195,7 +195,17 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 # --- Dispatch map ---
 
-dispatch_map = build_dispatch(pi, estop, mute=MUTE)
+# motion_lock: enforces single-motion-at-a-time across move/pose/set_legs/do_trick.
+# Lives at module scope so events.py and the future live-mode FrameSampler can
+# observe its state. frame_sampler is wired in main() once the backend is up.
+from core.motion_lock import MotionLock
+
+motion_lock = MotionLock()
+_frame_sampler_ref: dict = {"sampler": None}
+
+dispatch_map = build_dispatch(
+    pi, estop, mute=MUTE, motion_lock=motion_lock, frame_sampler=None,
+)
 dispatch_map["explore"] = lambda **kw: dispatch_explore_tool(pi, kw)
 
 

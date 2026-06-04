@@ -17,6 +17,7 @@ def _get_tts_lock() -> asyncio.Lock:
     return _tts_lock
 
 from core.pi_client import PiClient
+from core.motion_lock import MotionLock
 
 _ALL_SPELLS = ["lumos", "nox", "avada_kedavra"]
 _raw = os.getenv("SPELLS_ENABLED", "lumos,nox,avada_kedavra")
@@ -345,9 +346,21 @@ async def _blocked_coro(tool_name: str) -> dict:
 
 # --- Vision tool ---
 
-async def capture_vision_tool(pi: PiClient) -> dict:
-    """Fetch a JPEG from the Pi camera. Brain loop injects it directly into the LLM context."""
+async def capture_vision_tool(pi: PiClient, frame_sampler=None) -> dict:
+    """Fetch a JPEG. In live mode the FrameSampler buffer is read directly
+    (sub-millisecond, no Pi round-trip). Falls back to pi.capture() when no
+    sampler is wired or its buffer is empty."""
     start = time.time()
+    if frame_sampler is not None:
+        jpeg = frame_sampler.latest()
+        if jpeg is not None:
+            import base64 as _b64
+            return {
+                "ok": True, "tool": "capture_vision",
+                "result": {"image_base64": _b64.b64encode(jpeg).decode("ascii"), "format": "jpeg"},
+                "duration_ms": int((time.time() - start) * 1000),
+                "timestamp": time.time(), "error": None,
+            }
     capture = await pi.capture()
     if not capture.get("ok"):
         return capture  # propagate pi error as-is
@@ -549,16 +562,62 @@ async def _do_speak(text: str = "", face_pi=None, muted: bool = False) -> dict:
     }
 
 
-def build_dispatch(pi: PiClient, estop: asyncio.Event, *, mute: bool = False) -> dict:
-    """Build tool name -> async callable dispatch map."""
+def _motion_eta_ms(tool: str, kw: dict) -> int:
+    """Rough motion duration estimates, used by MotionLock for rejection messages."""
+    if tool == "move":
+        return max(1500, int(kw.get("steps", 1)) * 800)
+    if tool == "do_trick":
+        return 7000  # tricks are 5–10 s per CLAUDE.md
+    return 1200  # pose, set_legs — single pose change
+
+
+def _gated(motion_lock: MotionLock | None, tool: str, fn):
+    """Wrap a motion-tool dispatch callable with MotionLock.
+
+    If no lock is wired, runs unchanged. If the lock is held by another motion,
+    returns a rejection envelope (model sees it in the tool-result stream and
+    can replan). Otherwise acquires for the duration of the call."""
+    async def _run(**kw):
+        if motion_lock is None:
+            return await fn(**kw)
+        eta = _motion_eta_ms(tool, kw)
+        rejection = motion_lock.try_acquire(tool, kw, eta_ms=eta)
+        if rejection is not None:
+            return rejection
+        async with motion_lock.acquire(tool, kw, eta_ms=eta) as ok:
+            if not ok:
+                # Raced with another caller — re-probe for a fresh rejection.
+                return motion_lock.try_acquire(tool, kw, eta_ms=eta) or {
+                    "ok": False, "tool": tool, "result": {}, "duration_ms": 0,
+                    "timestamp": time.time(), "error": "motion contention",
+                }
+            return await fn(**kw)
+    return _run
+
+
+def build_dispatch(
+    pi: PiClient,
+    estop: asyncio.Event,
+    *,
+    mute: bool = False,
+    motion_lock: MotionLock | None = None,
+    frame_sampler=None,
+) -> dict:
+    """Build tool name -> async callable dispatch map.
+
+    motion_lock: enforces single-motion-at-a-time. When passed, move/pose/
+        set_legs/do_trick reject overlapping calls with an envelope.
+    frame_sampler: if provided, capture_vision reads its buffer instead of
+        round-tripping to /capture.
+    """
     return {
-        "move":           lambda **kw: pi.move(**kw) if not estop.is_set() else _blocked_coro("move"),
-        "pose":           lambda **kw: pi.pose(**kw),
-        "set_legs":       lambda **kw: pi.set_legs(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
-        "do_trick":       lambda **kw: pi.do_trick(**kw),
+        "move":           lambda **kw: _gated(motion_lock, "move",     lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
+        "pose":           lambda **kw: _gated(motion_lock, "pose",     lambda **k: pi.pose(**k))(**kw),
+        "set_legs":       lambda **kw: _gated(motion_lock, "set_legs", lambda **k: pi.set_legs(**k))(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
+        "do_trick":       lambda **kw: _gated(motion_lock, "do_trick", lambda **k: pi.do_trick(**k))(**kw),
         "get_distance":   lambda **kw: pi.get_distance(),
         "get_battery":    lambda **kw: pi.get_battery(),
-        "capture_vision": lambda **kw: capture_vision_tool(pi),
+        "capture_vision": lambda **kw: capture_vision_tool(pi, frame_sampler=frame_sampler),
         "set_face":       lambda **kw: pi.set_face(**kw),
         "wait":           lambda **kw: local_wait(**kw),
         "get_perception": lambda **kw: pi.get_perception(**kw),

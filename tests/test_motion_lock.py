@@ -18,14 +18,14 @@ async def test_acquire_when_free():
 
 async def test_reject_when_held_returns_envelope():
     lock = MotionLock()
-    async with lock.acquire("trick", {"name": "pushup"}, eta_ms=6000):
+    async with lock.acquire("do_trick", {"name": "pushup"}, eta_ms=6000):
         rejection = lock.try_acquire("move", {"direction": "forward"}, eta_ms=3000)
         assert rejection is not None
         for key in REJECTED_ENVELOPE_KEYS:
             assert key in rejection
         assert rejection["ok"] is False
         assert "motion in progress" in rejection["error"]
-        assert "trick" in rejection["error"]
+        assert "do_trick" in rejection["error"]
 
 
 async def test_released_after_context_exit():
@@ -39,10 +39,10 @@ async def test_released_after_context_exit():
 async def test_metadata_reports_active_tool():
     lock = MotionLock()
     assert lock.active is None
-    async with lock.acquire("trick", {"name": "wave"}, eta_ms=4000):
+    async with lock.acquire("do_trick", {"name": "wave"}, eta_ms=4000):
         active = lock.active
         assert active is not None
-        assert active["tool"] == "trick"
+        assert active["tool"] == "do_trick"
         assert active["args"] == {"name": "wave"}
         assert active["eta_ms"] == 4000
         assert isinstance(active["started_at"], float)

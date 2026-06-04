@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 
-MOTION_TOOLS = frozenset({"move", "turn", "set_legs", "pose", "trick"})
+MOTION_TOOLS = frozenset({"move", "set_legs", "pose", "do_trick"})
 
 REJECTED_ENVELOPE_KEYS = ("ok", "tool", "result", "duration_ms", "timestamp", "error")
 
@@ -70,7 +70,7 @@ class MotionLock:
         active_tool = a.get("tool", "?")
         active_args = a.get("args", {})
         arg_hint = ""
-        if active_tool == "trick" and "name" in active_args:
+        if active_tool == "do_trick" and "name" in active_args:
             arg_hint = f"({active_args['name']})"
         elif active_tool == "move" and "direction" in active_args:
             arg_hint = f"({active_args['direction']})"
