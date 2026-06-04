@@ -28,7 +28,6 @@ load_dotenv()
 
 from core.backend import AssistantText, BackendError, SessionEnded, ToolCall
 from core.frame_sampler import FrameSampler
-from core.gemini_live_backend import GeminiLiveBackend
 from core.motion_lock import MotionLock
 from core.pi_client import PiClient
 from core.prompts import load_system_prompt
@@ -104,7 +103,20 @@ async def main() -> None:
     system_prompt = load_system_prompt("live")
     print("Chotu live brain starting...")
     print(f"  Pi:    {PI_HOST}")
-    print(f"  model: {os.getenv('PALIV_GEMINI_MODEL', 'gemini-3.1-flash-live-preview')}")
+
+    provider = os.getenv("PALIV_LIVE_PROVIDER", "qwen").lower()
+    if provider == "qwen":
+        from core.qwen_omni_backend import QwenOmniBackend
+        backend = QwenOmniBackend(system_prompt=system_prompt, tool_schemas=TOOL_SCHEMAS)
+        backend_name = os.getenv("PALIV_QWEN_OMNI_MODEL", "qwen3.5-omni-flash-realtime")
+    elif provider == "gemini":
+        from core.gemini_live_backend import GeminiLiveBackend
+        backend = GeminiLiveBackend(system_prompt=system_prompt, tool_schemas=TOOL_SCHEMAS)
+        backend_name = os.getenv("PALIV_GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+    else:
+        raise SystemExit(f"PALIV_LIVE_PROVIDER must be 'qwen' or 'gemini', got {provider!r}")
+
+    print(f"  provider: {provider} ({backend_name})")
 
     health = await pi.health()
     if health.get("ok"):
@@ -112,7 +124,6 @@ async def main() -> None:
     else:
         print(f"  Pi bridge: NOT reachable ({health.get('error', '?')}). Tool calls will error.")
 
-    backend = GeminiLiveBackend(system_prompt=system_prompt, tool_schemas=TOOL_SCHEMAS)
     await backend.start()
 
     stream_url = PI_HOST.rstrip("/") + "/stream"
