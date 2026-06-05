@@ -149,6 +149,7 @@ def enforce_frame_window(memory: list[dict], keep: int = None) -> None:
     description). Mutates `memory` in place. Idempotent. No-op when frames <= keep."""
     keep = FRAME_WINDOW if keep is None else keep
     frame_idxs = [i for i, m in enumerate(memory) if _is_frame_msg(m)]
+    # keep<=0 must strip ALL frames; frame_idxs[:-0] would wrongly strip none, so guard it.
     to_strip = frame_idxs if keep <= 0 else frame_idxs[:-keep]
     for i in to_strip:
         memory[i] = {
