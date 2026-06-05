@@ -437,6 +437,7 @@ async def _process(item: dict):
     messages = build_messages(user_input, origin=kind)
     if kind == "heartbeat":
         evict_old_heartbeats(messages)
+    prefix_len = len(messages) - 1  # index of the current user msg; turn content starts here
     dbg(f"sending {len(messages)} messages to LLM")
 
     try:
@@ -589,11 +590,15 @@ async def _process(item: dict):
     final_text = response.choices[0].message.content
     _fire_face("idle")
 
-    if kind == "heartbeat" and iterations == 0:
-        return
+    # The final (no-tool) assistant reply is not appended inside the loop, so add it
+    # now; guarantee a content field for resend validity.
+    final_msg = llm_client.format_assistant_message(response)
+    final_msg.setdefault("content", final_text or "")
+    messages.append(final_msg)
 
-    memory.append({"role": "user", "content": user_input, "_origin": kind})
-    memory.append({"role": "assistant", "content": final_text or "", "_origin": kind})
+    # Persist the whole turn (user + assistant/tool_calls + tool results + frames +
+    # replies). Empty heartbeats persist nothing; frame window bounds images to 4.
+    persist_turn(memory, messages[prefix_len:], kind, iterations)
 
 
 
