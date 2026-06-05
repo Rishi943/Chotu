@@ -34,7 +34,7 @@ MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 HEARTBEAT_WINDOW = int(os.getenv("PALIV_HEARTBEAT_WINDOW", "5"))
-PALIV_FRAME_WINDOW = int(os.getenv("PALIV_FRAME_WINDOW", "4"))
+FRAME_WINDOW = int(os.getenv("PALIV_FRAME_WINDOW", "4"))
 
 
 listen_and_transcribe = None
@@ -147,7 +147,7 @@ def enforce_frame_window(memory: list[dict], keep: int = None) -> None:
     """Keep image bytes only for the newest `keep` frames; replace older frames
     with a tiny text stub (their meaning survives in the following assistant
     description). Mutates `memory` in place. Idempotent. No-op when frames <= keep."""
-    keep = PALIV_FRAME_WINDOW if keep is None else keep
+    keep = FRAME_WINDOW if keep is None else keep
     frame_idxs = [i for i, m in enumerate(memory) if _is_frame_msg(m)]
     to_strip = frame_idxs if keep <= 0 else frame_idxs[:-keep]
     for i in to_strip:
