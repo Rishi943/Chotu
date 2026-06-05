@@ -346,21 +346,9 @@ async def _blocked_coro(tool_name: str) -> dict:
 
 # --- Vision tool ---
 
-async def capture_vision_tool(pi: PiClient, frame_sampler=None) -> dict:
-    """Fetch a JPEG. In live mode the FrameSampler buffer is read directly
-    (sub-millisecond, no Pi round-trip). Falls back to pi.capture() when no
-    sampler is wired or its buffer is empty."""
+async def capture_vision_tool(pi: PiClient) -> dict:
+    """Fetch a JPEG from the Pi's forward camera."""
     start = time.time()
-    if frame_sampler is not None:
-        jpeg = frame_sampler.latest()
-        if jpeg is not None:
-            import base64 as _b64
-            return {
-                "ok": True, "tool": "capture_vision",
-                "result": {"image_base64": _b64.b64encode(jpeg).decode("ascii"), "format": "jpeg"},
-                "duration_ms": int((time.time() - start) * 1000),
-                "timestamp": time.time(), "error": None,
-            }
     capture = await pi.capture()
     if not capture.get("ok"):
         return capture  # propagate pi error as-is
@@ -601,14 +589,11 @@ def build_dispatch(
     *,
     mute: bool = False,
     motion_lock: MotionLock | None = None,
-    frame_sampler=None,
 ) -> dict:
     """Build tool name -> async callable dispatch map.
 
     motion_lock: enforces single-motion-at-a-time. When passed, move/pose/
         set_legs/do_trick reject overlapping calls with an envelope.
-    frame_sampler: if provided, capture_vision reads its buffer instead of
-        round-tripping to /capture.
     """
     return {
         "move":           lambda **kw: _gated(motion_lock, "move",     lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
@@ -617,7 +602,7 @@ def build_dispatch(
         "do_trick":       lambda **kw: _gated(motion_lock, "do_trick", lambda **k: pi.do_trick(**k))(**kw),
         "get_distance":   lambda **kw: pi.get_distance(),
         "get_battery":    lambda **kw: pi.get_battery(),
-        "capture_vision": lambda **kw: capture_vision_tool(pi, frame_sampler=frame_sampler),
+        "capture_vision": lambda **kw: capture_vision_tool(pi),
         "set_face":       lambda **kw: pi.set_face(**kw),
         "wait":           lambda **kw: local_wait(**kw),
         "get_perception": lambda **kw: pi.get_perception(**kw),

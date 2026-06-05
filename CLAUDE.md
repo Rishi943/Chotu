@@ -9,18 +9,15 @@ PALIV is an open agent framework for always-on embodied robot pets. Chotu (SunFo
 ## Authoritative docs
 
 - **`PALIV.md`** — framework contract: loop model, tool budgets, hard interrupts, speech contract, tool definitions. Loaded into every system prompt.
-- **`CHOTU_BASE.md`** — Chotu's persona: voice, personality probability table, examples, physical constraints. Shared across all modes.
-- **`CHOTU_STATELESS.md`** — heartbeat-rhythm rules. Loaded when `PALIV_BRAIN_MODE=stateless` (default).
-- **`CHOTU_LIVE.md`** — continuous-reactivity rules for the persistent backend. Loaded when `PALIV_BRAIN_MODE=live`.
-- **`PALIV_CC_CONTEXT.md`** — pivot context, useful while v1 lands. Drop after the state machine ships.
+- **`CHOTU_BASE.md`** — Chotu's persona (voice, personality table, examples, physical constraints) plus the heartbeat-rhythm rules.
 - **`docs/superpowers/specs/`** — design specs for in-flight refactors (gitignored except when force-added).
 
-The system prompt at runtime is `PALIV.md + CHOTU_BASE.md + CHOTU_{MODE}.md`, composed by `core/prompts.py` based on `PALIV_BRAIN_MODE`.
+The system prompt at runtime is `PALIV.md + CHOTU_BASE.md`, composed by `core/prompts.py`. The brain is stateless turn-based only (the live/realtime backends were removed — see git history / the `live-brain` branch).
 
 ## Stack
 
 - Python 3.12 on both sides. No LangChain, no Pydantic AI — custom async tool loop.
-- Brain LLM: `llama-server` (llama.cpp), OpenAI-compatible, port 8080. Default model `Qwen3.5-4B-Q4_K_M.gguf` (multimodal). Cloud fallback: `claude-sonnet-4-6` via `PALIV_LLM_PROVIDER=claude`.
+- Brain LLM: `llama-server` (llama.cpp), OpenAI-compatible, port 8080. Default model `Qwen3.5-4B-Q4_K_M.gguf` (multimodal). Cloud Qwen via DashScope's OpenAI-compatible endpoint: point `PALIV_BRAIN_URL`/`PALIV_BRAIN_KEY`/`PALIV_BRAIN_MODEL` at DashScope (same `local` code path, no new provider). Claude fallback: `claude-sonnet-4-6` via `PALIV_LLM_PROVIDER=claude`.
 - Pi bridge: FastAPI + uvicorn on port 7000, started with `sudo` (GPIO).
 - HTTP client (laptop→Pi): `httpx` async (not `requests`).
 - TTS: `piper` on laptop, played via `sounddevice`. 22050 Hz native, 100 ms silence pad. Phonetic substitution: `Chotu` → `Chaw-too`.
@@ -44,7 +41,7 @@ The system prompt at runtime is `PALIV.md + CHOTU_BASE.md + CHOTU_{MODE}.md`, co
 | Path | Side | Purpose |
 |---|---|---|
 | `core/brain.py` | laptop | Live loop, memory, terminal/voice input, tool dispatch |
-| `core/prompts.py` | laptop | Composes PALIV.md + CHOTU_BASE.md + mode overlay (CHOTU_STATELESS.md or CHOTU_LIVE.md) as `SYSTEM_PROMPT` |
+| `core/prompts.py` | laptop | Composes PALIV.md + CHOTU_BASE.md as `SYSTEM_PROMPT` |
 | `core/heartbeat.py` | laptop | Heartbeat scheduler + tool-chain guard |
 | `core/events.py` | laptop | Event injectors (wake_word, battery_low, stop_word) |
 | `core/habits.py` | laptop | Habit-tool bodies (placeholder; will hold investigate/explore once workflow sub-agent lands) |

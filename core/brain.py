@@ -1,8 +1,7 @@
-"""Chotu's brain — live loop, memory buffer, terminal input.
+"""Chotu's brain — stateless turn-based loop, memory buffer, terminal input.
 
-Loads PALIV.md (framework contract) + CHOTU_BASE.md (persona) + a
-mode-specific overlay (CHOTU_STATELESS.md or CHOTU_LIVE.md per
-PALIV_BRAIN_MODE) into the system prompt at import time.
+Loads PALIV.md (framework contract) + CHOTU_BASE.md (persona + heartbeat
+rhythm) into the system prompt at import time, via core.prompts.
 """
 
 import asyncio
@@ -196,15 +195,13 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # --- Dispatch map ---
 
 # motion_lock: enforces single-motion-at-a-time across move/pose/set_legs/do_trick.
-# Lives at module scope so events.py and the future live-mode FrameSampler can
-# observe its state. frame_sampler is wired in main() once the backend is up.
+# Lives at module scope so events.py can observe its state.
 from core.motion_lock import MotionLock
 
 motion_lock = MotionLock()
-_frame_sampler_ref: dict = {"sampler": None}
 
 dispatch_map = build_dispatch(
-    pi, estop, mute=MUTE, motion_lock=motion_lock, frame_sampler=None,
+    pi, estop, mute=MUTE, motion_lock=motion_lock,
 )
 dispatch_map["explore"] = lambda **kw: dispatch_explore_tool(pi, kw)
 

@@ -69,8 +69,9 @@ Key variables:
 | Variable | What it does |
 |---|---|
 | `PI_HOST` | Pi bridge URL, e.g. `http://chotu.local:7000` |
-| `PALIV_BRAIN_URL` | llama-server endpoint, default `http://localhost:8080/v1` |
-| `PALIV_BRAIN_MODEL` | Model filename, e.g. `Qwen3.5-4B-Q4_K_M.gguf` |
+| `PALIV_BRAIN_URL` | OpenAI-compatible endpoint. Local llama-server `http://localhost:8080/v1`, or DashScope `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` for cloud Qwen |
+| `PALIV_BRAIN_KEY` | API key. `not-needed` for local; your DashScope key for cloud Qwen |
+| `PALIV_BRAIN_MODEL` | Local model filename (`Qwen3.5-4B-Q4_K_M.gguf`) or a DashScope model name (`qwen-vl-max`) |
 | `LOCALIS_PIPER_MODEL` | Path to your `.onnx` piper voice model |
 | `PALIV_VOICE` | Set to `1` to enable wake word + Whisper STT |
 | `PALIV_WAKE_WORD_MODEL` | Path to your `.onnx` wake word model |
@@ -193,9 +194,7 @@ core/
   voice.py          Wake word detection + Whisper STT
   gui_server.py     Browser UI server (FastAPI + SSE)
 PALIV.md            Framework contract (states, tool budgets, hard interrupts)
-CHOTU_BASE.md       Chotu persona (shared; loaded with PALIV.md as system prompt)
-CHOTU_STATELESS.md  Heartbeat-rhythm overlay (stateless mode, default)
-CHOTU_LIVE.md       Continuous-reactivity overlay (live mode)
+CHOTU_BASE.md       Chotu persona + heartbeat rhythm (loaded with PALIV.md as system prompt)
 habits/             PLAY-state skill prompts (scaffolded for next session)
 pi_bridge/
   server.py         Pi-side FastAPI bridge (servos, camera, sensors)
