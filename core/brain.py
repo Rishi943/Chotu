@@ -34,6 +34,7 @@ MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 HEARTBEAT_WINDOW = int(os.getenv("PALIV_HEARTBEAT_WINDOW", "5"))
+PALIV_FRAME_WINDOW = int(os.getenv("PALIV_FRAME_WINDOW", "4"))
 
 
 listen_and_transcribe = None
@@ -129,6 +130,32 @@ def trim_memory(items: list[dict], max_tokens: int = None) -> list[dict]:
         else:
             del work[0]
     return work
+
+
+def _is_frame_msg(m: dict) -> bool:
+    """True for a persisted camera frame: a user message whose content list
+    contains an image_url part."""
+    c = m.get("content")
+    return (
+        m.get("role") == "user"
+        and isinstance(c, list)
+        and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
+    )
+
+
+def enforce_frame_window(memory: list[dict], keep: int = None) -> None:
+    """Keep image bytes only for the newest `keep` frames; replace older frames
+    with a tiny text stub (their meaning survives in the following assistant
+    description). Mutates `memory` in place. Idempotent. No-op when frames <= keep."""
+    keep = PALIV_FRAME_WINDOW if keep is None else keep
+    frame_idxs = [i for i, m in enumerate(memory) if _is_frame_msg(m)]
+    to_strip = frame_idxs if keep <= 0 else frame_idxs[:-keep]
+    for i in to_strip:
+        memory[i] = {
+            "role": "user",
+            "content": "[earlier camera frame — see description below]",
+            "_origin": "frame_stripped",
+        }
 
 
 def evict_old_heartbeats(messages: list[dict]) -> None:
