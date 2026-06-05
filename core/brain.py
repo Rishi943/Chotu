@@ -590,10 +590,16 @@ async def _process(item: dict):
     final_text = response.choices[0].message.content
     _fire_face("idle")
 
-    # The final (no-tool) assistant reply is not appended inside the loop, so add it
-    # now; guarantee a content field for resend validity.
-    final_msg = llm_client.format_assistant_message(response)
-    final_msg.setdefault("content", final_text or "")
+    # Append the terminal assistant reply (the while-loop only appends assistant
+    # messages that HAVE tool_calls). If the loop exited at ITERATION_CAP with tools
+    # still pending, persist only the text — dropping the un-dispatched tool_calls so
+    # memory never holds a dangling tool_calls message (invalid to resend).
+    if response.choices[0].message.tool_calls:
+        final_msg = {"role": "assistant", "content": final_text or "", "_origin": kind}
+    else:
+        final_msg = llm_client.format_assistant_message(response)
+        final_msg.setdefault("content", final_text or "")  # None-guard
+        final_msg["_origin"] = kind
     messages.append(final_msg)
 
     # Persist the whole turn (user + assistant/tool_calls + tool results + frames +
