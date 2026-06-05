@@ -34,6 +34,7 @@ MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 HEARTBEAT_WINDOW = int(os.getenv("PALIV_HEARTBEAT_WINDOW", "5"))
+FRAME_WINDOW = int(os.getenv("PALIV_FRAME_WINDOW", "4"))
 
 
 listen_and_transcribe = None
@@ -129,6 +130,42 @@ def trim_memory(items: list[dict], max_tokens: int = None) -> list[dict]:
         else:
             del work[0]
     return work
+
+
+def _is_frame_msg(m: dict) -> bool:
+    """True for a persisted camera frame: a user message whose content list
+    contains an image_url part."""
+    c = m.get("content")
+    return (
+        m.get("role") == "user"
+        and isinstance(c, list)
+        and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
+    )
+
+
+def enforce_frame_window(memory: list[dict], keep: int = None) -> None:
+    """Keep image bytes only for the newest `keep` frames; replace older frames
+    with a tiny text stub (their meaning survives in the following assistant
+    description). Mutates `memory` in place. Idempotent. No-op when frames <= keep."""
+    keep = FRAME_WINDOW if keep is None else keep
+    frame_idxs = [i for i, m in enumerate(memory) if _is_frame_msg(m)]
+    # keep<=0 must strip ALL frames; frame_idxs[:-0] would wrongly strip none, so guard it.
+    to_strip = frame_idxs if keep <= 0 else frame_idxs[:-keep]
+    for i in to_strip:
+        memory[i] = {
+            "role": "user",
+            "content": "[earlier camera frame — see description below]",
+            "_origin": "frame_stripped",
+        }
+
+
+def persist_turn(memory: list[dict], turn_msgs: list[dict], kind: str, iterations: int) -> None:
+    """Append a completed turn's messages to memory, then bound the frame window.
+    Empty heartbeat turns (no tool activity) persist nothing. Mutates `memory`."""
+    if kind == "heartbeat" and iterations == 0:
+        return
+    memory.extend(turn_msgs)
+    enforce_frame_window(memory)
 
 
 def evict_old_heartbeats(messages: list[dict]) -> None:
@@ -401,6 +438,7 @@ async def _process(item: dict):
     messages = build_messages(user_input, origin=kind)
     if kind == "heartbeat":
         evict_old_heartbeats(messages)
+    prefix_len = len(messages) - 1  # index of the current user msg; turn content starts here
     dbg(f"sending {len(messages)} messages to LLM")
 
     try:
@@ -553,11 +591,21 @@ async def _process(item: dict):
     final_text = response.choices[0].message.content
     _fire_face("idle")
 
-    if kind == "heartbeat" and iterations == 0:
-        return
+    # Append the terminal assistant reply (the while-loop only appends assistant
+    # messages that HAVE tool_calls). If the loop exited at ITERATION_CAP with tools
+    # still pending, persist only the text — dropping the un-dispatched tool_calls so
+    # memory never holds a dangling tool_calls message (invalid to resend).
+    if response.choices[0].message.tool_calls:
+        final_msg = {"role": "assistant", "content": final_text or "", "_origin": kind}
+    else:
+        final_msg = llm_client.format_assistant_message(response)
+        final_msg.setdefault("content", final_text or "")  # None-guard
+        final_msg["_origin"] = kind
+    messages.append(final_msg)
 
-    memory.append({"role": "user", "content": user_input, "_origin": kind})
-    memory.append({"role": "assistant", "content": final_text or "", "_origin": kind})
+    # Persist the whole turn (user + assistant/tool_calls + tool results + frames +
+    # replies). Empty heartbeats persist nothing; frame window bounds images to 4.
+    persist_turn(memory, messages[prefix_len:], kind, iterations)
 
 
 

@@ -46,3 +46,34 @@ def test_trim_keeps_tool_pairs_together():
     # And: under budget after trim.
     from core.brain import _estimate_tokens
     assert _estimate_tokens(trimmed) <= 500
+
+
+def _full_turn(i):
+    return [
+        {"role": "user", "content": f"[heartbeat] {i}", "_origin": "heartbeat"},
+        {"role": "assistant", "content": "look",
+         "tool_calls": [{"id": f"c{i}", "type": "function",
+                         "function": {"name": "capture_vision", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": f"c{i}", "content": "Camera snapshot taken."},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+            {"type": "text", "text": "view"}]},
+        {"role": "assistant", "content": f"saw thing {i}"},
+    ]
+
+
+def test_trim_never_orphans_tool_results():
+    from core.brain import trim_memory, _is_frame_msg
+    mem = []
+    for i in range(40):
+        mem.extend(_full_turn(i))
+    trimmed = trim_memory(mem, max_tokens=200)  # force aggressive trimming
+    # every role=tool must be preceded somewhere earlier by an assistant with a
+    # matching tool_call id (no orphaned tool results after trimming from the front)
+    seen_ids = set()
+    for m in trimmed:
+        if m.get("role") == "assistant":
+            for tc in m.get("tool_calls", []) or []:
+                seen_ids.add(tc["id"])
+        if m.get("role") == "tool":
+            assert m["tool_call_id"] in seen_ids, "orphaned tool result after trim"
