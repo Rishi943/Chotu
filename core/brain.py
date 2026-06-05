@@ -158,6 +158,15 @@ def enforce_frame_window(memory: list[dict], keep: int = None) -> None:
         }
 
 
+def persist_turn(memory: list[dict], turn_msgs: list[dict], kind: str, iterations: int) -> None:
+    """Append a completed turn's messages to memory, then bound the frame window.
+    Empty heartbeat turns (no tool activity) persist nothing. Mutates `memory`."""
+    if kind == "heartbeat" and iterations == 0:
+        return
+    memory.extend(turn_msgs)
+    enforce_frame_window(memory)
+
+
 def evict_old_heartbeats(messages: list[dict]) -> None:
     """Trim heartbeat blocks so at most HEARTBEAT_WINDOW user[heartbeat] markers remain. Mutates in place."""
     hb_starts = [i for i, m in enumerate(messages)
