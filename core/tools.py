@@ -62,7 +62,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "pose",
-            "description": "Adopt a named pose. stand/sit are static positions; wave/push up/look up/down/left/right are animated sequences.",
+            "description": (
+                "Adopt a named pose or run a choreographed routine. "
+                "stand/sit are static positions; wave/push up/look up/down/left/right are short animated sequences; "
+                "twist/swimming/handwork are multi-second show-off routines (5-10s, end at stand)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -71,12 +75,13 @@ TOOL_SCHEMAS = [
                         "enum": [
                             "stand", "sit", "wave", "push up",
                             "look up", "look down", "look left", "look right",
+                            "twist", "swimming", "handwork",
                         ],
                         "description": "Pose name.",
                     },
                     "speed": {
                         "type": "integer",
-                        "description": "Servo speed 0-100. Default 50. Keep at 50 or below — stand/sit move all 12 servos at once and high speed causes power brown-outs.",
+                        "description": "Servo speed 0-100. Default 50. Keep at 50 or below for stand/sit — moving all 12 servos at high speed causes brown-outs. Trick poses (twist/swimming/handwork) override and run at their choreographed speed.",
                         "default": 50,
                     },
                 },
@@ -441,11 +446,15 @@ async def _do_speak(text: str = "", face_pi=None, muted: bool = False) -> dict:
     }
 
 
+_TRICK_POSE_NAMES = {"twist", "swimming", "handwork"}
+
 def _motion_eta_ms(tool: str, kw: dict) -> int:
     """Rough motion duration estimates, used by MotionLock for rejection messages."""
     if tool == "move":
         return max(1500, int(kw.get("steps", 1)) * 800)
-    return 1200  # pose — single pose change
+    if tool == "pose" and kw.get("name") in _TRICK_POSE_NAMES:
+        return 7000  # trick poses are 5-10s
+    return 1200  # other poses — single pose change
 
 
 def _gated(motion_lock: MotionLock | None, tool: str, fn):

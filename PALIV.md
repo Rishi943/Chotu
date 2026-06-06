@@ -37,7 +37,7 @@ Valid values (enums, ranges) for each tool are defined in the tool schema.
 
 - `speak(text)` — say one short line aloud. Max one per turn. ≤15 words.
 - `move(direction, steps, speed)` — walk/turn. forward/backward/turn left/turn right. 1 step ≈ 45mm, 1 turn ≈ 30°.
-- `pose(name, speed)` — adopt a named pose. stand/sit are static; wave/push up/look up/down/left/right are animated.
+- `pose(name, speed)` — adopt a named pose or run a routine. stand/sit are static; wave/push up/look up/down/left/right are short animations; twist/swimming/handwork are 5–10s show-off routines (end at stand).
 - `set_face(name)` — change the OLED expression (idle, playful, greeting, sleeping, …).
 - `get_distance()` — ultrasonic, returns cm.
 - `get_battery()` — voltage and percent.

@@ -152,7 +152,7 @@ class MoveRequest(BaseModel):
 
 
 class PoseRequest(BaseModel):
-    name: str        # "stand" | "sit" | "wave" | "push up" | "look up" | "look down" | "look left" | "look right"
+    name: str        # "stand" | "sit" | "wave" | "push up" | "look up/down/left/right" | "twist" | "swimming" | "handwork"
     speed: int = 50
 
 MAX_POSE_SPEED = 40   # stand/sit move all 12 servos simultaneously — cap to avoid current spike
@@ -160,9 +160,11 @@ MAX_MOTION_SPEED = 60  # hard cap for move/set_legs — peak current safety (was
 MAX_TRICK_SPEED = 100  # tricks are pre-choreographed; official examples use 100
 MOTION_COOLDOWN_S = 0.6  # min gap between motion calls; lets pack voltage recover from sag (was 0.3)
 
-# Static positions available as do_step presets; everything else is a multi-frame
-# action sequence that must go through do_action.
+# Static positions available as do_step presets; animated poses (wave, look*,
+# push up) go through do_action; trick poses are multi-second choreographed
+# routines that run through the _TRICKS dispatch table at MAX_TRICK_SPEED.
 _STATIC_POSES = {"stand", "sit"}
+_TRICK_POSES = {"twist", "swimming", "handwork"}
 
 # Serializes all motion endpoints. The crawler is a single hardware singleton; two
 # concurrent do_action/do_step calls from different threads corrupt servo state and
@@ -272,12 +274,16 @@ async def move(req: MoveRequest):
 @app.post("/pose")
 async def pose(req: PoseRequest):
     start = time.time()
-    speed = min(req.speed, MAX_POSE_SPEED)
+    is_trick = req.name in _TRICK_POSES
+    # Trick poses are pre-choreographed and need the higher speed cap to look right.
+    speed = min(req.speed, MAX_TRICK_SPEED if is_trick else MAX_POSE_SPEED)
     logging.info(f"POST /pose  name={req.name} speed={speed}")
     try:
         async with _motion_section():
             loop = asyncio.get_event_loop()
-            if req.name in _STATIC_POSES:
+            if is_trick:
+                await loop.run_in_executor(None, lambda: _TRICKS[req.name](speed))
+            elif req.name in _STATIC_POSES:
                 await loop.run_in_executor(None, lambda: crawler.do_step(req.name, speed))
             else:
                 await loop.run_in_executor(None, lambda: crawler.do_action(req.name, 1, speed))
