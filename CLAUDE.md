@@ -2,6 +2,47 @@
 
 Guidance for Claude Code when working in this repo.
 
+## Behavioral guidelines
+
+Reduce common LLM coding mistakes. Bias toward caution over speed. For trivial tasks, use judgment.
+
+### 1. Think before coding
+Don't assume. Don't hide confusion. Surface tradeoffs.
+- State assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity first
+Minimum code that solves the problem. Nothing speculative.
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Test: would a senior engineer call this overcomplicated? If yes, simplify.
+
+### 3. Surgical changes
+Touch only what you must. Clean up only your own mess.
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
+- Remove imports/variables/functions that YOUR changes orphaned. Don't remove pre-existing dead code unless asked.
+
+Test: every changed line should trace directly to the user's request.
+
+### 4. Goal-driven execution
+Define success criteria. Loop until verified.
+- "Add validation" → "Write tests for invalid inputs, then make them pass."
+- "Fix the bug" → "Write a test that reproduces it, then make it pass."
+- "Refactor X" → "Ensure tests pass before and after."
+
+For multi-step tasks, state a brief plan with a verify step per item. Strong criteria let you loop independently; weak ones ("make it work") require constant clarification.
+
+These are working if: fewer unnecessary changes in diffs, fewer rewrites from overcomplication, clarifying questions come before implementation rather than after mistakes.
+
 ## Project
 
 PALIV is an open agent framework for always-on embodied robot pets. Chotu (SunFounder PiCrawler quadruped) is the first instance. Brain runs on a Linux laptop over LAN to a Pi 5 bridge.
@@ -64,9 +105,10 @@ The Pi-side `pi_bridge/chotu/` (face.py) is a separate package shipped to the Pi
 ## Hardware quirks
 
 - **Two power rails.** Pi 5 USB-C feeds *only* the Pi. Servos draw from the 2S LiPo via `robot_hat`. If tricks brown out at full speed, the HAT charge port needs power — plugging the Pi alone won't help.
-- **Trick speed cap = 100** (`MAX_TRICK_SPEED` in `pi_bridge/server.py`). Matches official PiCrawler examples; works on a charged servo rail. `MAX_MOTION_SPEED=60` still applies to `move`/`set_legs`.
+- **Trick speed cap = 100** (`MAX_TRICK_SPEED` in `pi_bridge/server.py`). Matches official PiCrawler examples; works on a charged servo rail. Used by trick poses (twist/swimming/handwork). `MAX_MOTION_SPEED=60` still applies to `move`. Static/animated poses cap at `MAX_POSE_SPEED=40`.
+- **Pose covers tricks.** twist/swimming/handwork are routed through `/pose` and dispatched by the bridge's `_TRICKS` table at `MAX_TRICK_SPEED`. There is no `do_trick` brain tool — `/trick` still exists on the bridge for legacy/debug but the brain only calls `/pose`.
 - **Startup pose.** Bridge `lifespan` does `crawler.do_step("stand", 40)` + 1.0s settle before serving. All habits assume start = stand and end with `crawler.do_step("stand", 40)`.
-- **Bridge-died signature.** A `/trick` envelope returning `duration_ms < 100` means the bridge process crashed (likely brownout) and is replying with a cached/stale ok. Real tricks take 5–10s.
+- **Bridge-died signature.** A `/pose` (or `/trick`) envelope returning `duration_ms < 100` for a trick-pose name means the bridge process crashed (likely brownout) and is replying with a cached/stale ok. Real trick poses take 5–10s.
 
 ## Known LLM quirks (Qwen3.5 + llama-server)
 
