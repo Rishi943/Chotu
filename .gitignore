@@ -21,3 +21,11 @@ models/*.safetensors
 
 # Runtime data — world map, etc.
 data/
+
+# Piper TTS voice models — binaries, install via piper
+core/voices/
+
+# Local scratch / personal tooling
+assets/
+Launch
+.superpowers/
