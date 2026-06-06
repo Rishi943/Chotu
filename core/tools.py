@@ -87,43 +87,6 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "set_legs",
-            "description": (
-                "Move all four legs to target [x,y,z] coordinates simultaneously. One frame of motion. "
-                "Chain multiple set_legs calls across turns to invent gaits (worm, crab, stretch, dance). "
-                "Neutral stance is [60,0,-30] per leg. z is height (less negative = leg higher off ground, "
-                "e.g. z=0 raises leg, z=-50 plants it lower). x is forward reach (higher = further forward). "
-                "y is sideways (positive = out to the side). "
-                "Leg indices in the legs array: 0=front-right, 1=front-left, 2=back-right, 3=back-left."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "legs": {
-                        "type": "array",
-                        "description": "Four [x,y,z] coordinates in mm, one per leg in order 0,1,2,3.",
-                        "items": {
-                            "type": "array",
-                            "items": {"type": "number"},
-                            "minItems": 3,
-                            "maxItems": 3,
-                        },
-                        "minItems": 4,
-                        "maxItems": 4,
-                    },
-                    "speed": {
-                        "type": "integer",
-                        "description": "Servo speed 0-100. Default 70. Low (10-30) for slow/creeping. Bridge hard-caps at 80.",
-                        "default": 70,
-                    },
-                },
-                "required": ["legs"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_distance",
             "description": "Read ultrasonic distance sensor. Returns distance in cm.",
             "parameters": {"type": "object", "properties": {}},
@@ -146,32 +109,6 @@ TOOL_SCHEMAS = [
                 "Use to look around, identify objects or people, or investigate something interesting."
             ),
             "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "do_trick",
-            "description": (
-                "Perform a named trick animation. These are pre-choreographed physical routines. "
-                "Use to show off, entertain, or respond to a challenge."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "enum": ["pushup", "twist", "swimming", "handwork"],
-                        "description": "pushup=push-up motion, twist=body twist, swimming=swimming sweep, handwork=raise front legs/wave arms.",
-                    },
-                    "speed": {
-                        "type": "integer",
-                        "description": "Servo speed 0-100. Default 70. Bridge hard-caps at 80.",
-                        "default": 70,
-                    },
-                },
-                "required": ["name"],
-            },
         },
     },
     {
@@ -230,39 +167,6 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "get_perception",
-            "description": (
-                "Query Vilib's always-on computer vision. Use to actively look for a specific "
-                "color, detect faces, or check for humans. Results include whether the target "
-                "is detected and its x/y position (frame is 320x240, center x=160 y=120). "
-                "x<120 means target is left, x>200 means right, x≈160 means centered."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "color": {
-                        "type": "string",
-                        "enum": ["red", "orange", "yellow", "green", "blue", "purple"],
-                        "description": "Color to search for. Omit if not looking for a color.",
-                    },
-                    "face": {
-                        "type": "boolean",
-                        "description": "Whether to check for faces.",
-                        "default": False,
-                    },
-                    "human": {
-                        "type": "boolean",
-                        "description": "Whether to check for humans.",
-                        "default": False,
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "cast_spell",
             "description": (
                 "Cast a magic spell. Raises front-right leg like a wand, then controls the room light. "
@@ -307,19 +211,6 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "explore",
-            "description": "Open a fresh mapping subagent that explores and builds the world map. Blocking; returns a summary when done.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {"type": "string", "description": "Why you're exploring (idle, user-asked, etc)"},
-                },
             },
         },
     },
@@ -554,9 +445,7 @@ def _motion_eta_ms(tool: str, kw: dict) -> int:
     """Rough motion duration estimates, used by MotionLock for rejection messages."""
     if tool == "move":
         return max(1500, int(kw.get("steps", 1)) * 800)
-    if tool == "do_trick":
-        return 7000  # tricks are 5–10 s per CLAUDE.md
-    return 1200  # pose, set_legs — single pose change
+    return 1200  # pose — single pose change
 
 
 def _gated(motion_lock: MotionLock | None, tool: str, fn):
@@ -593,19 +482,16 @@ def build_dispatch(
     """Build tool name -> async callable dispatch map.
 
     motion_lock: enforces single-motion-at-a-time. When passed, move/pose/
-        set_legs/do_trick reject overlapping calls with an envelope.
+        reject overlapping calls with an envelope.
     """
     return {
-        "move":           lambda **kw: _gated(motion_lock, "move",     lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
-        "pose":           lambda **kw: _gated(motion_lock, "pose",     lambda **k: pi.pose(**k))(**kw),
-        "set_legs":       lambda **kw: _gated(motion_lock, "set_legs", lambda **k: pi.set_legs(**k))(**kw) if not estop.is_set() else _blocked_coro("set_legs"),
-        "do_trick":       lambda **kw: _gated(motion_lock, "do_trick", lambda **k: pi.do_trick(**k))(**kw),
+        "move":           lambda **kw: _gated(motion_lock, "move", lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
+        "pose":           lambda **kw: _gated(motion_lock, "pose", lambda **k: pi.pose(**k))(**kw),
         "get_distance":   lambda **kw: pi.get_distance(),
         "get_battery":    lambda **kw: pi.get_battery(),
         "capture_vision": lambda **kw: capture_vision_tool(pi),
         "set_face":       lambda **kw: pi.set_face(**kw),
         "wait":           lambda **kw: local_wait(**kw),
-        "get_perception": lambda **kw: pi.get_perception(**kw),
         "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),
         "speak":          lambda **kw: _do_speak(face_pi=pi, muted=mute, **kw),
     }

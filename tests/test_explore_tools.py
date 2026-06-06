@@ -317,12 +317,14 @@ async def test_conclude_rejects_bad_status():
     assert "status" in env["error"].lower()
 
 
+@pytest.mark.skip(reason="explore deferred from main TOOL_SCHEMAS — re-enable when rewired")
 def test_explore_schema_registered():
     from core.tools import TOOL_SCHEMAS
     names = [t["function"]["name"] for t in TOOL_SCHEMAS]
     assert "explore" in names
 
 
+@pytest.mark.skip(reason="explore deferred from main TOOL_SCHEMAS — re-enable when rewired")
 def test_explore_schema_has_reason_param():
     from core.tools import TOOL_SCHEMAS
     explore = [t for t in TOOL_SCHEMAS if t["function"]["name"] == "explore"][0]

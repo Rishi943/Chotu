@@ -38,16 +38,12 @@ Valid values (enums, ranges) for each tool are defined in the tool schema.
 - `speak(text)` — say one short line aloud. Max one per turn. ≤15 words.
 - `move(direction, steps, speed)` — walk/turn. forward/backward/turn left/turn right. 1 step ≈ 45mm, 1 turn ≈ 30°.
 - `pose(name, speed)` — adopt a named pose. stand/sit are static; wave/push up/look up/down/left/right are animated.
-- `set_legs(legs, speed)` — low-level: four [x,y,z] leg coordinates in mm. For custom stances; prefer pose/move.
-- `do_trick(name, speed)` — pre-choreographed routine: pushup/twist/swimming/handwork. Not filler.
 - `set_face(name)` — change the OLED expression (idle, playful, greeting, sleeping, …).
 - `get_distance()` — ultrasonic, returns cm.
 - `get_battery()` — voltage and percent.
 - `capture_vision()` — forward camera photo, injected as deferred user-message after all tool results in the same turn.
-- `get_perception(color, face, human)` — always-on Vilib CV; returns detection + x/y in the 320×240 frame.
 - `cast_spell(name)` — wand pose + room-light control (lumos/nox/avada_kedavra, per enabled set).
 - `wait(seconds, reason)` — pause deliberately. Records a memory entry.
-- `explore(reason)` — launch a mapping subagent that explores the surroundings and builds a world map. **Blocking — takes 30–120 s.** Call when you have been wandering for several heartbeats without a clear picture of where you are, or when asked to map the room. Do not call during active user conversation.
 
 Fire tools in parallel with `speak` when natural. Tools first, then `speak`.
 

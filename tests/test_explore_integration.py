@@ -1,5 +1,12 @@
 """Integration test: brain dispatches explore as a plain tool calling subagent."""
 
+import pytest
+
+pytest.skip(
+    "explore is deferred from the main brain — re-enable when dispatch_explore_tool is rewired",
+    allow_module_level=True,
+)
+
 import json
 import pytest
 from types import SimpleNamespace

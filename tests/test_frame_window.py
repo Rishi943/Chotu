@@ -33,9 +33,10 @@ def test_keeps_only_last_4_frames():
     mem = _mem(6)
     enforce_frame_window(mem, keep=4)
     frames = [m for m in mem if _is_frame_msg(m)]
-    stubs = [m for m in mem if m.get("_origin") == "frame_stripped"]
     assert len(frames) == 4
-    assert len(stubs) == 2
+    # Older frames are deleted outright (no stub message left behind); only
+    # the assistant descriptions persist as semantic context.
+    assert all(m.get("_origin") != "frame_stripped" for m in mem)
 
 
 def test_noop_when_at_or_under_keep():

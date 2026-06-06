@@ -19,7 +19,6 @@ from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
 from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
-from core import explore_agent
 
 
 # --- Config ---
@@ -28,7 +27,7 @@ load_dotenv()
 
 PI_HOST = os.getenv("PI_HOST", "http://chotu.local:7000")
 MEMORY_TOKEN_BUDGET = int(os.getenv("PALIV_MEMORY_TOKENS", "12000"))
-MAX_TOOL_ITERATIONS = 6
+MAX_TOOL_ITERATIONS = 4
 DEBUG = os.getenv("PALIV_DEBUG", "0") == "1"
 MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
@@ -144,19 +143,14 @@ def _is_frame_msg(m: dict) -> bool:
 
 
 def enforce_frame_window(memory: list[dict], keep: int = None) -> None:
-    """Keep image bytes only for the newest `keep` frames; replace older frames
-    with a tiny text stub (their meaning survives in the following assistant
-    description). Mutates `memory` in place. Idempotent. No-op when frames <= keep."""
+    """Keep the newest `keep` camera-frame user messages; delete older ones outright.
+    The model's own description in the following assistant message preserves semantic
+    context, so a text stub is unnecessary. Mutates `memory` in place. Idempotent."""
     keep = FRAME_WINDOW if keep is None else keep
     frame_idxs = [i for i, m in enumerate(memory) if _is_frame_msg(m)]
-    # keep<=0 must strip ALL frames; frame_idxs[:-0] would wrongly strip none, so guard it.
-    to_strip = frame_idxs if keep <= 0 else frame_idxs[:-keep]
-    for i in to_strip:
-        memory[i] = {
-            "role": "user",
-            "content": "[earlier camera frame — see description below]",
-            "_origin": "frame_stripped",
-        }
+    to_drop = frame_idxs if keep <= 0 else frame_idxs[:-keep]
+    for i in reversed(to_drop):
+        del memory[i]
 
 
 def persist_turn(memory: list[dict], turn_msgs: list[dict], kind: str, iterations: int) -> None:
@@ -188,24 +182,6 @@ def strip_internal_fields(messages: list[dict]) -> list[dict]:
     return [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
 
 
-# --- Explore subagent dispatch ---
-
-async def dispatch_explore_tool(pi, args: dict) -> dict:
-    import time as _t
-    started = _t.time()
-    reason = args.get("reason", "idle")
-    envelope = await explore_agent.run_explore(pi, reason=reason)
-    ok = envelope["status"] in ("done", "cap_nodes")
-    return {
-        "ok": ok,
-        "tool": "explore",
-        "result": envelope,
-        "duration_ms": int((_t.time() - started) * 1000),
-        "timestamp": _t.time(),
-        "error": None if ok else envelope.get("message"),
-    }
-
-
 # --- Globals ---
 
 pi = PiClient(PI_HOST)
@@ -231,7 +207,7 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 # --- Dispatch map ---
 
-# motion_lock: enforces single-motion-at-a-time across move/pose/set_legs/do_trick.
+# motion_lock: enforces single-motion-at-a-time across move/pose.
 # Lives at module scope so events.py can observe its state.
 from core.motion_lock import MotionLock
 
@@ -240,7 +216,6 @@ motion_lock = MotionLock()
 dispatch_map = build_dispatch(
     pi, estop, mute=MUTE, motion_lock=motion_lock,
 )
-dispatch_map["explore"] = lambda **kw: dispatch_explore_tool(pi, kw)
 
 
 # --- Message building ---
@@ -466,7 +441,6 @@ async def _process(item: dict):
         if clean_content:
             print_monologue(clean_content)
 
-    set_legs_fired = 0
     waits_fired = 0
     failed_tools: set = set()
 
@@ -486,15 +460,13 @@ async def _process(item: dict):
                 tc_args = json.loads(tc.function.arguments or "{}") if tc.function.arguments else {}
             except json.JSONDecodeError:
                 tc_args = {}
-            if name == "set_legs" and set_legs_fired >= 12:
-                suppressed.append(_suppressed(tc.id, name, "12 set_legs per turn max"))
-            elif name == "wait" and waits_fired >= 1:
+            if name == "wait" and waits_fired >= 1:
                 suppressed.append(_suppressed(tc.id, name, "1 wait per turn max"))
             elif _should_suppress(failed_tools, name, tc_args):
                 suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
             else:
-                if name == "set_legs": set_legs_fired += 1
-                if name == "wait":    waits_fired += 1
+                if name == "wait":
+                    waits_fired += 1
                 to_dispatch.append(tc)
 
         deferred_vision = []
