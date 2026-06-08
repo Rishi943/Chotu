@@ -1,4 +1,4 @@
-"""Chotu's brain — stateless turn-based loop, memory buffer, terminal input.
+"""Chotu's brain — single infinite paced loop, memory buffer, terminal input.
 
 Loads PALIV.md (framework contract) + CHOTU_BASE.md (persona + heartbeat
 rhythm) into the system prompt at import time, via core.prompts.
@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
-from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
+from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
 from core.loop_helpers import (
     describe_motion, motion_from_calls, push_frame, render_frames,
     trim_loop_window, strip_old_monologue, pace_remainder, split_tool_calls,
