@@ -68,6 +68,9 @@ class LLMClient:
             api_key = os.getenv("PALIV_BRAIN_KEY", "not-needed")
             self.model = os.getenv("PALIV_BRAIN_MODEL", "Qwen3.5-4B-Q4_K_M.gguf")
             self._openai = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=120.0)
+            # Explicit context cache (cache_control ephemeral markers) — DashScope only.
+            # llama.cpp doesn't understand the marker, so gate on the endpoint.
+            self._cache_system = "dashscope" in base_url.lower()
             self._anthropic_client = None
 
         elif self.provider == "claude":
@@ -168,6 +171,8 @@ class LLMClient:
         tool_choice: Optional[dict] = None,
         max_tokens: Optional[int] = None,
     ) -> LLMResponse:
+        if self._cache_system:
+            messages = self._mark_system_cache(messages)
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
@@ -181,6 +186,29 @@ class LLMClient:
             kwargs["max_tokens"] = max_tokens
         raw = await self._openai.chat.completions.create(**kwargs)
         return self._normalise_openai(raw)
+
+    @staticmethod
+    def _mark_system_cache(messages: list[dict]) -> list[dict]:
+        """Add a cache_control:ephemeral marker to the system message so DashScope
+        caches the stable prefix (system prompt + everything before it). Marker must
+        sit on a content block, so a string content is wrapped in an array. The first
+        system message is the only stable block in the loop; the 1024-token minimum is
+        satisfied by the system prompt. Returns a new list; does not mutate the input."""
+        out = list(messages)
+        for i, m in enumerate(out):
+            if m.get("role") != "system":
+                continue
+            content = m.get("content")
+            if isinstance(content, str):
+                blocks = [{"type": "text", "text": content}]
+            elif isinstance(content, list):
+                blocks = [dict(b) for b in content]
+            else:
+                return out  # unexpected shape — leave untouched
+            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+            out[i] = {**m, "content": blocks}
+            return out
+        return out
 
     @staticmethod
     def _normalise_openai(raw) -> LLMResponse:
@@ -205,6 +233,11 @@ class LLMClient:
                 "prompt_tokens": raw.usage.prompt_tokens,
                 "completion_tokens": raw.usage.completion_tokens,
             }
+            # DashScope/OpenAI: implicit-cache hits reported here, included in prompt_tokens.
+            details = getattr(raw.usage, "prompt_tokens_details", None)
+            cached = getattr(details, "cached_tokens", None) if details else None
+            if cached is not None:
+                usage["cached_tokens"] = cached
             timings = (raw.model_extra or {}).get("timings", {})
             if timings:
                 usage["timings"] = timings

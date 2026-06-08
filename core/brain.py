@@ -61,6 +61,7 @@ gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
 gallery_store: list[dict] = []
 thinking_enabled: bool = False
 _pi_reachable: bool = False
+_usage = {"calls": 0, "prompt": 0, "completion": 0, "cached": 0, "t0": None}  # cumulative token meter
 _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
 
 continuous_mode: bool = False
@@ -265,6 +266,29 @@ async def run_iteration() -> float:
         print("  LLM error: empty choices")
         _fire_face("idle")
         return 0.0
+
+    if response.usage:
+        if _usage["t0"] is None:
+            _usage["t0"] = time.time()
+        _usage["calls"] += 1
+        p = response.usage.get("prompt_tokens", 0)
+        cached = response.usage.get("cached_tokens", 0)
+        _usage["prompt"] += p
+        _usage["completion"] += response.usage.get("completion_tokens", 0)
+        _usage["cached"] += cached
+        total = _usage["prompt"] + _usage["completion"]
+        elapsed = time.time() - _usage["t0"]
+        rate = f"~{total/(elapsed/60.0)/1000:.1f}k/min" if elapsed > 1.0 else "~—"
+        # Effective input @ explicit-cache pricing: cache hits bill at 10%.
+        eff_prompt = _usage["prompt"] - _usage["cached"] * 0.9
+        hit = f" cache {cached}/{p}" if cached else ""
+        print(
+            f"  [tokens] turn={p}p/"
+            f"{response.usage.get('completion_tokens', 0)}c{hit}  "
+            f"cum={total/1000:.1f}k ({_usage['prompt']/1000:.1f}k prompt + "
+            f"{_usage['completion']/1000:.1f}k compl) over {_usage['calls']} calls  "
+            f"eff_in~{eff_prompt/1000:.1f}k  {rate}"
+        )
 
     msg = response.choices[0].message
     clean_content, think_blocks = _extract_think_blocks(msg.content)

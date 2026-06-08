@@ -119,6 +119,7 @@ The Pi-side `pi_bridge/chotu/` (face.py) is a separate package shipped to the Pi
 
 ## Rules
 
+- **NEVER run anything against a cloud model (DashScope/Qwen cloud, Claude, Gemini, any paid API) without explicit per-instance approval — including tests, probes, dry-runs, and one-off scripts.** This spends real tokens/quota. Ask first, every time, even for "just a quick test." Local llama-server (port 8080) is free and needs no approval. When a task seems to need a cloud call, propose the exact command and wait for an approve/deny.
 - Don't add frameworks not listed in PALIV.md without asking.
 - Don't design around the ReSpeaker mic (not yet ordered) — voice input uses laptop default mic.
 - Don't train "hey chotu" wake word until the pipeline is verified end-to-end with hey_jarvis.
