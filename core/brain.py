@@ -39,6 +39,8 @@ TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 HEARTBEAT_WINDOW = int(os.getenv("PALIV_HEARTBEAT_WINDOW", "5"))
 FRAME_WINDOW = int(os.getenv("PALIV_FRAME_WINDOW", "4"))
+LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "2"))
+LOOP_WINDOW = int(os.getenv("PALIV_LOOP_WINDOW", "8"))
 
 
 listen_and_transcribe = None
@@ -192,6 +194,9 @@ def strip_internal_fields(messages: list[dict]) -> list[dict]:
 pi = PiClient(PI_HOST)
 llm_client = LLMClient()
 memory: list[dict] = []  # rolling window; trimmed by trim_memory()
+frame_stack: list[dict] = []           # newest-last, capped at 3 by push_frame
+pending_input: PendingInput = PendingInput()
+BOOT_TEXT = "[boot] You just woke up. You don't know where you are. The session starts here."
 input_queue: _PriorityQueue = _PriorityQueue()
 user_input_pending: asyncio.Event = asyncio.Event()
 tool_chain_active: asyncio.Event = asyncio.Event()
@@ -417,6 +422,83 @@ def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
     result = {"ok": True, "tool": name, "result": {"suppressed": True}, "duration_ms": 0, "timestamp": time.time(), "error": None}
     dbg(f"[guard] suppressed {name}: {reason}")
     return tool_id, name, result
+
+
+def _safe_args(args_json: str) -> dict:
+    try:
+        return json.loads(args_json) if args_json else {}
+    except json.JSONDecodeError:
+        return {"_raw": args_json}
+
+
+async def run_iteration() -> float:
+    """One loop turn: drain input -> LLM call -> dispatch deduped tools -> capture a
+    fresh labeled frame -> trim context. Returns tool_duration seconds (for pacing)."""
+    text = pending_input.drain()
+    if text:
+        memory.append({"role": "user", "content": f"[human] {text}", "_origin": "user"})
+        _emit({"type": "user", "text": text})
+
+    _fire_face("thinking")
+    messages = build_loop_messages(SYSTEM_PROMPT, memory, frame_stack)
+
+    try:
+        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
+    except Exception as e:
+        print(f"  LLM error: {e}")
+        _fire_face("idle")
+        return 0.0
+    if not response.choices:
+        print("  LLM error: empty choices")
+        _fire_face("idle")
+        return 0.0
+
+    msg = response.choices[0].message
+    clean_content, think_blocks = _extract_think_blocks(msg.content)
+    for block in think_blocks:
+        if block.strip():
+            print(f"  [think] {block.strip()[:120]}...")
+            _emit({"type": "think", "text": block.strip()})
+    if clean_content:
+        print_monologue(clean_content)
+
+    assistant_msg = llm_client.format_assistant_message(response)
+    assistant_msg["content"] = clean_content or ""
+    assistant_msg["_origin"] = "loop"
+    memory.append(assistant_msg)
+
+    tool_duration = 0.0
+    motion_desc = "no movement"
+    if msg.tool_calls:
+        keep, suppressed = split_tool_calls(msg.tool_calls)
+        start = time.time()
+        dispatched = await asyncio.gather(
+            *[_run_one(tc) for tc in keep]
+        )
+        tool_duration = time.time() - start
+        motion_calls = []
+        for tc, name, args_json, result in dispatched:
+            args = _safe_args(args_json)
+            print_tool_call(name, args, result)
+            memory.append(llm_client.format_tool_result(tc.id, json.dumps(result)))
+            motion_calls.append((name, args))
+        for tc in suppressed:
+            env = {"ok": True, "tool": tc.function.name, "result": {"suppressed": True},
+                   "duration_ms": 0, "timestamp": time.time(), "error": None}
+            memory.append(llm_client.format_tool_result(tc.id, json.dumps(env)))
+        motion_desc = motion_from_calls(motion_calls)
+
+    capture = await pi.capture()
+    if capture.get("ok"):
+        frame_b64 = capture.get("result", {}).get("image_base64", "")
+        if frame_b64:
+            push_frame(frame_stack, frame_b64, motion_desc)
+            _emit({"type": "image", "label": "frame", "image_b64": frame_b64})
+
+    trim_loop_window(memory, LOOP_WINDOW)
+    strip_old_monologue(memory, keep_last=2)
+    _fire_face("idle")
+    return tool_duration
 
 
 async def _process(item: dict):
