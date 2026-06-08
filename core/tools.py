@@ -108,17 +108,6 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "capture_vision",
-            "description": (
-                "Take a photo with your camera and describe what you see. "
-                "Use to look around, identify objects or people, or investigate something interesting."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "set_face",
             "description": (
                 "Change your OLED face expression. Use to show emotion or react to context. "
@@ -498,7 +487,6 @@ def build_dispatch(
         "pose":           lambda **kw: _gated(motion_lock, "pose", lambda **k: pi.pose(**k))(**kw),
         "get_distance":   lambda **kw: pi.get_distance(),
         "get_battery":    lambda **kw: pi.get_battery(),
-        "capture_vision": lambda **kw: capture_vision_tool(pi),
         "set_face":       lambda **kw: pi.set_face(**kw),
         "wait":           lambda **kw: local_wait(**kw),
         "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),

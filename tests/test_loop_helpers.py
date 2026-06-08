@@ -169,3 +169,11 @@ async def test_paced_sleep_returns_early_on_input():
 async def test_paced_sleep_zero_returns_immediately():
     p = PendingInput()
     await paced_sleep(0.0, p)   # must not hang
+
+
+def test_capture_vision_removed_from_schema():
+    from core.tools import TOOL_SCHEMAS
+    names = {t["function"]["name"] for t in TOOL_SCHEMAS}
+    assert "capture_vision" not in names
+    # core motion/sense tools still present
+    assert {"move", "pose", "speak"} <= names
