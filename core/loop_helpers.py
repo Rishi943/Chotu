@@ -79,3 +79,27 @@ def strip_old_monologue(memory: list[dict], keep_last: int = 2) -> None:
     for i in targets:
         if memory[i].get("content"):
             memory[i] = {**memory[i], "content": ""}
+
+
+def pace_remainder(tool_duration: float, floor: float) -> float:
+    """Extra seconds to sleep after an iteration so the gap is at least `floor`."""
+    return max(0.0, floor - tool_duration)
+
+
+def split_tool_calls(tool_calls):
+    """Dedupe a call list by class: at most one motion (move/pose) and one speak.
+    Returns (keep, suppressed). Order preserved; first of each class wins."""
+    keep, suppressed = [], []
+    seen_motion = seen_speak = False
+    for tc in tool_calls:
+        name = tc.function.name
+        if name in _MOTION_TOOLS:
+            if seen_motion:
+                suppressed.append(tc); continue
+            seen_motion = True
+        elif name == "speak":
+            if seen_speak:
+                suppressed.append(tc); continue
+            seen_speak = True
+        keep.append(tc)
+    return keep, suppressed

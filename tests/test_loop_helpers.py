@@ -105,3 +105,32 @@ def test_strip_blanks_old_monologue_keeps_tool_calls():
     assert [a["content"] for a in assistants] == ["", "", "think2", "think3"]
     # tool_calls survive the strip
     assert all("tool_calls" in a for a in assistants)
+
+
+from core.loop_helpers import pace_remainder, split_tool_calls
+from core.llm_client import ToolCall, ToolFunction
+
+
+def _tc(i, name):
+    return ToolCall(id=f"t{i}", function=ToolFunction(name=name, arguments="{}"))
+
+
+def test_pace_remainder_sleeps_when_fast():
+    assert pace_remainder(1.0, 2.0) == 1.0
+
+
+def test_pace_remainder_zero_when_slow():
+    assert pace_remainder(3.0, 2.0) == 0.0
+
+
+def test_split_suppresses_second_motion_and_speak():
+    calls = [_tc(0, "move"), _tc(1, "speak"), _tc(2, "pose"), _tc(3, "speak"), _tc(4, "set_face")]
+    keep, suppressed = split_tool_calls(calls)
+    assert [c.function.name for c in keep] == ["move", "speak", "set_face"]
+    assert [c.function.name for c in suppressed] == ["pose", "speak"]
+
+
+def test_split_allows_non_motion_non_speak_through():
+    calls = [_tc(0, "get_distance"), _tc(1, "get_battery")]
+    keep, suppressed = split_tool_calls(calls)
+    assert len(keep) == 2 and suppressed == []
