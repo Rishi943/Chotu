@@ -66,3 +66,42 @@ def test_render_frames_labels():
 
 def test_render_frames_empty():
     assert render_frames([]) == []
+
+
+from core.loop_helpers import trim_loop_window, strip_old_monologue
+
+
+def _iter(i):
+    return [
+        {"role": "assistant", "content": f"think{i}", "tool_calls": [{"id": f"c{i}"}]},
+        {"role": "tool", "tool_call_id": f"c{i}", "content": "{}"},
+    ]
+
+
+def test_trim_keeps_last_n_iterations():
+    mem = []
+    for i in range(5):
+        mem.extend(_iter(i))
+    trim_loop_window(mem, n=2)
+    assistants = [m for m in mem if m["role"] == "assistant"]
+    assert [m["content"] for m in assistants] == ["think3", "think4"]
+    # tool result for the oldest kept assistant is still present
+    assert any(m.get("tool_call_id") == "c3" for m in mem)
+
+
+def test_trim_noop_under_budget():
+    mem = _iter(0) + _iter(1)
+    before = [dict(m) for m in mem]
+    trim_loop_window(mem, n=5)
+    assert mem == before
+
+
+def test_strip_blanks_old_monologue_keeps_tool_calls():
+    mem = []
+    for i in range(4):
+        mem.extend(_iter(i))
+    strip_old_monologue(mem, keep_last=2)
+    assistants = [m for m in mem if m["role"] == "assistant"]
+    assert [a["content"] for a in assistants] == ["", "", "think2", "think3"]
+    # tool_calls survive the strip
+    assert all("tool_calls" in a for a in assistants)

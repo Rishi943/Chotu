@@ -59,3 +59,23 @@ def render_frames(stack: list[dict]) -> list[dict]:
             ],
         })
     return msgs
+
+
+def trim_loop_window(memory: list[dict], n: int) -> None:
+    """Keep the last `n` iterations (each starting at an assistant message) plus their
+    trailing tool results. Drop everything older. Mutates `memory`."""
+    starts = [i for i, m in enumerate(memory) if m.get("role") == "assistant"]
+    if len(starts) <= n:
+        return
+    cut = starts[len(starts) - n]
+    del memory[:cut]
+
+
+def strip_old_monologue(memory: list[dict], keep_last: int = 2) -> None:
+    """Blank the `content` of all but the last `keep_last` assistant messages.
+    Tool calls are preserved. Mutates `memory`."""
+    a_idxs = [i for i, m in enumerate(memory) if m.get("role") == "assistant"]
+    targets = a_idxs if keep_last == 0 else a_idxs[:-keep_last]
+    for i in targets:
+        if memory[i].get("content"):
+            memory[i] = {**memory[i], "content": ""}
