@@ -261,13 +261,13 @@ async def local_wait(seconds: int = 5, reason: str = "") -> dict:
     deadline = start + seconds
 
     try:
-        from core.brain import user_input_pending
+        from core.brain import pending_input
         while time.time() < deadline:
             remaining = deadline - time.time()
             if remaining <= 0:
                 break
             await asyncio.sleep(min(0.25, remaining))
-            if user_input_pending.is_set():
+            if pending_input.arrived.is_set():
                 break
     except ImportError:
         await asyncio.sleep(seconds)

@@ -5,7 +5,6 @@ rhythm) into the system prompt at import time, via core.prompts.
 """
 
 import asyncio
-import itertools
 import json
 import os
 import re
@@ -14,7 +13,6 @@ import time
 import traceback
 from dotenv import load_dotenv
 
-from core.heartbeat import heartbeat_loop
 from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
@@ -31,14 +29,10 @@ from core.loop_helpers import (
 load_dotenv()
 
 PI_HOST = os.getenv("PI_HOST", "http://chotu.local:7000")
-MEMORY_TOKEN_BUDGET = int(os.getenv("PALIV_MEMORY_TOKENS", "12000"))
-MAX_TOOL_ITERATIONS = 4
 DEBUG = os.getenv("PALIV_DEBUG", "0") == "1"
 MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
-HEARTBEAT_WINDOW = int(os.getenv("PALIV_HEARTBEAT_WINDOW", "5"))
-FRAME_WINDOW = int(os.getenv("PALIV_FRAME_WINDOW", "4"))
 LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "2"))
 LOOP_WINDOW = int(os.getenv("PALIV_LOOP_WINDOW", "8"))
 
@@ -46,142 +40,6 @@ LOOP_WINDOW = int(os.getenv("PALIV_LOOP_WINDOW", "8"))
 listen_and_transcribe = None
 if VOICE_ENABLED:
     from core.voice import listen_and_transcribe
-
-
-# --- Priority input queue ---
-
-_priority_counter = itertools.count()
-
-class _PriorityQueue:
-    """Queue that gives user/event/boot items priority over heartbeats."""
-
-    def __init__(self):
-        self._q: asyncio.PriorityQueue = asyncio.PriorityQueue()
-
-    def put_nowait(self, item: dict):
-        kind = item.get("kind", "heartbeat")
-        priority = 0 if kind in ("user", "event", "boot") else 1
-        self._q.put_nowait((priority, next(_priority_counter), item))
-
-    async def get(self) -> dict:
-        _, _, item = await self._q.get()
-        return item
-
-    def empty(self) -> bool:
-        return self._q.empty()
-
-    def qsize(self) -> int:
-        return self._q.qsize()
-
-
-# --- Tagged input items ---
-
-def wrap_user_input(text: str) -> dict:
-    return {"kind": "user", "text": text}
-
-def wrap_heartbeat() -> dict:
-    return {"kind": "heartbeat", "text": "[heartbeat]"}
-
-def wrap_event(subkind: str, payload: str = "") -> dict:
-    body = f"[event] {subkind}" + (f": {payload}" if payload else "")
-    return {"kind": "event", "subkind": subkind, "text": body}
-
-def wrap_boot() -> dict:
-    return {"kind": "boot", "text": "[boot] You just woke up. You don't know where you are. The session starts here."}
-
-
-# --- Memory helpers ---
-
-def _estimate_tokens(messages: list[dict]) -> int:
-    """Rough char/4 token estimate. Cheap upper bound that's fine for budget enforcement."""
-    n = 0
-    for m in messages:
-        content = m.get("content")
-        if isinstance(content, str):
-            n += len(content) // 4
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict):
-                    txt = part.get("text") or ""
-                    n += len(txt) // 4
-        for tc in m.get("tool_calls", []) or []:
-            args = (tc.get("function") or {}).get("arguments", "")
-            n += len(args) // 4
-        if m.get("tool_call_id"):
-            n += 4  # small bookkeeping
-    return n
-
-
-def trim_memory(items: list[dict], max_tokens: int = None) -> list[dict]:
-    """Drop oldest items until under budget. Tool call/result pairs are dropped as units.
-
-    A "pair" is an assistant message with `tool_calls` plus all subsequent `role=tool` messages
-    whose `tool_call_id` matches one of those calls. Pairs are scanned from the front; the whole
-    pair is dropped or kept.
-    """
-    budget = max_tokens if max_tokens is not None else MEMORY_TOKEN_BUDGET
-    if _estimate_tokens(items) <= budget:
-        return list(items)
-
-    work = list(items)
-    while _estimate_tokens(work) > budget and work:
-        head = work[0]
-        if head.get("role") == "assistant" and head.get("tool_calls"):
-            ids = {tc["id"] for tc in head["tool_calls"]}
-            # drop head + any immediately-following tool results whose id matches
-            i = 1
-            while i < len(work) and work[i].get("role") == "tool" and work[i].get("tool_call_id") in ids:
-                i += 1
-            del work[:i]
-        else:
-            del work[0]
-    return work
-
-
-def _is_frame_msg(m: dict) -> bool:
-    """True for a persisted camera frame: a user message whose content list
-    contains an image_url part."""
-    c = m.get("content")
-    return (
-        m.get("role") == "user"
-        and isinstance(c, list)
-        and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
-    )
-
-
-def enforce_frame_window(memory: list[dict], keep: int = None) -> None:
-    """Keep the newest `keep` camera-frame user messages; delete older ones outright.
-    The model's own description in the following assistant message preserves semantic
-    context, so a text stub is unnecessary. Mutates `memory` in place. Idempotent."""
-    keep = FRAME_WINDOW if keep is None else keep
-    frame_idxs = [i for i, m in enumerate(memory) if _is_frame_msg(m)]
-    to_drop = frame_idxs if keep <= 0 else frame_idxs[:-keep]
-    for i in reversed(to_drop):
-        del memory[i]
-
-
-def persist_turn(memory: list[dict], turn_msgs: list[dict], kind: str, iterations: int) -> None:
-    """Append a completed turn's messages to memory, then bound the frame window.
-    Empty heartbeat turns (no tool activity) persist nothing. Mutates `memory`."""
-    if kind == "heartbeat" and iterations == 0:
-        return
-    memory.extend(turn_msgs)
-    enforce_frame_window(memory)
-
-
-def evict_old_heartbeats(messages: list[dict]) -> None:
-    """Trim heartbeat blocks so at most HEARTBEAT_WINDOW user[heartbeat] markers remain. Mutates in place."""
-    hb_starts = [i for i, m in enumerate(messages)
-                 if m.get("_origin") == "heartbeat" and m.get("role") == "user"]
-    if len(hb_starts) <= HEARTBEAT_WINDOW:
-        return
-    to_evict = hb_starts[: len(hb_starts) - HEARTBEAT_WINDOW]
-    boundaries = []
-    for k, start in enumerate(to_evict):
-        end = hb_starts[k + 1] if k + 1 < len(hb_starts) else len(messages)
-        boundaries.append((start, end))
-    for start, end in reversed(boundaries):
-        del messages[start:end]
 
 
 def strip_internal_fields(messages: list[dict]) -> list[dict]:
@@ -193,13 +51,10 @@ def strip_internal_fields(messages: list[dict]) -> list[dict]:
 
 pi = PiClient(PI_HOST)
 llm_client = LLMClient()
-memory: list[dict] = []  # rolling window; trimmed by trim_memory()
+memory: list[dict] = []  # rolling window; trimmed by trim_loop_window()
 frame_stack: list[dict] = []           # newest-last, capped at 3 by push_frame
 pending_input: PendingInput = PendingInput()
 BOOT_TEXT = "[boot] You just woke up. You don't know where you are. The session starts here."
-input_queue: _PriorityQueue = _PriorityQueue()
-user_input_pending: asyncio.Event = asyncio.Event()
-tool_chain_active: asyncio.Event = asyncio.Event()
 OBSTACLE_CM = 15
 estop: asyncio.Event = asyncio.Event()
 gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -237,15 +92,6 @@ def build_loop_messages(system_prompt: str, memory: list[dict], frame_stack: lis
     msgs.extend(strip_internal_fields(memory))
     msgs.extend(render_frames(frame_stack))
     return msgs
-
-
-def build_messages(user_input: str, *, origin: str = "user") -> list[dict]:
-    global memory
-    memory = trim_memory(memory)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT, "_origin": "boot"}]
-    messages.extend(memory)
-    messages.append({"role": "user", "content": user_input, "_origin": origin})
-    return messages
 
 
 # --- GUI event emitter ---
@@ -359,34 +205,24 @@ async def battery_monitor() -> None:
                 if streak[threshold] >= BATTERY_CONSECUTIVE_REQUIRED and threshold not in fired:
                     fired.add(threshold)
                     print(f"[battery] {pct:.0f}% ({voltage:.2f}V) — warning at {threshold}%")
-                    from core.events import inject_event
-                    inject_event(input_queue, tool_chain_active, "battery_low",
-                                 payload=f"{pct:.0f}% ({voltage:.2f}V) — {msg}")
+                    pending_input.push(f"[battery] {msg}")
         await asyncio.sleep(BATTERY_POLL_INTERVAL)
 
 
-# --- Live loop ---
+# --- Paced loop ---
 
-async def live_loop():
+async def paced_loop():
+    """The brain. Runs forever: one iteration, then a paced sleep (>= LOOP_FLOOR,
+    cut short by incoming input)."""
+    memory.append({"role": "user", "content": BOOT_TEXT, "_origin": "boot"})
     while True:
-        item = await input_queue.get()
-        if isinstance(item, str):
-            item = wrap_user_input(item)  # backwards-compat for any legacy str pushes
-        text = item.get("text", "").strip()
-        if not text:
-            continue
-        if item.get("kind") in ("user", "event"):
-            user_input_pending.clear()
-        print(f"\n--- Chotu thinking ({item['kind']}) ---")
-        tool_chain_active.set()
         try:
-            await _process(item)
+            tool_duration = await run_iteration()
         except Exception as e:
             print(f"  [brain error] {e}")
             traceback.print_exc()
-        finally:
-            tool_chain_active.clear()
-        print()
+            tool_duration = 0.0
+        await paced_sleep(pace_remainder(tool_duration, LOOP_FLOOR), pending_input)
 
 
 async def _run_one(tc):
@@ -399,29 +235,6 @@ async def _run_one(tc):
     except json.JSONDecodeError:
         args = {}
     return tc, name, args_json, result
-
-
-def _guard_key(name: str, args: dict) -> tuple:
-    """Stable hash key for per-args fail guard."""
-    import hashlib
-    blob = json.dumps(args or {}, sort_keys=True, default=str)
-    h = hashlib.sha1(blob.encode()).hexdigest()[:16]
-    return (name, h)
-
-
-def _record_failure(failed_set: set, name: str, args: dict) -> None:
-    failed_set.add(_guard_key(name, args))
-
-
-def _should_suppress(failed_set: set, name: str, args: dict) -> bool:
-    return _guard_key(name, args) in failed_set
-
-
-def _suppressed(tool_id: str, name: str, reason: str) -> tuple:
-    """Fake ok envelope for a suppressed tool call — model sees success, doesn't retry."""
-    result = {"ok": True, "tool": name, "result": {"suppressed": True}, "duration_ms": 0, "timestamp": time.time(), "error": None}
-    dbg(f"[guard] suppressed {name}: {reason}")
-    return tool_id, name, result
 
 
 def _safe_args(args_json: str) -> dict:
@@ -501,190 +314,13 @@ async def run_iteration() -> float:
     return tool_duration
 
 
-async def _process(item: dict):
-    user_input = item["text"]
-    kind = item["kind"]
-    _emit({"type": kind, "text": user_input})
-    _fire_face("thinking")
-    messages = build_messages(user_input, origin=kind)
-    if kind == "heartbeat":
-        evict_old_heartbeats(messages)
-    prefix_len = len(messages) - 1  # index of the current user msg; turn content starts here
-    dbg(f"sending {len(messages)} messages to LLM")
-
-    try:
-        response = await llm_client.chat_complete(strip_internal_fields(messages), TOOL_SCHEMAS, thinking=thinking_enabled)
-    except Exception as e:
-        print(f"  LLM error: {e}")
-        _fire_face("idle")
-        return
-
-    if not response.choices:
-        print("  LLM error: empty choices")
-        _fire_face("idle")
-        return
-
-    if response.choices:
-        content = response.choices[0].message.content
-        clean_content, think_blocks = _extract_think_blocks(content)
-        for block in think_blocks:
-            block = block.strip()
-            if block:
-                print(f"  [think] {block[:120]}...")
-                _emit({"type": "think", "text": block})
-        if think_blocks and response.choices[0].message.content != clean_content:
-            response.choices[0].message.content = clean_content
-        if clean_content:
-            print_monologue(clean_content)
-
-    waits_fired = 0
-    failed_tools: set = set()
-
-    iterations = 0
-    ITERATION_CAP = MAX_TOOL_ITERATIONS
-
-    while response.choices[0].message.tool_calls and iterations < ITERATION_CAP:
-        assistant_msg = response.choices[0].message
-        messages.append(llm_client.format_assistant_message(response))
-
-        # --- Split: allowed vs suppressed ---
-        to_dispatch = []
-        suppressed = []
-        for tc in assistant_msg.tool_calls:
-            name = tc.function.name
-            try:
-                tc_args = json.loads(tc.function.arguments or "{}") if tc.function.arguments else {}
-            except json.JSONDecodeError:
-                tc_args = {}
-            if name == "wait" and waits_fired >= 1:
-                suppressed.append(_suppressed(tc.id, name, "1 wait per turn max"))
-            elif _should_suppress(failed_tools, name, tc_args):
-                suppressed.append(_suppressed(tc.id, name, f"{name} already failed this turn"))
-            else:
-                if name == "wait":
-                    waits_fired += 1
-                to_dispatch.append(tc)
-
-        deferred_vision = []
-
-        async def _run_one_scoped(tc, dmap):
-            from core.tools import dispatch_tool
-            name = tc.function.name
-            args_json = tc.function.arguments
-            dbg(f"dispatching {name}({args_json})")
-            if name not in dmap:
-                env = {"ok": False, "tool": name, "result": {}, "duration_ms": 0,
-                       "timestamp": time.time(),
-                       "error": f"'{name}' is not available in this context"}
-                return tc, name, args_json, env
-            result = await dispatch_tool(dmap, name, args_json)
-            return tc, name, args_json, result
-
-        dispatched = await asyncio.gather(*[_run_one_scoped(tc, dispatch_map) for tc in to_dispatch])
-
-        all_results = [(tc, name, result) for tc, name, _, result in dispatched] + \
-                      [(None, name, result) for _, name, result in suppressed]
-
-        for tool_call, name, result in all_results:
-            suppressed_call = tool_call is None
-            args_json = tool_call.function.arguments if tool_call else "{}"
-            try:
-                args = json.loads(args_json) if args_json else {}
-            except json.JSONDecodeError:
-                args = {"_raw": args_json}
-
-            if not suppressed_call:
-                print_tool_call(name, args, result)
-
-            if not result.get("ok"):
-                _record_failure(failed_tools, name, args)
-
-            if tool_call is None:
-                continue
-
-            # --- normal tool result handling ---
-            if name == "capture_vision" and result.get("ok"):
-                image_b64 = result["result"].get("image_base64", "")
-                messages.append(llm_client.format_tool_result(tool_call.id, "Camera snapshot taken."))
-                if image_b64:
-                    deferred_vision.append({
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                            {"type": "text", "text": "This is your current camera view. Describe what you observe."},
-                        ],
-                    })
-                    if len(gallery_store) >= 50:
-                        gallery_store.pop(0)
-                    gallery_store.append({"label": "capture", "image_b64": image_b64, "ts": time.time()})
-                    _emit({"type": "image", "label": "capture", "image_b64": image_b64})
-            else:
-                messages.append(llm_client.format_tool_result(tool_call.id, json.dumps(result)))
-
-        for tool_id, name, result in suppressed:
-            messages.append(llm_client.format_tool_result(tool_id, json.dumps(result)))
-
-        for msg in deferred_vision:
-            messages.append(msg)
-
-        dbg(f"follow-up LLM call (iteration {iterations + 1})")
-        try:
-            response = await llm_client.chat_complete(strip_internal_fields(messages), TOOL_SCHEMAS, thinking=thinking_enabled)
-        except Exception as e:
-            print(f"  LLM error on follow-up: {e}")
-            return
-
-        if not response.choices:
-            print("  LLM error: empty choices on follow-up")
-            return
-
-        if response.choices:
-            content = response.choices[0].message.content
-            clean_content, think_blocks = _extract_think_blocks(content)
-            for block in think_blocks:
-                block = block.strip()
-                if block:
-                    print(f"  [think] {block[:120]}...")
-                    _emit({"type": "think", "text": block})
-            if think_blocks and response.choices[0].message.content != clean_content:
-                response.choices[0].message.content = clean_content
-            if clean_content:
-                print_monologue(clean_content)
-
-        iterations += 1
-
-    if iterations >= ITERATION_CAP:
-        print("  [safety] Tool call limit reached, stopping.")
-
-    final_text = response.choices[0].message.content
-    _fire_face("idle")
-
-    # Append the terminal assistant reply (the while-loop only appends assistant
-    # messages that HAVE tool_calls). If the loop exited at ITERATION_CAP with tools
-    # still pending, persist only the text — dropping the un-dispatched tool_calls so
-    # memory never holds a dangling tool_calls message (invalid to resend).
-    if response.choices[0].message.tool_calls:
-        final_msg = {"role": "assistant", "content": final_text or "", "_origin": kind}
-    else:
-        final_msg = llm_client.format_assistant_message(response)
-        final_msg.setdefault("content", final_text or "")  # None-guard
-        final_msg["_origin"] = kind
-    messages.append(final_msg)
-
-    # Persist the whole turn (user + assistant/tool_calls + tool results + frames +
-    # replies). Empty heartbeats persist nothing; frame window bounds images to 4.
-    persist_turn(memory, messages[prefix_len:], kind, iterations)
-
-
-
 # --- Input loops ---
 
 async def input_loop():
     while True:
         try:
             text = await asyncio.to_thread(input, "you> ")
-            input_queue.put_nowait(wrap_user_input(text))
-            user_input_pending.set()
+            pending_input.push(text)
         except EOFError:
             break
 
@@ -717,11 +353,7 @@ async def voice_loop():
 
             if text.strip():
                 last_speech_time = _time.monotonic()
-                from core.events import inject_event
-                if not inject_event(input_queue, tool_chain_active, "wake_word", payload=text):
-                    print(f"  [voice] dropped wake_word during tool chain: {text!r}")
-                else:
-                    user_input_pending.set()
+                pending_input.push(text)
 
         except Exception as e:
             print(f"  [voice error] {e}")
@@ -762,8 +394,7 @@ async def main():
     loop.add_signal_handler(signal.SIGTERM, _on_signal)
 
     def _on_stop_word():
-        from core.events import inject_event
-        inject_event(input_queue, tool_chain_active, "stop_word")
+        pending_input.push("[stop] freeze — a human asked you to stop.")
 
     try:
         loop.add_signal_handler(signal.SIGUSR1, _on_stop_word)
@@ -774,15 +405,10 @@ async def main():
         asyncio.create_task(obstacle_poller(pi, estop)),
         asyncio.create_task(battery_monitor()),
         asyncio.create_task(gui_server.run_gui_server()),
-        asyncio.create_task(heartbeat_loop(input_queue, tool_chain_active)),
     ]
 
     print("Type a message to talk to Chotu. Ctrl+C to quit.\n")
-    tasks.append(asyncio.create_task(live_loop()))
-
-    # Prime the monologue with one synthetic [boot] message.
-    input_queue.put_nowait(wrap_boot())
-
+    tasks.append(asyncio.create_task(paced_loop()))
     tasks.append(asyncio.create_task(voice_loop() if VOICE_ENABLED else input_loop()))
 
     _stop_task = asyncio.create_task(_shutdown.wait())
