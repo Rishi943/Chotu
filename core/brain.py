@@ -19,6 +19,11 @@ from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
 from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool, capture_vision_tool
+from core.loop_helpers import (
+    describe_motion, motion_from_calls, push_frame, render_frames,
+    trim_loop_window, strip_old_monologue, pace_remainder, split_tool_calls,
+    PendingInput, paced_sleep,
+)
 
 
 # --- Config ---
@@ -219,6 +224,15 @@ dispatch_map = build_dispatch(
 
 
 # --- Message building ---
+
+def build_loop_messages(system_prompt: str, memory: list[dict], frame_stack: list[dict]) -> list[dict]:
+    """System prompt + rolling window + the 3 motion-labeled frames at the tail.
+    Internal `_origin` fields are stripped so the result is safe to send to the LLM."""
+    msgs = [{"role": "system", "content": system_prompt}]
+    msgs.extend(strip_internal_fields(memory))
+    msgs.extend(render_frames(frame_stack))
+    return msgs
+
 
 def build_messages(user_input: str, *, origin: str = "user") -> list[dict]:
     global memory
