@@ -1,5 +1,7 @@
 """Pure helpers for the unified paced loop. No I/O, no globals — unit-testable."""
 
+import asyncio
+
 _MOTION_TOOLS = {"move", "pose"}
 
 
@@ -103,3 +105,37 @@ def split_tool_calls(tool_calls):
             seen_speak = True
         keep.append(tc)
     return keep, suppressed
+
+
+class PendingInput:
+    """Single-buffer replacement for the priority queue. Terminal/GUI/voice/events
+    push text; the loop drains it once per iteration. `arrived` lets the pace-sleep
+    wake early when input shows up."""
+
+    def __init__(self):
+        self._buf: list[str] = []
+        self.arrived = asyncio.Event()
+
+    def push(self, text: str) -> None:
+        t = (text or "").strip()
+        if t:
+            self._buf.append(t)
+            self.arrived.set()
+
+    def drain(self) -> str | None:
+        if not self._buf:
+            return None
+        joined = "\n".join(self._buf)
+        self._buf.clear()
+        self.arrived.clear()
+        return joined
+
+
+async def paced_sleep(remainder: float, pending: "PendingInput") -> None:
+    """Sleep up to `remainder` seconds, returning early if pending input arrives."""
+    if remainder <= 0:
+        return
+    try:
+        await asyncio.wait_for(pending.arrived.wait(), timeout=remainder)
+    except asyncio.TimeoutError:
+        pass

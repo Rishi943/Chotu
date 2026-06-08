@@ -134,3 +134,38 @@ def test_split_allows_non_motion_non_speak_through():
     calls = [_tc(0, "get_distance"), _tc(1, "get_battery")]
     keep, suppressed = split_tool_calls(calls)
     assert len(keep) == 2 and suppressed == []
+
+
+import asyncio
+import pytest
+from core.loop_helpers import PendingInput, paced_sleep
+
+
+def test_pending_drain_joins_and_clears():
+    p = PendingInput()
+    p.push("hello")
+    p.push("  ")        # whitespace ignored
+    p.push("there")
+    assert p.drain() == "hello\nthere"
+    assert p.drain() is None    # empty after drain
+
+
+@pytest.mark.asyncio
+async def test_paced_sleep_returns_early_on_input():
+    p = PendingInput()
+
+    async def feed():
+        await asyncio.sleep(0.02)
+        p.push("hi")
+
+    asyncio.create_task(feed())
+    start = asyncio.get_event_loop().time()
+    await paced_sleep(1.0, p)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 0.5, f"sleep should have been cut short, took {elapsed}s"
+
+
+@pytest.mark.asyncio
+async def test_paced_sleep_zero_returns_immediately():
+    p = PendingInput()
+    await paced_sleep(0.0, p)   # must not hang
