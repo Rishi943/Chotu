@@ -381,6 +381,43 @@ async def trigger_ptt_capture() -> None:
         _emit({"type": "ptt", "state": "idle"})
 
 
+def set_handsfree(enabled: bool) -> None:
+    """Start or stop the hands-free conversation loop (idempotent)."""
+    global handsfree_task
+    if enabled and handsfree_task is None:
+        handsfree_task = asyncio.create_task(_handsfree_loop())
+    elif not enabled and handsfree_task is not None:
+        handsfree_task.cancel()
+        handsfree_task = None
+
+
+async def _handsfree_loop() -> None:
+    """Latched hands-free: record an utterance, push it, wait for Chotu to finish
+    speaking, repeat. No silence timeout — runs until set_handsfree(False) cancels it."""
+    from core.voice import VoiceListener
+    listener = VoiceListener()
+    listener.start()
+    _emit({"type": "ptt", "state": "handsfree_on"})
+    first = True
+    try:
+        while True:
+            if not first:
+                await tts_done_event.wait()   # let Chotu finish before listening again
+                tts_done_event.clear()
+            first = False
+            listener.drain()
+            _emit({"type": "ptt", "state": "handsfree_listening"})
+            text = await asyncio.to_thread(listener.record_utterance)
+            _emit({"type": "ptt", "state": "handsfree_on"})
+            if text.strip():
+                pending_input.push(text)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        listener.stop()
+        _emit({"type": "ptt", "state": "handsfree_off"})
+
+
 # --- Input loops ---
 
 async def input_loop():

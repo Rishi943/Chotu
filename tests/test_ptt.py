@@ -100,3 +100,45 @@ def test_trigger_ptt_capture_ignored_when_handsfree_active(monkeypatch):
     asyncio.run(brain.trigger_ptt_capture())
     assert brain.pending_input.drain() is None
     brain.handsfree_task = None
+
+
+class _HFListener:
+    """Fake VoiceListener for the hands-free loop: yields one utterance then ''."""
+    def __init__(self):
+        self._n = 0
+
+    def start(self): pass
+    def stop(self): pass
+    def drain(self): pass
+
+    def record_utterance(self):
+        self._n += 1
+        return "come here" if self._n == 1 else ""
+
+
+def test_set_handsfree_starts_pushes_and_stops(monkeypatch):
+    _reset_brain()
+    monkeypatch.setattr("core.voice.VoiceListener", _HFListener)
+
+    async def _run():
+        brain.tts_done_event.set()        # allow turn-taking to proceed
+        brain.set_handsfree(True)
+        assert brain.handsfree_task is not None
+        await asyncio.sleep(0.1)           # let one capture happen
+        got = brain.pending_input.drain()
+        brain.set_handsfree(False)
+        await asyncio.sleep(0.05)          # let cancellation + finally run
+        return got
+
+    got = asyncio.run(_run())
+    assert got == "come here"
+    assert brain.handsfree_task is None
+    states = _drain_events()
+    assert "handsfree_on" in states
+    assert states[-1] == "handsfree_off"
+
+
+def test_set_handsfree_false_is_noop_when_not_running():
+    _reset_brain()
+    brain.set_handsfree(False)            # must not raise
+    assert brain.handsfree_task is None
