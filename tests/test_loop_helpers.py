@@ -177,3 +177,24 @@ def test_capture_vision_removed_from_schema():
     assert "capture_vision" not in names
     # core motion/sense tools still present
     assert {"move", "pose", "speak"} <= names
+
+
+from core.loop_helpers import cap_result
+
+
+def test_cap_result_passthrough_when_small():
+    s = '{"ok": true}'
+    assert cap_result(s) == s
+
+
+def test_cap_result_truncates_and_marks():
+    s = "x" * 2000
+    out = cap_result(s, max_chars=1500)
+    assert out.startswith("x" * 1500)
+    assert out.endswith("[truncated 500 chars]")
+    assert len(out) < len(s) + 40  # marker is short, no blow-up
+
+
+def test_cap_result_boundary_exact_length_passes():
+    s = "y" * 1500
+    assert cap_result(s, max_chars=1500) == s

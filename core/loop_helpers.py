@@ -88,6 +88,15 @@ def pace_remainder(tool_duration: float, floor: float) -> float:
     return max(0.0, floor - tool_duration)
 
 
+def cap_result(text: str, max_chars: int = 1500) -> str:
+    """Cap an oversized tool-result string (head-keep + marker). Tiny envelopes
+    pass through untouched; guards against a fat capture_vision/perception payload
+    silently bloating every cached call until the next compaction."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n…[truncated {len(text) - max_chars} chars]"
+
+
 def split_tool_calls(tool_calls):
     """Dedupe a call list by class: at most one motion (move/pose) and one speak.
     Returns (keep, suppressed). Order preserved; first of each class wins."""
