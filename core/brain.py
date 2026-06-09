@@ -19,9 +19,10 @@ from core.prompts import SYSTEM_PROMPT
 from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
 from core.loop_helpers import (
     describe_motion, motion_from_calls, push_frame, render_frames,
-    trim_loop_window, strip_old_monologue, pace_remainder, split_tool_calls,
+    maybe_compact, cap_result, pace_remainder, split_tool_calls,
     PendingInput, paced_sleep,
 )
+from core.scratchpad import Scratchpad
 
 
 # --- Config ---
@@ -52,8 +53,9 @@ def strip_internal_fields(messages: list[dict]) -> list[dict]:
 
 pi = PiClient(PI_HOST)
 llm_client = LLMClient()
-memory: list[dict] = []  # rolling window; trimmed by trim_loop_window()
+memory: list[dict] = []  # append-only window; batch-trimmed by maybe_compact()
 frame_stack: list[dict] = []           # newest-last, capped at 3 by push_frame
+scratchpad: Scratchpad = Scratchpad()  # mechanical running state, rendered each turn
 pending_input: PendingInput = PendingInput()
 BOOT_TEXT = "[boot] You just woke up. You don't know where you are. The session starts here."
 OBSTACLE_CM = 15
@@ -87,11 +89,17 @@ dispatch_map = build_dispatch(
 
 # --- Message building ---
 
-def build_loop_messages(system_prompt: str, memory: list[dict], frame_stack: list[dict]) -> list[dict]:
-    """System prompt + rolling window + the 3 motion-labeled frames at the tail.
-    Internal `_origin` fields are stripped so the result is safe to send to the LLM."""
+def build_loop_messages(system_prompt: str, memory: list[dict], frame_stack: list[dict],
+                        scratchpad: "Scratchpad") -> list[dict]:
+    """System prompt + append-only window + state block + the 3 motion-labeled frames.
+    Order is [system | memory | STATE | frames]: system+memory are the stable cached
+    prefix; STATE and frames are the small volatile tail. Internal `_origin` fields are
+    stripped so the result is safe to send to the LLM."""
     msgs = [{"role": "system", "content": system_prompt}]
     msgs.extend(strip_internal_fields(memory))
+    state = scratchpad.render()
+    if state is not None:
+        msgs.append({k: v for k, v in state.items() if not k.startswith("_")})
     msgs.extend(render_frames(frame_stack))
     return msgs
 
@@ -255,7 +263,7 @@ async def run_iteration() -> float:
         _emit({"type": "user", "text": text})
 
     _fire_face("thinking")
-    messages = build_loop_messages(SYSTEM_PROMPT, memory, frame_stack)
+    messages = build_loop_messages(SYSTEM_PROMPT, memory, frame_stack, scratchpad)
 
     try:
         response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
@@ -315,16 +323,19 @@ async def run_iteration() -> float:
         )
         tool_duration = time.time() - start
         motion_calls = []
+        state_calls = []
         for tc, name, args_json, result in dispatched:
             args = _safe_args(args_json)
             print_tool_call(name, args, result)
-            memory.append(llm_client.format_tool_result(tc.id, json.dumps(result)))
+            memory.append(llm_client.format_tool_result(tc.id, cap_result(json.dumps(result))))
             motion_calls.append((name, args))
+            state_calls.append((name, args, result))
         for tc in suppressed:
             env = {"ok": True, "tool": tc.function.name, "result": {"suppressed": True},
                    "duration_ms": 0, "timestamp": time.time(), "error": None}
-            memory.append(llm_client.format_tool_result(tc.id, json.dumps(env)))
+            memory.append(llm_client.format_tool_result(tc.id, cap_result(json.dumps(env))))
         motion_desc = motion_from_calls(motion_calls)
+        scratchpad.update(state_calls)
 
     capture = await pi.capture()
     if capture.get("ok"):
@@ -333,8 +344,7 @@ async def run_iteration() -> float:
             push_frame(frame_stack, frame_b64, motion_desc)
             _emit({"type": "image", "label": "frame", "image_b64": frame_b64})
 
-    trim_loop_window(memory, LOOP_WINDOW)
-    strip_old_monologue(memory, keep_last=2)
+    maybe_compact(memory, COMPACT_AT, COMPACT_KEEP)
     _fire_face("idle")
     return tool_duration
 
