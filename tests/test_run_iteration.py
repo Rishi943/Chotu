@@ -38,6 +38,7 @@ from core.llm_client import LLMResponse, NormalizedChoice, NormalizedMessage
 class _FakeLLM:
     """Returns one scripted response, then text-only forever."""
     provider = "local"
+    supports_cache_control = False
     def __init__(self, response):
         self._response = response
     async def chat_complete(self, messages, tools, thinking=False):
@@ -75,3 +76,25 @@ async def test_run_iteration_text_only_pushes_frame(monkeypatch):
     assert brain.frame_stack[0]["image_b64"] == "ZZZ"
     assistants = [m for m in brain.memory if m["role"] == "assistant"]
     assert assistants[-1]["content"] == "just standing here"
+
+
+def test_build_loop_messages_tags_last_memory_when_cache_boundary():
+    from core.brain import build_loop_messages
+    from core.scratchpad import Scratchpad
+    memory = [
+        {"role": "assistant", "content": "a", "_origin": "loop"},
+        {"role": "tool", "tool_call_id": "1", "content": "{}"},
+    ]
+    msgs = build_loop_messages("SYS", memory, [], Scratchpad(), cache_boundary=True)
+    # the tool result (last memory msg) carries the boundary tag; nothing else does
+    tagged = [m for m in msgs if m.get("_cache_boundary")]
+    assert len(tagged) == 1
+    assert tagged[0]["role"] == "tool"
+
+
+def test_build_loop_messages_no_tag_when_cache_boundary_false():
+    from core.brain import build_loop_messages
+    from core.scratchpad import Scratchpad
+    memory = [{"role": "assistant", "content": "a"}]
+    msgs = build_loop_messages("SYS", memory, [], Scratchpad())  # default False
+    assert all("_cache_boundary" not in m for m in msgs)

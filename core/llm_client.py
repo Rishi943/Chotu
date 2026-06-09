@@ -84,6 +84,7 @@ class LLMClient:
             self.model = os.getenv("PALIV_BRAIN_MODEL", "claude-sonnet-4-6")
             self._anthropic_client = _anthropic.AsyncAnthropic(api_key=api_key)
             self._openai = None
+            self._cache_system = False
 
         else:
             raise ValueError(
@@ -111,6 +112,13 @@ class LLMClient:
                 tool_choice=tool_choice, max_tokens=max_tokens,
             )
         return await self._claude_complete(messages, tools)
+
+    @property
+    def supports_cache_control(self) -> bool:
+        """True when the active provider honors cache_control markers: Claude always,
+        local only when pointed at DashScope. Gates the _cache_boundary tag so it never
+        reaches llama-server (which would reject the unknown field)."""
+        return self.provider == "claude" or self._cache_system
 
     def format_assistant_message(self, response: LLMResponse) -> dict:
         """

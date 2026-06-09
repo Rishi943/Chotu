@@ -90,13 +90,17 @@ dispatch_map = build_dispatch(
 # --- Message building ---
 
 def build_loop_messages(system_prompt: str, memory: list[dict], frame_stack: list[dict],
-                        scratchpad: "Scratchpad") -> list[dict]:
+                        scratchpad: "Scratchpad", cache_boundary: bool = False) -> list[dict]:
     """System prompt + append-only window + state block + the 3 motion-labeled frames.
     Order is [system | memory | STATE | frames]: system+memory are the stable cached
     prefix; STATE and frames are the small volatile tail. Internal `_origin` fields are
-    stripped so the result is safe to send to the LLM."""
+    stripped so the result is safe to send to the LLM. When `cache_boundary` is set, the
+    last memory message is tagged `_cache_boundary` for the provider to mark cache_control."""
     msgs = [{"role": "system", "content": system_prompt}]
-    msgs.extend(strip_internal_fields(memory))
+    mem_msgs = strip_internal_fields(memory)
+    if cache_boundary and mem_msgs:
+        mem_msgs[-1] = {**mem_msgs[-1], "_cache_boundary": True}
+    msgs.extend(mem_msgs)
     state = scratchpad.render()
     if state is not None:
         msgs.append({k: v for k, v in state.items() if not k.startswith("_")})
@@ -263,7 +267,10 @@ async def run_iteration() -> float:
         _emit({"type": "user", "text": text})
 
     _fire_face("thinking")
-    messages = build_loop_messages(SYSTEM_PROMPT, memory, frame_stack, scratchpad)
+    messages = build_loop_messages(
+        SYSTEM_PROMPT, memory, frame_stack, scratchpad,
+        cache_boundary=llm_client.supports_cache_control,
+    )
 
     try:
         response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
