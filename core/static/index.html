@@ -377,6 +377,14 @@
     .perception-val.none {
       color: #3a3a3a;
     }
+    .ptt-pill { display:none; align-items:center; flex:none; border-radius:20px;
+      overflow:hidden; border:1px solid #34343c; margin-left:8px; cursor:pointer; }
+    .ptt-seg { width:38px; height:38px; display:flex; align-items:center;
+      justify-content:center; background:#202028; color:#cfcfe0; font-size:15px;
+      user-select:none; }
+    .ptt-seg + .ptt-seg { border-left:1px solid #34343c; }
+    #ptt-mic.active { background:#1d2b44; color:#cfe2ff; }
+    #ptt-hf.active  { background:#3a1320; color:#ffd9df; }
   </style>
 </head>
 <body>
@@ -427,6 +435,10 @@
         onkeydown="handleKey(event)"
       >
       <button class="send-btn" onclick="sendInput()">send</button>
+      <div class="ptt-pill" id="ptt-pill">
+        <div class="ptt-seg" id="ptt-mic" title="Tap to talk once">🎤</div>
+        <div class="ptt-seg" id="ptt-hf" title="Hands-free conversation">∞</div>
+      </div>
     </div>
 
   </div>
@@ -579,6 +591,21 @@
         appendEvent('ev-mode', '[mode] switched to ' + data.mode);
       } else if (type === 'battery') {
         applyBattery(data.percent, data.voltage);
+      } else if (type === 'ptt') {
+        var mic = document.getElementById('ptt-mic');
+        var hf = document.getElementById('ptt-hf');
+        if (!mic || !hf) return;
+        var s = data.state;
+        if (s === 'recording' || s === 'handsfree_listening') {
+          mic.classList.add('active');
+        } else {
+          mic.classList.remove('active');
+        }
+        if (s === 'handsfree_on' || s === 'handsfree_listening') {
+          hf.classList.add('active');
+        } else if (s === 'handsfree_off') {
+          hf.classList.remove('active');
+        }
       }
     };
 
@@ -610,6 +637,29 @@
       body: JSON.stringify({ enabled: continuousCb.checked })
     }).catch(function() {});
   });
+
+  // ── Push-to-talk pill ─────────────────────────────────────
+  (function initPtt() {
+    fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
+      if (!cfg.ptt_enabled) return;
+      var pill = document.getElementById('ptt-pill');
+      var mic = document.getElementById('ptt-mic');
+      var hf = document.getElementById('ptt-hf');
+      pill.style.display = 'flex';
+      var handsfree = false;
+      mic.addEventListener('click', function() {
+        fetch('/ptt', { method: 'POST' }).catch(function() {});
+      });
+      hf.addEventListener('click', function() {
+        handsfree = !handsfree;
+        fetch('/handsfree', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: handsfree })
+        }).catch(function() {});
+      });
+    }).catch(function() {});
+  })();
 
   // ── Perception polling ────────────────────────────────────
   function updatePerception() {
