@@ -32,6 +32,9 @@ async def main() -> None:
     ap.add_argument("--dashscope", metavar="MODEL",
                     help="Point at DashScope intl with DASHSCOPE_API_KEY.")
     ap.add_argument("-n", type=int, default=3, help="Number of calls (default 3).")
+    ap.add_argument("--moving", action="store_true",
+                    help="Simulate the loop: grow memory each call, mark system + "
+                         "end-of-memory breakpoint, report cached_tokens per call (O-1).")
     args = ap.parse_args()
 
     if args.dashscope:
@@ -45,6 +48,31 @@ async def main() -> None:
     if not llm._cache_system:
         print("WARNING: PALIV_BRAIN_URL is not DashScope — no cache marker will be sent.")
     print("-" * 64)
+
+    if args.moving:
+        from core.brain import build_loop_messages
+        from core.scratchpad import Scratchpad
+        memory: list[dict] = []
+        for i in range(args.n):
+            # append one synthetic prior turn (assistant + tool result) each call
+            memory.append({"role": "assistant", "content": f"observation {i}: nothing new"})
+            memory.append({"role": "tool", "tool_call_id": str(i),
+                           "content": '{"ok": true, "result": {"distance_cm": -1}}'})
+            messages = build_loop_messages(SYSTEM_PROMPT, memory, [], Scratchpad(),
+                                           cache_boundary=llm.supports_cache_control)
+            r = await llm.chat_complete(messages, TOOL_SCHEMAS, max_tokens=16)
+            u = r.usage or {}
+            p, cached = u.get("prompt_tokens", 0), u.get("cached_tokens", 0)
+            pct = f"{cached / p * 100:.0f}%" if p else "—"
+            flag = "  <-- CACHE HIT" if cached else ""
+            print(f"  call {i}: prompt={p}  cached={cached} ({pct})  mem_msgs={len(memory)}{flag}")
+        print("-" * 64)
+        print("O-1: cached should GROW with the prefix (proves the moving end-of-memory")
+        print("breakpoint, not just a fixed system block). If cached plateaus at the")
+        print("system-only size, DashScope is honoring 1 breakpoint — flip to 1 marker.")
+        print("If call 0 errors on the tool-role block, apply the §B assistant/user fallback.")
+        await llm.close()
+        return
 
     # Same stable prefix every call (system prompt + tools), tiny varying user turn.
     for i in range(args.n):
