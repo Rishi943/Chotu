@@ -33,6 +33,7 @@ if os.getenv("SIM_CLOUD") == "1":
     os.environ["PALIV_BRAIN_MODEL"] = os.getenv("SIM_CLOUD_MODEL", "qwen3.5-flash")
 
 import core.brain as brain
+from core.loop_helpers import estimate_memory_tokens
 from core.scratchpad import Scratchpad
 
 REPO = Path(__file__).resolve().parent.parent
@@ -118,7 +119,7 @@ async def main():
     brain.pending_input.push("walk around and look for something interesting")
 
     print(f"\nSim: {iters} iterations against {brain.llm_client.model} | "
-          f"COMPACT_AT={brain.COMPACT_AT} KEEP={brain.COMPACT_KEEP} FLOOR={brain.LOOP_FLOOR}s")
+          f"COMPACT_AT_TOKENS={brain.COMPACT_AT_TOKENS} KEEP_TOKENS={brain.COMPACT_KEEP_TOKENS} FLOOR={brain.LOOP_FLOOR}s")
     print(f"frames: {[p.name for p in ASSETS]}\n")
 
     for n in range(1, iters + 1):
@@ -138,8 +139,8 @@ async def main():
     print("\n--- token totals ---")
     print(f"calls={u['calls']} prompt={u['prompt']} completion={u['completion']} "
           f"cached={u['cached']}  cache_hit_frac={u['cached']/u['prompt']:.2%}" if u['prompt'] else "no usage")
-    print(f"final mem turns kept = {sum(1 for m in brain.memory if m.get('role') == 'assistant')} "
-          f"(should be ≤ {brain.COMPACT_AT})")
+    print(f"final mem est. tokens = {estimate_memory_tokens(brain.memory)} "
+          f"(should settle ≤ {brain.COMPACT_KEEP_TOKENS} after a trim)")
 
 
 if __name__ == "__main__":
