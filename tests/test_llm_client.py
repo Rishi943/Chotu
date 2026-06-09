@@ -47,3 +47,32 @@ def test_mark_cache_breakpoints_system_only_when_no_boundary():
     out = LLMClient._mark_cache_breakpoints(msgs)
     assert _ephemeral(out[0]["content"][-1])
     assert out[1]["content"] == "hi"
+
+
+def test_consolidate_tool_results_marks_boundary_block():
+    msgs = [
+        {"role": "tool", "tool_call_id": "1", "content": "{}", "_cache_boundary": True},
+    ]
+    out = LLMClient._consolidate_tool_results(msgs)
+    assert out[0]["role"] == "user"
+    assert out[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "_cache_boundary" not in out[0]
+
+
+def test_consolidate_tool_results_unmarked_when_no_boundary():
+    msgs = [{"role": "tool", "tool_call_id": "1", "content": "{}"}]
+    out = LLMClient._consolidate_tool_results(msgs)
+    assert "cache_control" not in out[0]["content"][-1]
+
+
+def test_consolidate_tool_results_marks_non_tool_boundary_without_mutating_input():
+    msg = {"role": "assistant", "content": [{"type": "text", "text": "a"}],
+           "_cache_boundary": True}
+    msgs = [msg]
+    out = LLMClient._consolidate_tool_results(msgs)
+    # boundary block marked, tag dropped on the output
+    assert out[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "_cache_boundary" not in out[0]
+    # caller's original dict is NOT mutated (no aliasing)
+    assert msg["_cache_boundary"] is True
+    assert "cache_control" not in msg["content"][-1]
