@@ -84,6 +84,7 @@ class LLMClient:
             self.model = os.getenv("PALIV_BRAIN_MODEL", "claude-sonnet-4-6")
             self._anthropic_client = _anthropic.AsyncAnthropic(api_key=api_key)
             self._openai = None
+            self._cache_system = False
 
         else:
             raise ValueError(
@@ -110,7 +111,16 @@ class LLMClient:
                 messages, tools, thinking=thinking,
                 tool_choice=tool_choice, max_tokens=max_tokens,
             )
-        return await self._claude_complete(messages, tools)
+        return await self._claude_complete(
+            messages, tools, thinking=thinking, max_tokens=max_tokens,
+        )
+
+    @property
+    def supports_cache_control(self) -> bool:
+        """True when the active provider honors cache_control markers: Claude always,
+        local only when pointed at DashScope. Gates the _cache_boundary tag so it never
+        reaches llama-server (which would reject the unknown field)."""
+        return self.provider == "claude" or self._cache_system
 
     def format_assistant_message(self, response: LLMResponse) -> dict:
         """
@@ -172,7 +182,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
     ) -> LLMResponse:
         if self._cache_system:
-            messages = self._mark_system_cache(messages)
+            messages = self._mark_cache_breakpoints(messages)
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
@@ -188,26 +198,35 @@ class LLMClient:
         return self._normalise_openai(raw)
 
     @staticmethod
-    def _mark_system_cache(messages: list[dict]) -> list[dict]:
-        """Add a cache_control:ephemeral marker to the system message so DashScope
-        caches the stable prefix (system prompt + everything before it). Marker must
-        sit on a content block, so a string content is wrapped in an array. The first
-        system message is the only stable block in the loop; the 1024-token minimum is
-        satisfied by the system prompt. Returns a new list; does not mutate the input."""
-        out = list(messages)
+    def _wrap_last_block(m: dict) -> dict:
+        """Return a copy of message `m` with cache_control:ephemeral on its last content
+        block. String content is wrapped into a single text block; an unexpected content
+        shape is returned untouched. The 1024-token minimum is satisfied by the system
+        prompt (system marker) and by system+memory (the moving end-of-memory marker)."""
+        content = m.get("content")
+        if isinstance(content, str):
+            blocks = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = [dict(b) for b in content]
+        else:
+            return m
+        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        return {**m, "content": blocks}
+
+    @staticmethod
+    def _mark_cache_breakpoints(messages: list[dict]) -> list[dict]:
+        """Mark two ephemeral breakpoints (DashScope path): the system message (a floor
+        that survives compaction) and the message tagged `_cache_boundary` (the moving
+        end-of-memory breakpoint). Pops the tag. Returns a new list; input untouched."""
+        out = [dict(m) for m in messages]
         for i, m in enumerate(out):
-            if m.get("role") != "system":
-                continue
-            content = m.get("content")
-            if isinstance(content, str):
-                blocks = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                blocks = [dict(b) for b in content]
-            else:
-                return out  # unexpected shape — leave untouched
-            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
-            out[i] = {**m, "content": blocks}
-            return out
+            if m.get("role") == "system":
+                out[i] = LLMClient._wrap_last_block(m)
+                break
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].pop("_cache_boundary", False):
+                out[i] = LLMClient._wrap_last_block(out[i])
+                break
         return out
 
     @staticmethod
@@ -247,7 +266,13 @@ class LLMClient:
     # Claude (Anthropic) backend
     # -----------------------------------------------------------------------
 
-    async def _claude_complete(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
+    async def _claude_complete(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        thinking: bool = False,
+        max_tokens: Optional[int] = None,
+    ) -> LLMResponse:
         # Separate system message
         system = ""
         non_system: list[dict] = []
@@ -272,39 +297,68 @@ class LLMClient:
 
         kwargs: dict = {
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens or 4096,
             "messages": consolidated,
         }
         if system:
-            kwargs["system"] = system
+            # System floor breakpoint (Anthropic honors up to 4 cache breakpoints).
+            kwargs["system"] = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
         if anthropic_tools:
             kwargs["tools"] = anthropic_tools
+        # TODO: Anthropic extended thinking — `thinking` accepted but not yet wired.
+        _ = thinking
 
         raw = await self._anthropic_client.messages.create(**kwargs)
         return self._normalise_anthropic(raw)
 
     @staticmethod
     def _consolidate_tool_results(messages: list[dict]) -> list[dict]:
-        """Merge consecutive tool-result messages into single user messages."""
+        """Merge consecutive tool-result messages into single user messages. A message
+        tagged `_cache_boundary` gets cache_control:ephemeral on its last block (Anthropic
+        end-of-memory breakpoint); the tag is dropped."""
         out: list[dict] = []
         i = 0
         while i < len(messages):
             m = messages[i]
             if m.get("role") == "tool":
                 block: list[dict] = []
+                boundary = False
                 while i < len(messages) and messages[i].get("role") == "tool":
                     tr = messages[i]
+                    boundary = boundary or tr.get("_cache_boundary", False)
                     block.append({
                         "type": "tool_result",
                         "tool_use_id": tr["tool_call_id"],
                         "content": tr["content"],
                     })
                     i += 1
+                if boundary:
+                    block[-1] = {**block[-1], "cache_control": {"type": "ephemeral"}}
                 out.append({"role": "user", "content": block})
             else:
+                # Don't mutate the caller's dict; _mark_block_in_message returns a
+                # copy with the tag stripped.
+                if m.get("_cache_boundary"):
+                    m = LLMClient._mark_block_in_message(m)
                 out.append(m)
                 i += 1
         return out
+
+    @staticmethod
+    def _mark_block_in_message(m: dict) -> dict:
+        """Add cache_control:ephemeral to the last content block of a non-tool message.
+        Anthropic assistant/user content is a list of blocks; a bare string is wrapped."""
+        content = m.get("content")
+        if isinstance(content, str):
+            blocks = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = [dict(b) for b in content]
+        else:
+            return {k: v for k, v in m.items() if k != "_cache_boundary"}
+        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        return {**{k: v for k, v in m.items() if k != "_cache_boundary"}, "content": blocks}
 
     @staticmethod
     def _normalise_anthropic(raw) -> LLMResponse:
