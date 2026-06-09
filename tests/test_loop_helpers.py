@@ -198,3 +198,35 @@ def test_cap_result_truncates_and_marks():
 def test_cap_result_boundary_exact_length_passes():
     s = "y" * 1500
     assert cap_result(s, max_chars=1500) == s
+
+
+from core.loop_helpers import maybe_compact
+
+
+def _turns(n):
+    """Build a memory list of n assistant turns, each followed by a tool result."""
+    mem = []
+    for i in range(n):
+        mem.append({"role": "assistant", "content": f"think {i}"})
+        mem.append({"role": "tool", "tool_call_id": str(i), "content": "{}"})
+    return mem
+
+
+def test_maybe_compact_noop_below_threshold():
+    mem = _turns(10)
+    before = list(mem)
+    maybe_compact(mem, compact_at=30, keep=8)
+    assert mem == before  # append-only: nothing touched, prefix stays cached
+
+
+def test_maybe_compact_trims_at_threshold():
+    mem = _turns(30)
+    maybe_compact(mem, compact_at=30, keep=8)
+    assert sum(1 for m in mem if m["role"] == "assistant") == 8
+
+
+def test_maybe_compact_keeps_most_recent_turns():
+    mem = _turns(30)  # assistant contents "think 0".."think 29"
+    maybe_compact(mem, compact_at=30, keep=8)
+    kept = [m["content"] for m in mem if m["role"] == "assistant"]
+    assert kept == [f"think {i}" for i in range(22, 30)]
