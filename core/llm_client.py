@@ -180,7 +180,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
     ) -> LLMResponse:
         if self._cache_system:
-            messages = self._mark_system_cache(messages)
+            messages = self._mark_cache_breakpoints(messages)
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
@@ -196,26 +196,35 @@ class LLMClient:
         return self._normalise_openai(raw)
 
     @staticmethod
-    def _mark_system_cache(messages: list[dict]) -> list[dict]:
-        """Add a cache_control:ephemeral marker to the system message so DashScope
-        caches the stable prefix (system prompt + everything before it). Marker must
-        sit on a content block, so a string content is wrapped in an array. The first
-        system message is the only stable block in the loop; the 1024-token minimum is
-        satisfied by the system prompt. Returns a new list; does not mutate the input."""
-        out = list(messages)
+    def _wrap_last_block(m: dict) -> dict:
+        """Return a copy of message `m` with cache_control:ephemeral on its last content
+        block. String content is wrapped into a single text block; an unexpected content
+        shape is returned untouched. The 1024-token minimum is satisfied by the system
+        prompt (system marker) and by system+memory (the moving end-of-memory marker)."""
+        content = m.get("content")
+        if isinstance(content, str):
+            blocks = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = [dict(b) for b in content]
+        else:
+            return m
+        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        return {**m, "content": blocks}
+
+    @staticmethod
+    def _mark_cache_breakpoints(messages: list[dict]) -> list[dict]:
+        """Mark two ephemeral breakpoints (DashScope path): the system message (a floor
+        that survives compaction) and the message tagged `_cache_boundary` (the moving
+        end-of-memory breakpoint). Pops the tag. Returns a new list; input untouched."""
+        out = [dict(m) for m in messages]
         for i, m in enumerate(out):
-            if m.get("role") != "system":
-                continue
-            content = m.get("content")
-            if isinstance(content, str):
-                blocks = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                blocks = [dict(b) for b in content]
-            else:
-                return out  # unexpected shape — leave untouched
-            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
-            out[i] = {**m, "content": blocks}
-            return out
+            if m.get("role") == "system":
+                out[i] = LLMClient._wrap_last_block(m)
+                break
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].pop("_cache_boundary", False):
+                out[i] = LLMClient._wrap_last_block(out[i])
+                break
         return out
 
     @staticmethod
