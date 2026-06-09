@@ -35,8 +35,8 @@ MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "3"))   # min seconds between calls (was 2)
-COMPACT_AT = int(os.getenv("PALIV_COMPACT_AT", "30"))    # append-only until this many assistant turns accumulate
-COMPACT_KEEP = int(os.getenv("PALIV_COMPACT_KEEP", "8")) # turns retained after a compaction
+COMPACT_AT_TOKENS   = int(os.getenv("PALIV_COMPACT_AT_TOKENS", "10000"))   # est. memory tokens that trigger a trim
+COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "6000"))  # est. memory tokens retained after a trim
 
 
 listen_and_transcribe = None
@@ -344,7 +344,7 @@ async def run_iteration() -> float:
             push_frame(frame_stack, frame_b64, motion_desc)
             _emit({"type": "image", "label": "frame", "image_b64": frame_b64})
 
-    maybe_compact(memory, COMPACT_AT, COMPACT_KEEP)
+    maybe_compact(memory, COMPACT_AT_TOKENS, COMPACT_KEEP_TOKENS)
     _fire_face("idle")
     return tool_duration
 

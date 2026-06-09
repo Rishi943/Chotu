@@ -88,15 +88,37 @@ def pace_remainder(tool_duration: float, floor: float) -> float:
     return max(0.0, floor - tool_duration)
 
 
-def maybe_compact(memory: list[dict], compact_at: int, keep: int) -> None:
-    """Append-only between compactions: leave `memory` untouched until it holds
-    `compact_at` assistant turns, then trim to the last `keep`. Trimming is the
-    only moment the cached prefix changes, so it happens rarely instead of every
-    iteration. The running state block (scratchpad) carries continuity across the
-    cut, so no summary is needed. Mutates `memory`."""
-    n_turns = sum(1 for m in memory if m.get("role") == "assistant")
-    if n_turns >= compact_at:
-        trim_loop_window(memory, keep)
+def estimate_memory_tokens(memory: list[dict]) -> int:
+    """chars/4 over message text + tool_call argument lengths. Memory is text-only
+    (frames live in the volatile tail), so no image accounting is needed."""
+    chars = 0
+    for m in memory:
+        c = m.get("content")
+        if isinstance(c, str):
+            chars += len(c)
+        elif isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict):
+                    chars += len(b.get("text") or b.get("content") or "")
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function", {})
+            chars += len(fn.get("name", "")) + len(fn.get("arguments", "") or "")
+    return chars // 4
+
+
+def maybe_compact(memory: list[dict], at_tokens: int, keep_tokens: int) -> None:
+    """No-op while memory is under at_tokens. Above it, drop whole oldest turns
+    (aligned to assistant starts, so no orphaned tool results) until the remainder
+    is <= keep_tokens, keeping at least the last turn. Mutates memory."""
+    if estimate_memory_tokens(memory) <= at_tokens:
+        return
+    starts = [i for i, m in enumerate(memory) if m.get("role") == "assistant"]
+    for s in starts:
+        if estimate_memory_tokens(memory[s:]) <= keep_tokens:
+            del memory[:s]
+            return
+    if starts:  # even the last turn exceeds keep — keep it alone
+        del memory[:starts[-1]]
 
 
 def cap_result(text: str, max_chars: int = 1500) -> str:

@@ -200,33 +200,60 @@ def test_cap_result_boundary_exact_length_passes():
     assert cap_result(s, max_chars=1500) == s
 
 
-from core.loop_helpers import maybe_compact
+from core.loop_helpers import maybe_compact, estimate_memory_tokens
 
 
-def _turns(n):
-    """Build a memory list of n assistant turns, each followed by a tool result."""
+def _turn(i, content_chars=0):
+    """One assistant+tool turn. content_chars pads the tool result to size it."""
+    return [
+        {"role": "assistant", "content": f"think {i}"},
+        {"role": "tool", "tool_call_id": str(i), "content": "x" * content_chars},
+    ]
+
+
+def _mem(n, content_chars=0):
     mem = []
     for i in range(n):
-        mem.append({"role": "assistant", "content": f"think {i}"})
-        mem.append({"role": "tool", "tool_call_id": str(i), "content": "{}"})
+        mem.extend(_turn(i, content_chars))
     return mem
 
 
+def test_estimate_memory_tokens_counts_string_content():
+    mem = [{"role": "user", "content": "a" * 400}]
+    assert estimate_memory_tokens(mem) == 100  # 400 chars // 4
+
+
+def test_estimate_memory_tokens_counts_tool_call_arguments():
+    mem = [{"role": "assistant", "content": "",
+            "tool_calls": [{"function": {"name": "move", "arguments": "x" * 396}}]}]
+    assert estimate_memory_tokens(mem) == 100  # (4 name + 396 args) // 4
+
+
+def test_estimate_memory_tokens_counts_list_content_text():
+    mem = [{"role": "user", "content": [{"type": "text", "text": "b" * 800}]}]
+    assert estimate_memory_tokens(mem) == 200
+
+
 def test_maybe_compact_noop_below_threshold():
-    mem = _turns(10)
+    mem = _mem(10, content_chars=40)            # ~ small
     before = list(mem)
-    maybe_compact(mem, compact_at=30, keep=8)
-    assert mem == before  # append-only: nothing touched, prefix stays cached
+    maybe_compact(mem, at_tokens=100_000, keep_tokens=6_000)
+    assert mem == before                        # append-only: untouched
 
 
-def test_maybe_compact_trims_at_threshold():
-    mem = _turns(30)
-    maybe_compact(mem, compact_at=30, keep=8)
-    assert sum(1 for m in mem if m["role"] == "assistant") == 8
+def test_maybe_compact_trims_whole_turns_to_under_keep():
+    # 20 turns, each tool result 4000 chars => ~1000 tok/turn => ~20k tok total
+    mem = _mem(20, content_chars=4000)
+    maybe_compact(mem, at_tokens=10_000, keep_tokens=6_000)
+    assert estimate_memory_tokens(mem) <= 6_000
+    # turn alignment preserved: still starts on an assistant, no orphan tool result
+    assert mem[0]["role"] == "assistant"
+    assert sum(1 for m in mem if m["role"] == "assistant") >= 1
 
 
-def test_maybe_compact_keeps_most_recent_turns():
-    mem = _turns(30)  # assistant contents "think 0".."think 29"
-    maybe_compact(mem, compact_at=30, keep=8)
-    kept = [m["content"] for m in mem if m["role"] == "assistant"]
-    assert kept == [f"think {i}" for i in range(22, 30)]
+def test_maybe_compact_keeps_at_least_last_turn_when_single_turn_exceeds_keep():
+    mem = _mem(5, content_chars=40_000)         # each turn ~10k tok, over keep alone
+    maybe_compact(mem, at_tokens=10_000, keep_tokens=6_000)
+    # cannot get under keep without dropping the last turn — keep exactly the last one
+    assert sum(1 for m in mem if m["role"] == "assistant") == 1
+    assert mem[0] == {"role": "assistant", "content": "think 4"}
