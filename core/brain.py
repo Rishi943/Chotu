@@ -33,8 +33,9 @@ DEBUG = os.getenv("PALIV_DEBUG", "0") == "1"
 MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
-LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "2"))
-LOOP_WINDOW = int(os.getenv("PALIV_LOOP_WINDOW", "8"))
+LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "3"))   # min seconds between calls (was 2)
+COMPACT_AT = int(os.getenv("PALIV_COMPACT_AT", "30"))    # append-only until this many assistant turns accumulate
+COMPACT_KEEP = int(os.getenv("PALIV_COMPACT_KEEP", "8")) # turns retained after a compaction
 
 
 listen_and_transcribe = None
