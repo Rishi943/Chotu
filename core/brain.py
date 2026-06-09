@@ -35,6 +35,7 @@ MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "3"))   # min seconds between calls (was 2)
+PTT_ENABLED = os.getenv("PALIV_PTT", "0") == "1"   # GUI push-to-talk + hands-free button
 COMPACT_AT_TOKENS   = int(os.getenv("PALIV_COMPACT_AT_TOKENS", "10000"))   # est. memory tokens that trigger a trim
 COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "6000"))  # est. memory tokens retained after a trim
 
@@ -64,6 +65,8 @@ gui_event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
 gallery_store: list[dict] = []
 thinking_enabled: bool = False
 _pi_reachable: bool = False
+_ptt_capturing: bool = False           # single-flight guard for one-shot push-to-talk
+handsfree_task: "asyncio.Task | None" = None  # running hands-free loop, or None
 _usage = {"calls": 0, "prompt": 0, "completion": 0, "cached": 0, "t0": None}  # cumulative token meter
 _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
 
@@ -354,6 +357,28 @@ async def run_iteration() -> float:
     maybe_compact(memory, COMPACT_AT_TOKENS, COMPACT_KEEP_TOKENS)
     _fire_face("idle")
     return tool_duration
+
+
+# --- Push-to-talk (GUI) ---
+
+async def trigger_ptt_capture() -> None:
+    """One-shot push-to-talk. No-op if a capture is already running or hands-free is on.
+    Records one utterance (VAD stop) and pushes the transcript to pending_input."""
+    global _ptt_capturing
+    if _ptt_capturing or handsfree_task is not None:
+        return
+    _ptt_capturing = True
+    _emit({"type": "ptt", "state": "recording"})
+    try:
+        from core.voice import record_push_to_talk
+        text = await record_push_to_talk()
+        if text.strip():
+            pending_input.push(text)
+    except Exception as e:
+        print(f"  [ptt error] {e}")
+    finally:
+        _ptt_capturing = False
+        _emit({"type": "ptt", "state": "idle"})
 
 
 # --- Input loops ---
