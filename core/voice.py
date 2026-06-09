@@ -186,3 +186,20 @@ def _blocking_listen_and_transcribe_via_class() -> str:
 async def listen_and_transcribe() -> str:
     """Async wrapper: runs blocking listener in thread pool."""
     return await asyncio.to_thread(_blocking_listen_and_transcribe_via_class)
+
+
+def _blocking_record_once() -> str:
+    """One-shot: drain → record one utterance (VAD stop) → transcribe. No wake word.
+    Opens and closes its own stream."""
+    listener = VoiceListener()
+    listener.start()
+    try:
+        listener.drain()
+        return listener.record_utterance()
+    finally:
+        listener.stop()
+
+
+async def record_push_to_talk() -> str:
+    """Async wrapper: run the blocking one-shot capture in a thread. Returns text or ''."""
+    return await asyncio.to_thread(_blocking_record_once)
