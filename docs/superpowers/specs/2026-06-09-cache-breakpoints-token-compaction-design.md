@@ -228,6 +228,11 @@ Answers O-1:
 Result tunes 1-vs-2 markers and confirms the tool-role wrapping; on rejection, apply the
 §B fallback.
 
+**✅ Probe run 2026-06-09 (`qwen3.5-flash`, `-n 4`).** Result: `cached_tokens` climbs with the
+growing prefix (4103→4138→4173, 99% hit) — the moving breakpoint works and memory is no longer
+re-billed each turn. DashScope **accepts `cache_control` on a tool-role block** (no call-0 error),
+so the §B fallback is not needed. The 2-marker design ships unchanged; no code change required.
+
 ---
 
 ## Sequencing
