@@ -1,19 +1,34 @@
 def test_build_loop_messages_order():
     from core.brain import build_loop_messages
+    from core.scratchpad import Scratchpad
     memory = [
         {"role": "user", "content": "[boot] hi", "_origin": "boot"},
         {"role": "assistant", "content": "ok"},
     ]
     frame_stack = [{"image_b64": "c", "motion": ""}]
-    msgs = build_loop_messages("SYS", memory, frame_stack)
+    msgs = build_loop_messages("SYS", memory, frame_stack, Scratchpad())
 
     assert msgs[0] == {"role": "system", "content": "SYS"}
     # internal _origin fields stripped before sending
     assert all("_origin" not in m for m in msgs)
-    # frames sit at the tail, after memory
+    # frames sit at the tail, after memory (empty scratchpad renders nothing)
     assert msgs[-1]["content"][1]["text"] == "[frame 0 | NOW — current view]"
     # memory content preserved in the middle
     assert {"role": "user", "content": "[boot] hi"} in msgs
+
+
+def test_build_loop_messages_state_block_sits_before_frames():
+    from core.brain import build_loop_messages
+    from core.scratchpad import Scratchpad
+    sp = Scratchpad()
+    sp.update([("move", {"direction": "forward", "steps": 1}, {})])
+    frame_stack = [{"image_b64": "c", "motion": ""}]
+    msgs = build_loop_messages("SYS", [], frame_stack, sp)
+
+    # order: system, [STATE], frame
+    assert msgs[1]["content"].startswith("[STATE]")
+    assert "_origin" not in msgs[1]
+    assert msgs[-1]["content"][1]["text"] == "[frame 0 | NOW — current view]"
 
 
 import pytest

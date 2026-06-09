@@ -88,6 +88,26 @@ def pace_remainder(tool_duration: float, floor: float) -> float:
     return max(0.0, floor - tool_duration)
 
 
+def maybe_compact(memory: list[dict], compact_at: int, keep: int) -> None:
+    """Append-only between compactions: leave `memory` untouched until it holds
+    `compact_at` assistant turns, then trim to the last `keep`. Trimming is the
+    only moment the cached prefix changes, so it happens rarely instead of every
+    iteration. The running state block (scratchpad) carries continuity across the
+    cut, so no summary is needed. Mutates `memory`."""
+    n_turns = sum(1 for m in memory if m.get("role") == "assistant")
+    if n_turns >= compact_at:
+        trim_loop_window(memory, keep)
+
+
+def cap_result(text: str, max_chars: int = 1500) -> str:
+    """Cap an oversized tool-result string (head-keep + marker). Tiny envelopes
+    pass through untouched; guards against a fat capture_vision/perception payload
+    silently bloating every cached call until the next compaction."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n…[truncated {len(text) - max_chars} chars]"
+
+
 def split_tool_calls(tool_calls):
     """Dedupe a call list by class: at most one motion (move/pose) and one speak.
     Returns (keep, suppressed). Order preserved; first of each class wins."""
