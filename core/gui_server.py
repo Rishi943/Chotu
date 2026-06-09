@@ -93,6 +93,28 @@ async def stt(request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/ptt")
+async def ptt():
+    if not brain.PTT_ENABLED:
+        return JSONResponse({"ok": False, "error": "ptt disabled"})
+    asyncio.create_task(brain.trigger_ptt_capture())
+    return JSONResponse({"ok": True})
+
+
+@app.post("/handsfree")
+async def handsfree(request: Request):
+    if not brain.PTT_ENABLED:
+        return JSONResponse({"ok": False, "error": "ptt disabled"})
+    body = await request.json()
+    brain.set_handsfree(bool(body.get("enabled", False)))
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/config")
+async def config():
+    return JSONResponse({"ptt_enabled": brain.PTT_ENABLED})
+
+
 @app.get("/api/battery")
 async def battery():
     async with httpx.AsyncClient(timeout=4.0) as client:
