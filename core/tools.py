@@ -484,6 +484,8 @@ def _motion_eta_ms(tool: str, kw: dict) -> int:
         return max(1500, int(kw.get("steps", 1)) * 800)
     if tool == "pose" and kw.get("name") in _TRICK_POSE_NAMES:
         return 7000  # trick poses are 5-10s
+    if tool == "peek_over":
+        return 4000 + int(float(kw.get("pause_s", 1.5)) * 1000)  # stand+reach+hold+lean+look-up
     return 1200  # other poses — single pose change
 
 
