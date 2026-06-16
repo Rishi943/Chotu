@@ -364,16 +364,17 @@ def _peek_over_blocking(lead: str, reach: str, pause_s: float, speed: int) -> No
 async def peek_over(req: PeekOverRequest):
     start = time.time()
     speed = min(req.speed, MAX_MOTION_SPEED)
-    logging.info(f"POST /peek_over  lead={req.lead} reach={req.reach} pause_s={req.pause_s} speed={speed}")
+    pause_s = max(0.0, min(req.pause_s, 10.0))  # bound the held sleep — it runs under the motion lock
+    logging.info(f"POST /peek_over  lead={req.lead} reach={req.reach} pause_s={pause_s} speed={speed}")
     try:
         async with _motion_section():
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
-                lambda: _peek_over_blocking(req.lead, req.reach, req.pause_s, speed),
+                lambda: _peek_over_blocking(req.lead, req.reach, pause_s, speed),
             )
         result = _envelope("peek_over", {
-            "lead": req.lead, "reach": req.reach, "pause_s": req.pause_s,
+            "lead": req.lead, "reach": req.reach, "pause_s": pause_s,
         }, start)
         logging.info(f"  peek_over ok ({result['duration_ms']}ms)")
         return result
