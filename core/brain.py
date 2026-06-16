@@ -13,6 +13,13 @@ import time
 import traceback
 from dotenv import load_dotenv
 
+# Pre-launch config screen — must run BEFORE the env-reading core.* imports below
+# so the user's picks win over .env (load_dotenv uses override=False). No-op for
+# non-TTY / PALIV_NO_LAUNCHER=1 / when imported as a module (chotu skill, dry_run).
+if __name__ == "__main__":
+    from core.launcher import run_launcher
+    run_launcher()
+
 from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
@@ -23,6 +30,7 @@ from core.loop_helpers import (
     PendingInput, paced_sleep,
 )
 from core.scratchpad import Scratchpad
+from core.session_profiler import SessionProfiler
 
 
 # --- Config ---
@@ -68,6 +76,7 @@ _pi_reachable: bool = False
 _ptt_capturing: bool = False           # single-flight guard for one-shot push-to-talk
 handsfree_task: "asyncio.Task | None" = None  # running hands-free loop, or None
 _usage = {"calls": 0, "prompt": 0, "completion": 0, "cached": 0, "t0": None}  # cumulative token meter
+_profiler = SessionProfiler()
 _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
 
 continuous_mode: bool = False
@@ -481,6 +490,8 @@ async def main():
         print(f"Pi bridge: NOT reachable ({health.get('error', '?')})")
         print("  Tools will return error envelopes. Continuing anyway.")
 
+    _profiler.attach(llm_client)
+
     import sys as _sys
     _sys.modules.setdefault('core.brain', _sys.modules['__main__'])
     from core import gui_server
@@ -532,6 +543,13 @@ async def main():
         for t in tasks + [_stop_task]:
             t.cancel()
         await asyncio.gather(*tasks, _stop_task, return_exceptions=True)
+        from pathlib import Path as _Path
+        _out = _profiler.save(
+            _Path(__file__).resolve().parent.parent / "Test outputs",
+            llm_client.model, _pi_reachable,
+        )
+        if _out:
+            print(f"Session profile saved → {_out}")
         await llm_client.close()
         print("\nChotu sitting down...")
         try:
