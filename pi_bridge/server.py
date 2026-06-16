@@ -156,7 +156,7 @@ class PoseRequest(BaseModel):
     speed: int = 50
 
 MAX_POSE_SPEED = 40   # stand/sit move all 12 servos simultaneously — cap to avoid current spike
-MAX_MOTION_SPEED = 60  # hard cap for move/set_legs — peak current safety (was 80, too aggressive on a sagging pack)
+MAX_MOTION_SPEED = 90  # hard cap for move/set_legs — peak current safety (was 60; raised to 90)
 MAX_TRICK_SPEED = 100  # tricks are pre-choreographed; official examples use 100
 MOTION_COOLDOWN_S = 0.6  # min gap between motion calls; lets pack voltage recover from sag (was 0.3)
 
