@@ -78,9 +78,12 @@ first; `shallow` keeps the COM over the planted tripod and is the safe default.
 ## Components
 
 ### 1. Pi bridge — `pi_bridge/server.py`
-- A module-level pure helper `peek_over_poses(lead: str, reach: str) -> list`
-  returning `[freeze_pose, lean_back_pose]` from the constants above (unit-testable,
-  no hardware).
+- A module-level helper `_peek_over_poses(lead, reach)` returning
+  `(freeze_pose, lean_back_pose)` from the constants above, defined inline in
+  `server.py` alongside the existing trick/pose functions (consistent with the
+  codebase — bridge motion is verified on hardware, not laptop-unit-tested). The
+  earlier idea of a separate hardware-free module was dropped as over-engineering;
+  the only logic is a one-line leg-mirror, confirmed on the table.
 - A `peek_over(lead, reach, pause_s, speed)` function running the 6-step sequence
   inside `async with _motion_section():` on the motion executor (`run_in_executor`),
   exactly like the `pose` endpoint. `speed` clamped to `MAX_MOTION_SPEED`.
@@ -126,9 +129,10 @@ session. No extra brain plumbing.
 - Invalid `lead`/`reach` → `ValueError` → error envelope.
 
 ## Testing
-- **Unit (no hardware):** `peek_over_poses("left", …)` vs `("right", …)` — assert
-  right is the exact `[s1,s0,s3,s2]` mirror of left, and values match the gait
-  constants (front leg at `Z_UP`, reaching `x=70` shallow / `y=90` deep).
+- **Bridge coordinates (on hardware):** the left/right mirror is verified on the
+  table in the deploy step — fire `lead=left` then `lead=right` and confirm the
+  correct front leg lifts. (No laptop unit test; matches how the other bridge
+  moves are verified.)
 - **Brain-side:** with `PALIV_PERSONA=reel`, `peek_over` is in the tool schemas and
   dispatch; with persona unset it is absent. `"peek_over" in MOTION_TOOLS`.
 - **Manual on table:** curl `/peek_over` with `lead=left` and `lead=right`; confirm
