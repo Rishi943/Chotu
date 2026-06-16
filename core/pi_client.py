@@ -28,6 +28,12 @@ class PiClient:
     async def set_legs(self, legs: list, speed: int = 80) -> dict:
         return await self._post_slow("/set_legs", "set_legs", {"legs": legs, "speed": speed})
 
+    async def peek_over(self, lead: str, reach: str = "shallow",
+                        pause_s: float = 1.5, speed: int = 60) -> dict:
+        return await self._post_slow("/peek_over", "peek_over", {
+            "lead": lead, "reach": reach, "pause_s": pause_s, "speed": speed,
+        })
+
     async def do_trick(self, name: str, speed: int = 80) -> dict:
         return await self._post_slow("/trick", "trick", {"name": name, "speed": speed})
 
