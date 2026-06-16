@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 
-MOTION_TOOLS = frozenset({"move", "set_legs", "pose", "do_trick"})
+MOTION_TOOLS = frozenset({"move", "set_legs", "pose", "do_trick", "peek_over"})
 
 REJECTED_ENVELOPE_KEYS = ("ok", "tool", "result", "duration_ms", "timestamp", "error")
 
