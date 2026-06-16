@@ -24,8 +24,8 @@
 <button onclick="resetToStand()">⟲ Reset to stand</button>
 
 <!-- Preview / export / timeline mount points (filled in later tasks) -->
-<div id="topdown" class="col"></div>
-<div id="sideview" class="col"></div>
+<div id="topdown" class="col"><canvas id="topCanvas" width="260" height="220"></canvas></div>
+<div id="sideview" class="col"><canvas id="sideCanvas" width="260" height="220"></canvas></div>
 <div id="threed" class="col"></div>
 <div id="exportPanel" class="col"></div>
 <div id="timeline" class="col"></div>
@@ -66,10 +66,109 @@ function renderLegEditor() {
     </div>`).join("");
 }
 
+// ---- kinematics (mirror of scripts/kinematics_ref.py) ----
+const A=48, B=78, C=33, LENGTH_SIDE=77;
+
+function coord2polar(x, y, z) {
+  let L = Math.sqrt(x*x + y*y + z*z);
+  if (L === 0) L = 0.1;
+  if (L < C) { const t = C/L; x*=t; y*=t; z*=t; }
+  else if (L > (A+B+C)) { const t = (A+B+C)/L; x*=t; y*=t; z*=t; }
+  const w = Math.sqrt(x*x + y*y);
+  const v = w - C;
+  let u = Math.sqrt(z*z + v*v);
+  u = Math.max(30, Math.min(91.58, u));
+  const beta  = Math.acos((B*B + A*A - u*u) / (2*B*A));
+  const angle1 = Math.atan2(z, v);
+  const angle2 = Math.acos((A*A + u*u - B*B) / (2*A*u));
+  const alpha = angle2 + angle1;
+  const gamma = Math.atan2(y, x);
+  return [90 - alpha*180/Math.PI, beta*180/Math.PI - 90, -(gamma*180/Math.PI - 45)];
+}
+
+function isReachable(x, y, z) {
+  const L = Math.sqrt(x*x + y*y + z*z);
+  if (L === 0) return false;
+  if (L < C || L > (A+B+C)) return false;
+  const w = Math.sqrt(x*x + y*y), v = w - C;
+  const u = Math.sqrt(z*z + v*v);
+  if (u < 30 || u > 91.58) return false;
+  // picrawler sends servos as [beta,alpha,gamma] but limit_angle unpacks (alpha,beta,gamma),
+  // so the bounds are swapped vs coord2polar names: alpha in [-10,90], beta in [-90,90].
+  const [al, be, ga] = coord2polar(x, y, z);
+  return al>=-10 && al<=90 && be>=-90 && be<=90 && ga>=-60 && ga<=60;
+}
+
+// Joint positions in the leg's local vertical plane, for drawing the linkage. Mirrors
+// coord2polar's L/u clamps so an out-of-range pose renders where the robot ACTUALLY goes
+// (rigid A,B), not a stretched leg. R = radial dist from hip, Z = height; hip=(0,0), base=(C,0).
+function legPlane(x, y, z) {
+  let L = Math.sqrt(x*x + y*y + z*z); if (L === 0) L = 0.1;
+  if (L < C) { const t = C/L; x*=t; y*=t; z*=t; }
+  else if (L > (A+B+C)) { const t = (A+B+C)/L; x*=t; y*=t; z*=t; }
+  const w = Math.sqrt(x*x + y*y);
+  const angle1 = Math.atan2(z, w - C);
+  const u = Math.min(Math.max(Math.sqrt((w-C)**2 + z*z), 30), 91.58);
+  const theta = angle1 + Math.acos((A*A + u*u - B*B)/(2*A*u));
+  return {
+    kneeR: C + A*Math.cos(theta), kneeZ: A*Math.sin(theta),
+    footR: C + u*Math.cos(angle1), footZ: u*Math.sin(angle1), baseR: C, baseZ: 0,
+  };
+}
+
+function renderDots() {
+  state.legs.forEach((leg, i) => {
+    const ok = isReachable(leg[0], leg[1], leg[2]);
+    const el = document.getElementById("dot"+i);
+    el.className = ok ? "dot-ok" : "dot-clamp";
+    el.textContent = ok ? "● reachable" : "● will clamp";
+  });
+}
+
+// Top-down: plot each foot (x,y) at its body corner. Corner placement is a
+// display convention (front = up); tune signs by eye against the real robot.
+const CORNERS = [  // [cx, cy, sx, sy] body corner + axis sign for [FR,FL,RL,RR]
+  [ 1,-1,  1,-1], [-1,-1, -1,-1], [-1, 1, -1, 1], [ 1, 1,  1, 1],
+];
+function renderTopDown() {
+  const cv = document.getElementById("topCanvas"), g = cv.getContext("2d");
+  g.clearRect(0,0,cv.width,cv.height);
+  const cx = cv.width/2, cy = cv.height/2, s = 0.6;  // mm -> px
+  const hs = LENGTH_SIDE/2 * s;
+  g.strokeStyle = "#33373d"; g.strokeRect(cx-hs, cy-hs, hs*2, hs*2);
+  state.legs.forEach((leg, i) => {
+    const [bx, by, sgx, sgy] = CORNERS[i];
+    const hx = cx + bx*hs, hy = cy + by*hs;
+    const fx = hx + sgx*leg[0]*s, fy = hy - sgy*leg[1]*s;  // x reach, y outward
+    const ok = isReachable(leg[0], leg[1], leg[2]);
+    g.strokeStyle = ok ? "#3a6" : "#a33"; g.beginPath();
+    g.moveTo(hx,hy); g.lineTo(fx,fy); g.stroke();
+    g.fillStyle = i===state.editing ? "#ffb13d" : (ok ? "#3ddc6f" : "#ff5b5b");
+    g.beginPath(); g.arc(fx, fy, i===state.editing?5:4, 0, 7); g.fill();
+  });
+}
+
+function renderSide() {  // articulated linkage for the leg being edited
+  const cv = document.getElementById("sideCanvas"), g = cv.getContext("2d");
+  g.clearRect(0,0,cv.width,cv.height);
+  const leg = state.legs[state.editing], p = legPlane(leg[0], leg[1], leg[2]);
+  const ox = 40, oy = 50, s = 0.7;
+  const P = (r,z) => [ox + r*s, oy - z*s];   // z up on screen
+  const seg = (aR,aZ,bR,bZ,col) => { const [a0,a1]=P(aR,aZ),[b0,b1]=P(bR,bZ);
+    g.strokeStyle=col; g.lineWidth=3; g.beginPath(); g.moveTo(a0,a1); g.lineTo(b0,b1); g.stroke(); };
+  g.strokeStyle="#2a2a2a"; g.beginPath(); g.moveTo(0,oy); g.lineTo(cv.width,oy); g.stroke();
+  seg(0,0, p.baseR,p.baseZ, "#556");   // C offset (hip at origin)
+  seg(p.baseR,p.baseZ, p.kneeR,p.kneeZ, "#9ad");  // A
+  seg(p.kneeR,p.kneeZ, p.footR,p.footZ, "#9ad");  // B
+}
+
 // renderAll() is extended by later tasks (previews, export, timeline).
 function renderAll() {
   state.speed = Number(document.getElementById("speed").value);
   renderLegEditor();
+  renderDots();
+  renderTopDown();
+  renderSide();
 }
 
 renderAll();
