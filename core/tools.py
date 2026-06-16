@@ -211,6 +211,47 @@ TOOL_SCHEMAS = [
 ]
 
 
+def peek_over_enabled(env=None) -> bool:
+    """True when the reel persona is active (PALIV_PERSONA=reel)."""
+    env = os.environ if env is None else env
+    return env.get("PALIV_PERSONA") == "reel"
+
+
+_PEEK_OVER_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "peek_over",
+        "description": (
+            "Reach one front leg out and freeze it mid-step, hold, then lean back "
+            "and look up. A held, deliberate motion — not a walk."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead": {
+                    "type": "string",
+                    "enum": ["left", "right"],
+                    "description": "Which front leg reaches out and freezes.",
+                },
+                "reach": {
+                    "type": "string",
+                    "enum": ["shallow", "deep"],
+                    "description": "How far the leg reaches. Default shallow.",
+                },
+                "pause_s": {
+                    "type": "number",
+                    "description": "Seconds to hold the frozen frame. Default 1.5.",
+                },
+            },
+            "required": ["lead"],
+        },
+    },
+}
+
+if peek_over_enabled():
+    TOOL_SCHEMAS.append(_PEEK_OVER_SCHEMA)
+
+
 # --- Estop helpers ---
 
 def _blocked(tool_name: str) -> dict:
@@ -482,7 +523,7 @@ def build_dispatch(
     motion_lock: enforces single-motion-at-a-time. When passed, move/pose/
         reject overlapping calls with an envelope.
     """
-    return {
+    dispatch = {
         "move":           lambda **kw: _gated(motion_lock, "move", lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
         "pose":           lambda **kw: _gated(motion_lock, "pose", lambda **k: pi.pose(**k))(**kw),
         "get_distance":   lambda **kw: pi.get_distance(),
@@ -492,6 +533,9 @@ def build_dispatch(
         "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),
         "speak":          lambda **kw: _do_speak(face_pi=pi, muted=mute, **kw),
     }
+    if peek_over_enabled():
+        dispatch["peek_over"] = lambda **kw: _gated(motion_lock, "peek_over", lambda **k: pi.peek_over(**k))(**kw)
+    return dispatch
 
 
 async def dispatch_tool(dispatch_map: dict, tool_name: str, arguments_json: str) -> dict:
