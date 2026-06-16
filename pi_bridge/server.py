@@ -206,6 +206,13 @@ class SetLegsRequest(BaseModel):
     speed: int = 70
 
 
+class PeekOverRequest(BaseModel):
+    lead: str               # "left" | "right" — which front leg freezes mid-air
+    reach: str = "shallow"  # "shallow" | "deep"
+    pause_s: float = 1.5    # hold time at the frozen frame
+    speed: int = 60
+
+
 class FaceRequest(BaseModel):
     name: str
 
@@ -317,6 +324,62 @@ async def set_legs(req: SetLegsRequest):
     except Exception as e:
         logging.error(f"  set_legs error: {e}")
         return _envelope("set_legs", {"legs": req.legs, "speed": speed}, start, str(e))
+
+
+# Front-left (leg 2) leads — the picrawler forward-gait parity-0 mid-step frame.
+_PEEK_FREEZE_LEFT = {
+    "shallow": [[45, 45, -50], [70, 0, -30], [45, 0, -50], [45, 45, -50]],
+    "deep":    [[45, 45, -50], [45, 90, -30], [45, 0, -50], [45, 45, -50]],
+}
+# Retract the reaching foot and raise both front feet to Z_UP so the nose dips and
+# weight shifts rearward (no full gait step). Symmetric — same for both leads.
+_PEEK_LEAN_BACK = [[45, 45, -30], [45, 0, -30], [45, 0, -50], [45, 45, -50]]
+
+
+def _peek_over_poses(lead: str, reach: str):
+    """Return (freeze_pose, lean_back_pose). lead: left|right, reach: shallow|deep."""
+    if lead not in ("left", "right"):
+        raise ValueError(f"lead must be 'left' or 'right', got {lead!r}")
+    if reach not in ("shallow", "deep"):
+        raise ValueError(f"reach must be 'shallow' or 'deep', got {reach!r}")
+    left = _PEEK_FREEZE_LEFT[reach]
+    if lead == "left":
+        freeze = [list(c) for c in left]
+    else:  # parity-1 transform: swap legs 1<->2 and 3<->4
+        freeze = [list(left[1]), list(left[0]), list(left[3]), list(left[2])]
+    return freeze, [list(c) for c in _PEEK_LEAN_BACK]
+
+
+def _peek_over_blocking(lead: str, reach: str, pause_s: float, speed: int) -> None:
+    freeze, lean_back = _peek_over_poses(lead, reach)   # validates lead/reach
+    crawler.do_step("stand", 40)
+    crawler.do_step(freeze, speed)          # reach + lift the chosen front leg
+    time.sleep(pause_s)                     # hold the mid-step frame
+    crawler.do_step(lean_back, speed)       # recoil: weight shifts back
+    crawler.do_action("look up", 1, speed)  # end holding the look-up
+    crawler.stand_position = 0              # reset gait parity for later move calls
+
+
+@app.post("/peek_over")
+async def peek_over(req: PeekOverRequest):
+    start = time.time()
+    speed = min(req.speed, MAX_MOTION_SPEED)
+    logging.info(f"POST /peek_over  lead={req.lead} reach={req.reach} pause_s={req.pause_s} speed={speed}")
+    try:
+        async with _motion_section():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: _peek_over_blocking(req.lead, req.reach, req.pause_s, speed),
+            )
+        result = _envelope("peek_over", {
+            "lead": req.lead, "reach": req.reach, "pause_s": req.pause_s,
+        }, start)
+        logging.info(f"  peek_over ok ({result['duration_ms']}ms)")
+        return result
+    except Exception as e:
+        logging.error(f"  peek_over error: {e}")
+        return _envelope("peek_over", {"lead": req.lead, "reach": req.reach}, start, str(e))
 
 
 @app.post("/play_wav")
