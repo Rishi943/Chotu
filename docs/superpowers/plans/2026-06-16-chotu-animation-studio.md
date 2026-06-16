@@ -138,8 +138,10 @@ def is_reachable(coord):
     u = math.sqrt(z ** 2 + v ** 2)
     if u < 30 or u > 91.58:
         return False
+    # picrawler sends servos as [beta, alpha, gamma] but limit_angle unpacks them as
+    # (alpha, beta, gamma) -> the angle bounds are swapped vs coord2polar's names.
     alpha, beta, gamma = coord2polar(coord)
-    return (-90 <= alpha <= 90) and (-10 <= beta <= 90) and (-60 <= gamma <= 60)
+    return (-10 <= alpha <= 90) and (-90 <= beta <= 90) and (-60 <= gamma <= 60)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -372,7 +374,9 @@ Create `scripts/studio.html` as a full document (it talks to its own origin prox
 
 <script>
 const LEG_NAMES = ["FR · front-right", "FL · front-left", "RL · rear-left", "RR · rear-right"];
-const STAND = [[60,0,-30],[60,0,-30],[60,0,-30],[60,0,-30]];
+// Real picrawler stand (per-leg). The add-chotu-tool contract simplifies this to "[60,0,-30]
+// each" but the actual stand frame is asymmetric per leg; the studio uses the real values.
+const STAND = [[45,45,-50],[45,0,-50],[45,0,-50],[45,45,-50]];
 
 // Single source of truth.
 const state = {
@@ -466,23 +470,31 @@ function isReachable(x, y, z) {
   const w = Math.sqrt(x*x + y*y), v = w - C;
   const u = Math.sqrt(z*z + v*v);
   if (u < 30 || u > 91.58) return false;
+  // picrawler sends servos as [beta,alpha,gamma] but limit_angle unpacks (alpha,beta,gamma),
+  // so the bounds are swapped vs coord2polar names: alpha in [-10,90], beta in [-90,90].
   const [al, be, ga] = coord2polar(x, y, z);
-  return al>=-90 && al<=90 && be>=-10 && be<=90 && ga>=-60 && ga<=60;
+  return al>=-10 && al<=90 && be>=-90 && be<=90 && ga>=-60 && ga<=60;
 }
 
-// Joint positions in the leg's local vertical plane, for drawing the linkage.
-// Returns {kneeR, kneeZ, footR, footZ} where R = radial dist from hip, Z = height.
+// Joint positions in the leg's local vertical plane, for drawing the linkage. Mirrors
+// coord2polar's L/u clamps so an out-of-range pose renders where the robot ACTUALLY goes
+// (rigid A,B), not a stretched leg. R = radial dist from hip, Z = height; hip=(0,0), base=(C,0).
 function legPlane(x, y, z) {
-  const w = Math.sqrt(x*x + y*y);     // radial reach
-  const baseR = C, baseZ = 0;         // knee-base after the C hip offset
+  let L = Math.sqrt(x*x + y*y + z*z); if (L === 0) L = 0.1;
+  if (L < C) { const t = C/L; x*=t; y*=t; z*=t; }
+  else if (L > (A+B+C)) { const t = (A+B+C)/L; x*=t; y*=t; z*=t; }
+  const w = Math.sqrt(x*x + y*y);
+  const angle1 = Math.atan2(z, w - C);
   const u = Math.min(Math.max(Math.sqrt((w-C)**2 + z*z), 30), 91.58);
-  const theta = Math.atan2(z, w - C) + Math.acos((A*A + u*u - B*B)/(2*A*u));
+  const theta = angle1 + Math.acos((A*A + u*u - B*B)/(2*A*u));
   return {
-    kneeR: baseR + A*Math.cos(theta), kneeZ: baseZ + A*Math.sin(theta),
-    footR: w, footZ: z, hipR: 0, hipZ: 0, baseR, baseZ,
+    kneeR: C + A*Math.cos(theta), kneeZ: A*Math.sin(theta),
+    footR: C + u*Math.cos(angle1), footZ: u*Math.sin(angle1), baseR: C, baseZ: 0,
   };
 }
 ```
+
+> These three helpers (`coord2polar`, `isReachable`, `legPlane`) are validated in `scripts/studio_3d_prototype.html` — port them verbatim. They are shared by the 2D previews (this task) and the 3D view (Task 5).
 
 - [ ] **Step 2: Render the reachability dots + two canvases**
 
@@ -530,7 +542,7 @@ function renderSide() {  // articulated linkage for the leg being edited
   const seg = (aR,aZ,bR,bZ,col) => { const [a0,a1]=P(aR,aZ),[b0,b1]=P(bR,bZ);
     g.strokeStyle=col; g.lineWidth=3; g.beginPath(); g.moveTo(a0,a1); g.lineTo(b0,b1); g.stroke(); };
   g.strokeStyle="#2a2a2a"; g.beginPath(); g.moveTo(0,oy); g.lineTo(cv.width,oy); g.stroke();
-  seg(p.hipR,p.hipZ, p.baseR,p.baseZ, "#556");   // C offset
+  seg(0,0, p.baseR,p.baseZ, "#556");   // C offset (hip at origin)
   seg(p.baseR,p.baseZ, p.kneeR,p.kneeZ, "#9ad");  // A
   seg(p.kneeR,p.kneeZ, p.footR,p.footZ, "#9ad");  // B
 }
@@ -551,67 +563,83 @@ git commit -m "feat(studio): faithful 2D top-down + side previews + reachability
 
 ---
 
-## Task 5: Live 3D view (Tier 1, three.js)
+## Task 5: Live 3D view + CAD-style drag-to-pose (three.js)
+
+This task is fully prototyped and validated in **`scripts/studio_3d_prototype.html`** (built and approved during brainstorming: symmetric stance, faithful IK, white-steel model, orbit camera, drag-to-pose gizmo, animation playback). **Port that 3D module into `studio.html` — it is the source of truth for everything below.** The notes here pin the decisions so they aren't lost in translation.
 
 **Files:**
 - Modify: `scripts/studio.html`
+- Reference: `scripts/studio_3d_prototype.html` (port the `<script type="module">` 3D block from here)
 
-- [ ] **Step 1: Add three.js + a 3D scene that renders from the numbers**
+- [ ] **Step 1: Load three.js via ES-module importmap (NOT the UMD build)**
 
-In `<head>` add: `<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>` and `<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>`.
+three.js dropped the UMD `build/three.min.js` + `examples/js/` globals. Use the import map + addons (validated in the prototype). In `<head>`:
 
-Add a `#threed` container (~360×280) and this module. It reuses `legPlane()` (Task 4) for FK, lifts each leg into 3D by its yaw `atan2(y,x)`, and places it at its body corner. Orbit camera; no drag-to-pose (Tier 2, deferred).
-
-```javascript
-let scene, camera, renderer, controls, legLines = [];
-function init3D() {
-  const host = document.getElementById("threed");
-  scene = new THREE.Scene(); scene.background = new THREE.Color(0x080808);
-  camera = new THREE.PerspectiveCamera(50, 360/280, 1, 2000);
-  camera.position.set(180, 160, 220);
-  renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setSize(360, 280); host.appendChild(renderer.domElement);
-  controls = new THREE.OrbitControls(camera, renderer.domElement);
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(LENGTH_SIDE, 24, LENGTH_SIDE),
-    new THREE.MeshBasicMaterial({color:0x15171a, wireframe:false}));
-  scene.add(body);
-  for (let i=0;i<4;i++){ const m=new THREE.Line(new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({color:0x99aadd})); scene.add(m); legLines.push(m); }
-  (function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene,camera); })();
-}
-
-// Body corners in 3D (x right, y up, z toward viewer/front). Display convention.
-const CORNER3D = [[ LENGTH_SIDE/2,0,-LENGTH_SIDE/2],[-LENGTH_SIDE/2,0,-LENGTH_SIDE/2],
-                  [-LENGTH_SIDE/2,0, LENGTH_SIDE/2],[ LENGTH_SIDE/2,0, LENGTH_SIDE/2]];
-function render3D() {
-  if (!scene) return;
-  state.legs.forEach((leg, i) => {
-    const p = legPlane(leg[0], leg[1], leg[2]);
-    const yaw = Math.atan2(leg[1], leg[0]);  // in-plane direction
-    const C0 = CORNER3D[i];
-    const pt = (r,z) => new THREE.Vector3(
-      C0[0] + r*Math.cos(yaw), C0[1] + z, C0[2] + r*Math.sin(yaw));
-    legLines[i].geometry.setFromPoints([
-      pt(p.hipR,p.hipZ), pt(p.baseR,p.baseZ), pt(p.kneeR,p.kneeZ), pt(p.footR,p.footZ)]);
-    const ok = isReachable(leg[0], leg[1], leg[2]);
-    legLines[i].material.color.setHex(i===state.editing?0xffb13d:(ok?0x99aadd:0xff5b5b));
-  });
-}
+```html
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
 ```
 
-Call `init3D()` once after `renderAll()` at the bottom, and add `render3D();` inside `renderAll()`.
+The studio's script that uses three.js must be `<script type="module">` and import:
+```javascript
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+```
+(Because module scripts can't read non-module globals, the shared IK helpers from Task 4 must be reachable from the module — keep them in the same module, or attach to `window`. The prototype keeps everything in one module; mirror that.)
 
-- [ ] **Step 2: Verify in the browser**
+- [ ] **Step 2: Build the scene + white-steel model (port from prototype)**
 
-Open `:8899`. Expected: a 3D body with four articulated legs; editing a leg moves it in 3D live; drag to orbit the camera; the edited leg is orange, an out-of-range leg turns red. Orientation need not be pixel-perfect — confirm it tracks edits and is legible. (If orientation looks mirrored vs. the robot, adjust `CORNER3D`/yaw signs when verifying against hardware.)
+Port verbatim from `scripts/studio_3d_prototype.html`. The validated specifics:
+- **Scene:** background `0x232730` (slate, not black); `AmbientLight` 0.7 + `DirectionalLight` 0.7; `GridHelper(400,16,0x4a4f57,0x363b42)` at `y=-95`; orbit camera at `(220,180,260)` targeting `(0,-20,0)`.
+- **Body:** silver (`SILVER=0xe2e5ea`) chassis box + dark-green board on top + front nose cone and two ultrasonic "eye" cylinders (front = `+Z`).
+- **Per leg:** flat metal-plate bones for the `C` hip-link and `A` thigh (`mkPlate`), a triangular **foot blade** for the `B` lower leg (`mkBlade`, base at knee → tip at foot, scaled per-frame), and three grey servo markers (`mkServo`) at the yaw/thigh/knee joints. Colors: edited leg `0xffb13d`, reachable `SILVER`, out-of-range `0xff5b5b`.
+- **CALIBRATED per-leg orientation** (this is the key fix — makes the real per-leg stand render as a symmetric X-splay):
+  ```javascript
+  const hs = LENGTH_SIDE/2;
+  const CORNERS = [ {p:[ hs,0, hs], yaw:Math.PI*0.5 },   // FR
+                    {p:[-hs,0, hs], yaw:Math.PI*0.75},   // FL
+                    {p:[-hs,0,-hs], yaw:Math.PI*1.25},   // RL
+                    {p:[ hs,0,-hs], yaw:Math.PI*2.0 } ]; // RR
+  // worldYaw = corner.yaw - atan2(y,x);  dir = (cos worldYaw, 0, sin worldYaw)
+  // foot world point P(r,zz) = corner.p + dir*r + (0,zz,0); hip=P(0,0) base=P(C,0) knee=P(kneeR,kneeZ) foot=P(footR,footZ)
+  ```
+  Render from the numbers each frame; call it inside `renderAll()` and start a `requestAnimationFrame` loop with `controls.update()`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: CAD-style drag-to-pose (TransformControls gizmo)**
+
+Port verbatim from the prototype. A `TransformControls` translate-gizmo attaches to a `gizmoTarget` Object3D parked on the edited leg's foot. Dragging a handle converts the handle's world position back to that leg's local `[x,y,z]` (the exact inverse of the forward placement) and updates `state` + the inputs:
+```javascript
+// world -> leg-local (inverse of worldYaw = c.yaw - atan2(y,x))
+const rel = gizmoTarget.position.clone().sub(new THREE.Vector3(...c.p));
+const w = Math.hypot(rel.x, rel.z), la = c.yaw - Math.atan2(rel.z, rel.x);
+state.legs[i] = [ Math.round(w*Math.cos(la)), Math.round(w*Math.sin(la)), Math.round(rel.y) ];
+```
+- Disable `OrbitControls` while a handle is dragged (`'dragging-changed'` → `controls.enabled = !e.value`).
+- In `render`, only re-park `gizmoTarget` on the foot when **not** dragging (avoids fighting the user).
+- Touching any slider also selects that leg (so the gizmo follows). Verified in the prototype.
+
+- [ ] **Step 4: Verify in the browser**
+
+Run the server, open `:8899`. Expected (matching the approved prototype):
+- **Stand renders as a symmetric X-splay** (four legs evenly to the corners).
+- Editing a leg (slider or gizmo) moves it live; the **gizmo arrows drag the foot** and the IK solves the leg; x/y/z update.
+- Out-of-range pose keeps rigid `A`/`B` at the clamped position and flips the dot to red "will clamp".
+- (Animation playback is exercised by the timeline in Task 7.)
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/studio.html
-git commit -m "feat(studio): live Tier-1 3D view (three.js, orbit camera)"
+git commit -m "feat(studio): live 3D model + CAD-style drag-to-pose (three.js)"
 ```
+
+> **Hardware-verify items (cannot be confirmed off-robot, noted in the spec):**
+> (1) the leg **swing handedness** during motion is a calibration choice (one sign in `worldYaw`); (2) the per-leg orientation is solved against the real stand, but absolute mounting is confirmed on the table. Both are isolated to the `CORNERS` table / `worldYaw` sign — a one-line change if a leg reads mirrored on hardware.
 
 ---
 
@@ -851,6 +879,7 @@ git commit -m "docs(studio): note the animation studio launch command"
 
 ## Self-Review Notes
 
-- **Spec coverage:** proxy/architecture (T2), kinematics + reachability (T1, mirrored T4/T5), leg editor (T3), 2D top-down+side (T4), Tier-1 3D (T5), send-to-robot + connection pill (T6), timeline + dual playback (T7), frames-contract export + validation + Load JSON (T8), tests + degradation (T1/T2), full-suite + docs (T9). Tier-2 drag-to-pose is explicitly deferred in the spec — no task, by design.
-- **Hardware truths:** orientation conventions in top-down/3D are display choices confirmed against the real robot (called out in T4/T5/T6); kinematics math is exact (pinned in T1).
-- **Type consistency:** `state` shape, `coord2polar`/`isReachable`/`legPlane` signatures, frame `{legs,speed,hold_s}`, and the proxy `_forward(method,path,json)`/`_client.request` names are used consistently across tasks and match `kinematics_ref.py`.
+- **Spec coverage:** proxy/architecture (T2), kinematics + reachability (T1, mirrored T4/T5), leg editor (T3), 2D top-down+side (T4), 3D model **+ drag-to-pose** (T5 — promoted from Tier-2 after the prototype validated it), send-to-robot + connection pill (T6), timeline + dual playback (T7), frames-contract export + validation + Load JSON (T8), tests + degradation (T1/T2), full-suite + docs (T9).
+- **Prototype is the source of truth for the 3D.** `scripts/studio_3d_prototype.html` was built and approved during brainstorming; T4/T5 port its validated helpers (`coord2polar`, `isReachable`, `legPlane`) and 3D module rather than re-deriving them. The prototype is a throwaway spike — it does not need to ship, but it must not be deleted until T5 is ported.
+- **Hardware truths:** the kinematics math is exact (pinned in T1). The per-leg display orientation is calibrated so the *real* stand renders symmetric, but **swing handedness and absolute mounting are hardware-verify items** (isolated to the `CORNERS`/`worldYaw` sign — see T5 note). Real stand is `[[45,45,-50],[45,0,-50],[45,0,-50],[45,45,-50]]`, not the contract's `[60,0,-30]` simplification (T3).
+- **Type consistency:** `state` shape, `coord2polar`/`isReachable`/`legPlane` signatures, frame `{legs,speed,hold_s}`, and the proxy `_forward(method,path,json)`/`_client.request` names are used consistently across tasks and match `kinematics_ref.py`. `legPlane` returns `{kneeR,kneeZ,footR,footZ,baseR,baseZ}` (hip is the origin); used by both T4 (side view) and T5 (3D).

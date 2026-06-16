@@ -20,8 +20,10 @@ export a contract-shaped JSON.
 - Continuous live-robot manipulation (drag a slider → robot follows in real time). Cut for
   hardware reasons — see "Why not live-robot manipulation" below.
 - Persistence / database / auth / multi-user.
-- Click-drag-the-foot IK manipulation in 3D — deferred to a documented fast-follow (Tier 2),
-  not in v1.
+
+> **Update (post-prototype):** CAD-style **click-drag-the-foot IK manipulation in 3D is now in
+> scope** (was Tier-2). A `TransformControls` gizmo on the edited foot was prototyped and
+> validated in `scripts/studio_3d_prototype.html`, so the depth-ambiguity risk is retired.
 
 ## Architecture
 
@@ -62,13 +64,16 @@ to JS. Constants (mm):
 - `LENGTH_SIDE = 77` (body side)
 
 `[x, y, z]` is the foot position in each leg's local frame: `x`/`y` horizontal, `z` vertical
-(negative = planted below body, positive = lifted). Stand ≈ `[60, 0, -30]`. Leg order is
-`[FR, FL, RL, RR]` (front-right, front-left, rear-left, rear-right).
+(negative = planted below body, positive = lifted). Leg order is `[FR, FL, RL, RR]`
+(front-right, front-left, rear-left, rear-right). The real **stand** is per-leg
+`[[45,45,-50],[45,0,-50],[45,0,-50],[45,45,-50]]` — *not* the contract's `[60,0,-30]`
+simplification (the outer legs sit at `y=45`, the inner two at `y=0`).
 
 **`coord2polar(x,y,z)`** (port verbatim): computes `L = √(x²+y²+z²)`, clamps `L∈[C, A+B+C] =
 [33, 159]`, `w = √(x²+y²)`, `v = w-C`, `u = √(z²+v²)` clamped to `[30, 91.58]`, then knee
-angle `β`, lift `α`, and yaw `γ = atan2(y,x)`. Joint-angle limits: `α∈[-90,90]`,
-`β∈[-10,90]`, `γ∈[-60,60]`.
+angle `β`, lift `α`, and yaw `γ = atan2(y,x)`. **Reachability bounds (note the swap):**
+picrawler sends servos as `[β, α, γ]` but `limit_angle` unpacks them as `(α, β, γ)`, so the
+limits applied to `coord2polar`'s outputs are `α∈[-10,90]`, `β∈[-90,90]`, `γ∈[-60,60]`.
 
 These give us, with no guessing:
 1. **Top-down (x,y):** plot each foot at its body corner — true stance/reach/asymmetry.
@@ -101,12 +106,15 @@ These give us, with no guessing:
   hardware would snap to. The leg being edited is highlighted.
 - Global speed slider `0–90` (the bridge caps `/set_legs` at `MAX_MOTION_SPEED = 90`).
 - **Send to robot** → POST `/set_legs` with current pose + speed.
-- **Reset to stand** → set all legs to `[60, 0, -30]`.
+- **Reset to stand** → set legs to the real per-leg stand (above).
 
 ### Preview (center)
 - **2D top-down** and **2D side** canvases, recomputed on every edit (instant, offline).
-- **Live 3D model (Tier 1):** three.js scene of the body + 4 articulated legs, updating from
-  the numbers/sliders; orbit camera. No drag-to-pose in v1.
+- **Live 3D model:** three.js scene (white-steel body + 4 articulated legs with triangular
+  foot blades + servo markers, slate background), updating from the numbers/sliders; orbit
+  camera. Per-leg orientation is calibrated so the real stand renders as a symmetric splay.
+- **CAD-style drag-to-pose:** a `TransformControls` gizmo on the edited leg's foot — drag the
+  X/Y/Z handles, the foot moves, IK solves the leg, and x/y/z update live.
 - The leg being edited and any out-of-range leg are visually distinguished in all views.
 
 ### Export panel (right)
@@ -164,8 +172,14 @@ Validated before export is enabled: ≥1 frame; every frame exactly 4 legs × `[
 - **Ground truth:** coordinate/visual correctness is confirmed on the real robot. The
   diagrams and 3D are faithful guides, not a substitute for the hardware check.
 
-## Deferred (Tier 2, fast-follow)
+## Hardware-verify items (cannot be confirmed off-robot)
 
-Click-drag the foot/linkage in the 3D view with IK (drag foot target → run `coord2polar` →
-leg follows). Deferred because 3D mouse interaction has depth ambiguity and needs a drag-plane
-or axis-gizmo solution — the riskiest, most time-consuming UX piece, separable from v1.
+The kinematics math is exact, but two display conventions are confirmed on the table:
+1. **Leg swing handedness** during motion (a single sign in the `worldYaw` mapping).
+2. **Absolute per-leg mounting** — orientation is solved against the real stand so it renders
+   symmetric, but front/back/mirror is verified on hardware.
+
+Both are isolated to the `CORNERS` table / `worldYaw` sign — a one-line change if a leg reads
+mirrored. Also note: picrawler's built-in `wave()` is a *swing-across* gesture (it drives `γ`
+±45° while bobbing), which looks different from a "raise-and-wave-in-place" hand wave — users
+will likely design their own gestures in the studio.
