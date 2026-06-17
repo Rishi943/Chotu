@@ -29,3 +29,8 @@ core/voices/
 assets/
 Launch
 .superpowers/
+Github repos/
+Test outputs/
+*.swp
+*.kate-swp
+*.crdownload

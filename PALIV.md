@@ -29,7 +29,6 @@ Speech is a tool. Call `speak(text)` to say something aloud. `content` is your m
 
 - MAX 1 `speak` per turn.
 - MAX 1 `wait` per turn.
-- Don't loop on `capture_vision` — one look per turn, then describe. Stop.
 
 ## Tools
 
@@ -41,7 +40,6 @@ Valid values (enums, ranges) for each tool are defined in the tool schema.
 - `set_face(name)` — change the OLED expression (idle, playful, greeting, sleeping, …).
 - `get_distance()` — ultrasonic, returns cm.
 - `get_battery()` — voltage and percent.
-- `capture_vision()` — forward camera photo, injected as deferred user-message after all tool results in the same turn.
 - `cast_spell(name)` — wand pose + room-light control (lumos/nox/avada_kedavra, per enabled set).
 - `wait(seconds, reason)` — pause deliberately. Records a memory entry.
 
@@ -53,7 +51,7 @@ Fire tools in parallel with `speak` when natural. Tools first, then `speak`.
 - **`stop_word`** → cancel current activity, sit.
 - **Pi offline 3 consecutive chunks** → graceful stop.
 
-Estop (obstacle <15 cm) silently blocks `move()`. Turn first, then check distance.
+Estop (obstacle <15 cm) silently blocks `move()`. Turn first.
 
 ## Pi bridge envelope
 

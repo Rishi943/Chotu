@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Chotu Faces — OLED Export Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400&family=Noto+Sans+Symbols+2&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --oled-w: 128px;
+    --oled-h: 64px;
+    --scale: 4;
+    --preview-w: calc(var(--oled-w) * var(--scale));
+    --preview-h: calc(var(--oled-h) * var(--scale));
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0a0a0a;
+    color: #e0e0e0;
+    font-family: 'Share Tech Mono', monospace;
+    padding: 40px 32px;
+    min-height: 100vh;
+  }
+
+  header {
+    margin-bottom: 40px;
+    border-bottom: 1px solid #222;
+    padding-bottom: 20px;
+  }
+
+  h1 {
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: #666;
+    margin-bottom: 6px;
+  }
+
+  h2 {
+    font-size: 22px;
+    color: #fff;
+    font-weight: 400;
+    letter-spacing: 0.05em;
+  }
+
+  .instructions {
+    margin-top: 12px;
+    font-size: 11px;
+    color: #555;
+    line-height: 1.8;
+  }
+
+  .instructions strong { color: #888; }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 36px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  label {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #555;
+  }
+
+  input[type=range] {
+    width: 140px;
+    accent-color: #fff;
+  }
+
+  input[type=number] {
+    background: #111;
+    border: 1px solid #2a2a2a;
+    color: #fff;
+    padding: 4px 8px;
+    width: 70px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+
+  .val { font-size: 12px; color: #aaa; margin-left: 8px; }
+
+  /* Grid */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(calc(var(--preview-w) + 32px), 1fr));
+    gap: 24px;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* The OLED preview — black box at 4× scale */
+  .oled-frame {
+    width: var(--preview-w);
+    height: var(--preview-h);
+    background: #000;
+    border: 1px solid #1e1e1e;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .oled-frame:hover { border-color: #444; }
+  .oled-frame.active { border-color: #fff; }
+
+  /* The face text — white on black, pixel-snapped */
+  .face-text {
+    color: #ffffff;
+    font-family: 'Noto Sans JP', 'Noto Sans Symbols 2', monospace;
+    font-weight: 300;
+    white-space: nowrap;
+    line-height: 1;
+    image-rendering: pixelated;
+    text-rendering: geometricPrecision;
+    -webkit-font-smoothing: none;
+    font-smoothing: none;
+    /* font size controlled by JS */
+  }
+
+  .card-label {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #444;
+  }
+
+  .card-kaomoji {
+    font-size: 10px;
+    color: #333;
+    font-family: 'Noto Sans JP', monospace;
+    max-width: var(--preview-w);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Screenshot helper — actual 128×64 capture target */
+  .capture-section {
+    margin-top: 60px;
+    border-top: 1px solid #1a1a1a;
+    padding-top: 40px;
+  }
+
+  .capture-title {
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: #555;
+    margin-bottom: 24px;
+  }
+
+  /* Exact 128×64 strip — screenshot THIS */
+  .strip-wrapper {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    background: #111;
+    padding: 2px;
+    width: fit-content;
+  }
+
+  .strip-cell {
+    width: 128px;
+    height: 64px;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .strip-label {
+    position: absolute;
+    bottom: 1px;
+    right: 2px;
+    font-size: 6px;
+    color: #222;
+    font-family: monospace;
+    pointer-events: none;
+  }
+
+  .strip-face {
+    color: #fff;
+    font-family: 'Noto Sans JP', 'Noto Sans Symbols 2', monospace;
+    font-weight: 300;
+    white-space: nowrap;
+    line-height: 1;
+    -webkit-font-smoothing: none;
+  }
+
+  /* Selected highlight */
+  #selected-info {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 12px;
+    min-height: 16px;
+  }
+
+  #selected-info strong { color: #aaa; }
+
+  .tip {
+    font-size: 10px;
+    color: #333;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Chotu — OLED Face Generator</h1>
+  <h2>128 × 64 Expression Tool</h2>
+  <p class="instructions">
+    <strong>To export:</strong> Click a face to select it → scroll to EXACT SIZE section below →
+    screenshot that 128×64 cell → crop → done.<br>
+    Adjust font size per face until it fills the frame cleanly.
+    Target: text roughly 60–70% of frame height, centered.
+  </p>
+</header>
+
+<div class="controls">
+  <div class="control-group">
+    <label>Preview Font Size <span class="val" id="size-val">36px</span></label>
+    <input type="range" id="font-size" min="10" max="60" value="36"
+      oninput="updateSize(this.value)">
+  </div>
+  <div class="control-group">
+    <label>Exact Strip Font Size</label>
+    <input type="number" id="strip-size" value="12" min="6" max="20"
+      oninput="updateStripSize(this.value)">
+    <span style="font-size:10px;color:#444;margin-top:2px;">tune this for 128×64 export</span>
+  </div>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<!-- Exact size export section -->
+<div class="capture-section">
+  <p class="capture-title">↓ Exact size — 128×64px — screenshot these cells</p>
+  <p id="selected-info"></p>
+  <div class="strip-wrapper" id="strip"></div>
+  <p class="tip">Each cell is exactly 128×64px. Screenshot → crop to cell border → save as PNG → scp to Pi.</p>
+</div>
+
+<script>
+const EXPRESSIONS = [
+  { name: "idle",         kaomoji: "(￣▽￣)" },
+  { name: "speak_open",   kaomoji: "(￣▽￣)" },
+  { name: "speak_close",  kaomoji: "(￣ ￣)" },
+  { name: "playful",      kaomoji: "ԅ(≖‿≖ԅ)" },
+  { name: "judging",      kaomoji: "( ಠ ʖ̯ ಠ)" },
+  { name: "embarrassed",  kaomoji: "(//ω//)" },
+  { name: "dissatisfied", kaomoji: "(￣ヘ￣)" },
+  { name: "angry",        kaomoji: "(╬ Ò﹏Ó)" },
+  { name: "sad",          kaomoji: "(╥﹏╥)" },
+  { name: "indifferent",  kaomoji: "┐(￣ヘ￣)┌" },
+  { name: "confused",     kaomoji: "(・・ ) ?" },
+  { name: "doubt",        kaomoji: "(⇀_⇀)" },
+  { name: "surprised",    kaomoji: "ヽ(°〇°)ﾉ" },
+  { name: "greeting",     kaomoji: "(￣▽￣)ノ" },
+  { name: "wink",         kaomoji: "(｡•̀ᴗ-)✧" },
+  { name: "sleeping",     kaomoji: "(￣o￣) zzZ" },
+  { name: "magic",        kaomoji: "(∩｀-´)⊃" },
+  { name: "cute",         kaomoji: "(◕‿◕✿)" },
+  { name: "thinking",     kaomoji: "(╭ರ_•́)" },
+  { name: "dead",         kaomoji: "(✖╭╮✖)" },
+];
+
+let currentSize = 36;
+let stripSize = 12;
+let selectedIndex = null;
+
+function buildGrid() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  EXPRESSIONS.forEach((expr, i) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const frame = document.createElement('div');
+    frame.className = 'oled-frame';
+    frame.id = `frame-${i}`;
+    frame.onclick = () => selectFace(i);
+
+    const text = document.createElement('div');
+    text.className = 'face-text';
+    text.id = `face-${i}`;
+    text.textContent = expr.kaomoji;
+    text.style.fontSize = currentSize + 'px';
+
+    frame.appendChild(text);
+
+    const label = document.createElement('div');
+    label.className = 'card-label';
+    label.textContent = expr.name;
+
+    const km = document.createElement('div');
+    km.className = 'card-kaomoji';
+    km.textContent = expr.kaomoji;
+
+    card.appendChild(frame);
+    card.appendChild(label);
+    card.appendChild(km);
+    grid.appendChild(card);
+  });
+}
+
+function buildStrip() {
+  const strip = document.getElementById('strip');
+  strip.innerHTML = '';
+  EXPRESSIONS.forEach((expr, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'strip-cell';
+    cell.id = `strip-cell-${i}`;
+
+    const face = document.createElement('div');
+    face.className = 'strip-face';
+    face.id = `strip-face-${i}`;
+    face.textContent = expr.kaomoji;
+    face.style.fontSize = stripSize + 'px';
+
+    const lbl = document.createElement('div');
+    lbl.className = 'strip-label';
+    lbl.textContent = expr.name;
+
+    cell.appendChild(face);
+    cell.appendChild(lbl);
+    strip.appendChild(cell);
+  });
+}
+
+function selectFace(i) {
+  // Deselect previous
+  if (selectedIndex !== null) {
+    document.getElementById(`frame-${selectedIndex}`)?.classList.remove('active');
+    document.getElementById(`strip-cell-${selectedIndex}`)?.style.setProperty('outline', 'none');
+  }
+
+  selectedIndex = i;
+  document.getElementById(`frame-${i}`)?.classList.add('active');
+
+  const cell = document.getElementById(`strip-cell-${i}`);
+  if (cell) {
+    cell.style.outline = '1px solid #fff';
+    cell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  const expr = EXPRESSIONS[i];
+  document.getElementById('selected-info').innerHTML =
+    `Selected: <strong>${expr.name}</strong> &nbsp;·&nbsp; ${expr.kaomoji} &nbsp;·&nbsp; screenshot the highlighted cell below`;
+}
+
+function updateSize(val) {
+  currentSize = parseInt(val);
+  document.getElementById('size-val').textContent = val + 'px';
+  EXPRESSIONS.forEach((_, i) => {
+    const el = document.getElementById(`face-${i}`);
+    if (el) el.style.fontSize = currentSize + 'px';
+  });
+}
+
+function updateStripSize(val) {
+  stripSize = parseInt(val);
+  EXPRESSIONS.forEach((_, i) => {
+    const el = document.getElementById(`strip-face-${i}`);
+    if (el) el.style.fontSize = stripSize + 'px';
+  });
+}
+
+buildGrid();
+buildStrip();
+</script>
+</body>
+</html>

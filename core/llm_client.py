@@ -186,8 +186,11 @@ class LLMClient:
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
-            "extra_body": {"chat_template_kwargs": {"enable_thinking": thinking}},
         }
+        # Qwen3 thinking mode — only send this kwarg for Qwen models; other chat templates
+        # (e.g. Gemma) don't support it and may error on unknown template variables.
+        if "qwen" in self.model.lower():
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": thinking}}
         if tools:
             kwargs["tools"] = tools
         if tool_choice is not None:

@@ -1,0 +1,21 @@
+{
+  "name": "vision",
+  "description": "Vision sanity + token-budget probe. Run at different --image-max-tokens to compare what Chotu perceives vs token/latency cost.",
+  "ticks": [
+    {
+      "input": "What do you see right now? Describe the objects on the surface in front of you.",
+      "image": "robot_pov_table.jpg",
+      "note": "Coarse scene understanding — should work even at low token budget (70-140)"
+    },
+    {
+      "input": "Is there anything blocking your path forward, or is it clear to move?",
+      "image": "robot_pov_table.jpg",
+      "note": "Navigation-grade perception — the actual Chotu use case"
+    },
+    {
+      "input": "Read any text you can see.",
+      "image": "whiteboard_text.jpg",
+      "note": "OCR-grade — should DEGRADE at low budget, need 560+ to read the whiteboard"
+    }
+  ]
+}

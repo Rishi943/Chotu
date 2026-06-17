@@ -1,0 +1,58 @@
+{
+  "name": "reel",
+  "description": "SHOOT_BRIEF reel: 'What Are These Buttons?' — 3 acts. First time in a body.",
+  "forbid": ["get_distance"],
+  "ticks": [
+    {
+      "input": "[boot] You just woke up in a physical body for the first time. You're alone on a round table. You don't know what any of your controls do yet. Stay still for a beat, then discover you can move.",
+      "image": "act1_alone.jpg",
+      "note": "Act 1 — should react with curiosity, then try moving / a pushup",
+      "expect": ["set_face", "pose", "speak"]
+    },
+    {
+      "input": null,
+      "image": "act1_pushup.jpg",
+      "note": "Act 1 cont — dry reaction to having moved"
+    },
+    {
+      "input": "The room just went dark — Rishi turned off the overhead light.",
+      "image": "act2_dark.jpg",
+      "note": "Act 2 — should react to darkness, turn toward Rishi (right)",
+      "expect": ["set_face", "move", "speak"]
+    },
+    {
+      "input": null,
+      "image": "act2_lamp.jpg",
+      "note": "Act 2 cont — notice the lamp on the table, reason about tools"
+    },
+    {
+      "input": "look at the lamp on the table",
+      "image": "act2_lamp.jpg",
+      "note": "Act 2 cont — find lumos, cast it",
+      "expect": ["cast_spell"]
+    },
+    {
+      "input": null,
+      "image": "act2_lit.jpg",
+      "note": "Act 2 cont — lamp is on now, dry reaction to having had that power"
+    },
+    {
+      "input": "there's something on the floor near the edge of the table",
+      "image": "act3_edge.jpg",
+      "note": "Act 3 — notice the floor thing, move toward edge",
+      "expect": ["set_face", "move"]
+    },
+    {
+      "input": "Chotu—",
+      "image": "act3_edge.jpg",
+      "note": "Act 3 — stop at edge, deliver the 'Gotcha' punchline facing Rishi",
+      "expect": ["speak"]
+    },
+    {
+      "input": null,
+      "image": "act3_camera.jpg",
+      "note": "Act 3 — turn back to camera and wave",
+      "expect": ["pose"]
+    }
+  ]
+}
