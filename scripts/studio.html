@@ -34,7 +34,20 @@
 <div id="topdown" class="col"><canvas id="topCanvas" width="260" height="220"></canvas></div>
 <div id="sideview" class="col"><canvas id="sideCanvas" width="260" height="220"></canvas></div>
 <div id="threed" class="col"></div>
-<div id="exportPanel" class="col"></div>
+<div id="exportPanel" class="col">
+<div style="color:#777;letter-spacing:.1em;margin-bottom:6px">EXPORT → frames JSON</div>
+tool <input id="toolName" type="text" placeholder="shimmy" style="width:120px;background:#111;color:#fff;border:1px solid #333" oninput="renderExportStatus()"><br>
+desc <input id="desc" type="text" placeholder="A quick description." style="width:220px;background:#111;color:#fff;border:1px solid #333"><br>
+<label><input id="personaGated" type="checkbox"> persona_gated (reel only)</label><br>
+default_speed <input id="defaultSpeed" type="number" value="60" style="width:60px;background:#111;color:#fff;border:1px solid #333"><br>
+<div style="margin-top:8px">
+  <button onclick="exportJSON()">⬇ Export JSON</button>
+  <button onclick="copyJSON()">⧉ Copy</button>
+  <button onclick="document.getElementById('loadFile').click()">⬆ Load JSON</button>
+  <input id="loadFile" type="file" accept=".json" onchange="loadJSON(this.files[0])" style="display:none">
+</div>
+<div id="exportStatus" style="margin-top:6px;color:#777"></div>
+</div>
 <div id="timeline" class="col"></div>
 
 <script type="module">
@@ -336,6 +349,64 @@ async function playOnRobot() {  // mirrors the generated _play_{tool} body
   }
 }
 
+// ---- export panel ----
+const SNAKE = /^[a-z][a-z0-9_]*$/;
+
+function buildExport() {
+  return {
+    tool: document.getElementById("toolName").value.trim(),
+    description: document.getElementById("desc").value.trim(),
+    persona_gated: document.getElementById("personaGated").checked,
+    default_speed: Number(document.getElementById("defaultSpeed").value),
+    frames: state.frames.map(f => ({legs: f.legs, speed: f.speed, hold_s: f.hold_s})),
+  };
+}
+
+function validateExport(d) {
+  if (!SNAKE.test(d.tool)) return "tool must be snake_case";
+  if (!d.frames.length) return "need at least 1 frame";
+  for (const f of d.frames) {
+    if (!Array.isArray(f.legs) || f.legs.length !== 4) return "each frame needs 4 legs";
+    if (f.legs.some(l => !Array.isArray(l) || l.length !== 3)) return "each leg is [x,y,z]";
+  }
+  return null;
+}
+
+function renderExportStatus() {
+  const err = validateExport(buildExport());
+  const el = document.getElementById("exportStatus");
+  el.textContent = err ? "✗ " + err : `✓ ${state.frames.length} frame(s) valid`;
+  el.style.color = err ? "#ff5b5b" : "#3ddc6f";
+}
+
+function exportJSON() {
+  const d = buildExport(); const err = validateExport(d);
+  if (err) { alert("Cannot export: " + err); return; }
+  const blob = new Blob([JSON.stringify(d, null, 2)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = d.tool + ".json"; a.click();
+}
+
+async function copyJSON() {
+  const d = buildExport(); const err = validateExport(d);
+  if (err) { alert("Cannot copy: " + err); return; }
+  await navigator.clipboard.writeText(JSON.stringify(d, null, 2));
+}
+
+function loadJSON(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const d = JSON.parse(reader.result);
+    document.getElementById("toolName").value = d.tool || "";
+    document.getElementById("desc").value = d.description || "";
+    document.getElementById("personaGated").checked = !!d.persona_gated;
+    document.getElementById("defaultSpeed").value = d.default_speed ?? 60;
+    state.frames = (d.frames || []).map(f => ({legs: f.legs.map(l=>l.slice()), speed: f.speed, hold_s: f.hold_s}));
+    state.selectedFrame = null; renderAll();
+  };
+  reader.readAsText(file);
+}
+
 // renderAll() is extended by later tasks (previews, export, timeline).
 function renderAll() {
   state.speed = Number(document.getElementById("speed").value);
@@ -345,6 +416,7 @@ function renderAll() {
   renderSide();
   render3D();
   renderTimeline();
+  renderExportStatus();
 }
 
 async function sendToRobot() {
@@ -377,6 +449,8 @@ window.addFrame = addFrame; window.dupFrame = dupFrame; window.delFrame = delFra
 window.moveFrame = moveFrame; window.loadFrame = loadFrame;
 window.setHold = setHold; window.setFrameSpeed = setFrameSpeed;
 window.playPreview = playPreview; window.playOnRobot = playOnRobot;
+window.exportJSON = exportJSON; window.copyJSON = copyJSON; window.loadJSON = loadJSON;
+window.renderExportStatus = renderExportStatus;
 
 setInterval(pollHealth, 4000); pollHealth();
 
