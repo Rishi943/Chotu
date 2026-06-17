@@ -11,6 +11,7 @@
   .dot-ok { color:#3ddc6f; } .dot-clamp { color:#ff5b5b; }
   input[type=number] { width:64px; background:#111; color:#fff; border:1px solid #333; }
   button { background:#222; color:#ddd; border:1px solid #444; padding:6px 10px; cursor:pointer; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
   button.primary { background:#1c3a24; color:#3ddc6f; }
 </style>
 <script type="importmap">
@@ -26,8 +27,8 @@
 
 <div id="legEditor" class="col"></div>
 <div style="margin:8px 0">speed <input id="speed" type="number" min="0" max="90" value="60"></div>
-<button class="primary" onclick="sendToRobot()">▶ Send to robot</button>
-<button onclick="resetToStand()">⟲ Reset to stand</button>
+<button class="primary needs-pi" onclick="sendToRobot()">▶ Send to robot</button>
+<button class="needs-pi" onclick="resetToStand()">⟲ Reset to stand</button>
 
 <!-- Preview / export / timeline mount points (filled in later tasks) -->
 <div id="topdown" class="col"><canvas id="topCanvas" width="260" height="220"></canvas></div>
@@ -299,13 +300,34 @@ function renderAll() {
   render3D();
 }
 
+async function sendToRobot() {
+  try {
+    const r = await fetch("/set_legs", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({legs: state.legs, speed: state.speed})});
+    const j = await r.json();
+    if (!j.ok) alert("Pi error: " + (j.error || JSON.stringify(j)));
+  } catch (e) { alert("Send failed: " + e); }
+}
+
+async function pollHealth() {
+  const el = document.getElementById("conn");
+  try {
+    const r = await fetch("/health");
+    const ok = r.ok && (await r.json()).ok;
+    el.textContent = ok ? "● Pi connected" : "● Pi unreachable";
+    el.style.color = ok ? "#3ddc6f" : "#ff5b5b";
+    document.querySelectorAll(".needs-pi").forEach(b => b.disabled = !ok);
+  } catch { el.textContent = "● Pi unreachable"; el.style.color = "#ff5b5b"; }
+}
+
 // Inline HTML handlers call these by global name; the module scope is not global, so expose them.
 window.state = state;
 window.renderAll = renderAll;
 window.setLeg = setLeg;
 window.resetToStand = resetToStand;
-// NOTE: window.sendToRobot is added in Task 6; the Send button no-ops until then.
-window.sendToRobot = () => {};
+window.sendToRobot = sendToRobot;
+
+setInterval(pollHealth, 4000); pollHealth();
 
 renderAll();
 init3D();   // scene-init runs ONCE, after the first renderAll()
