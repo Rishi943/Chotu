@@ -26,6 +26,7 @@
   button{background:#1a1e25;color:#c3cad4;border:1px solid #2c313b;border-radius:6px;padding:7px 12px;cursor:pointer;font-family:inherit}
   button:disabled{opacity:.4;cursor:not-allowed}
   button.primary{background:#37b6ff;color:#06121d;border-color:#37b6ff}
+  .romono{font:500 9px 'JetBrains Mono',monospace;color:#5b6470;margin-top:2px}
 </style>
 <script type="importmap">
 { "imports": {
@@ -749,7 +750,7 @@ function renderLibrary(){
             <span style="flex:1"></span>
             <span style="font:500 10px 'JetBrains Mono';color:#7d8694">${a.frames.length}f</span>
           </div>
-          ${a.builtin?'<div style="font:500 9px \\'JetBrains Mono\\';color:#5b6470;margin-top:2px">read-only</div>':''}
+          ${a.builtin?'<div class="romono">read-only</div>':''}
         </div>`).join(""):'<div style="color:#5b6470;font-size:12px">none yet</div>'}
     </div>`).join("");
   groups.forEach(([_,list],gi)=>list.forEach((a,i)=>{
