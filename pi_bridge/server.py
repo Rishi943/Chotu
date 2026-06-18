@@ -34,6 +34,8 @@ from pydantic import BaseModel
 from picrawler import Picrawler
 from robot_hat import Ultrasonic, Pin, ADC, Music
 
+from sequence import play_frames
+
 _music = Music()
 from vilib import Vilib
 
@@ -45,6 +47,15 @@ robot_hat.reset_mcu()
 time.sleep(0.2)
 
 crawler = Picrawler()
+
+
+def _play_frames(frames, cap=None, speed_override=None):
+    """Server-side shortcut binding play_frames to the live crawler (used by
+    /play_sequence and add-chotu-tool's generated _play_{tool}). cap defaults to
+    MAX_MOTION_SPEED, resolved at call time (it's defined later in this module)."""
+    play_frames(crawler, frames, MAX_MOTION_SPEED if cap is None else cap, speed_override)
+
+
 us = Ultrasonic(Pin("D2"), Pin("D3"))
 
 # Shared latest JPEG frame for /stream consumers (laptop FrameSampler).
@@ -206,6 +217,11 @@ class SetLegsRequest(BaseModel):
     speed: int = 70
 
 
+class PlaySequenceRequest(BaseModel):
+    frames: list             # [{legs: 4×[x,y,z], speed, hold_s}]
+    speed: int | None = None  # optional override applied to every frame
+
+
 class PeekOverRequest(BaseModel):
     lead: str               # "left" | "right" — which front leg freezes mid-air
     reach: str = "shallow"  # "shallow" | "deep"
@@ -324,6 +340,31 @@ async def set_legs(req: SetLegsRequest):
     except Exception as e:
         logging.error(f"  set_legs error: {e}")
         return _envelope("set_legs", {"legs": req.legs, "speed": speed}, start, str(e))
+
+
+@app.post("/play_sequence")
+async def play_sequence(req: PlaySequenceRequest):
+    start = time.time()
+    bad = (not req.frames) or any(
+        not isinstance(f.get("legs"), list) or len(f["legs"]) != 4
+        or any(not isinstance(leg, list) or len(leg) != 3 for leg in f["legs"])
+        for f in req.frames
+    )
+    if bad:
+        return _envelope("play_sequence", {"frames": len(req.frames or [])}, start,
+                         "each frame needs 4 legs of [x,y,z]")
+    logging.info(f"POST /play_sequence  frames={len(req.frames)} speed={req.speed}")
+    try:
+        async with _motion_section():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, lambda: _play_frames(req.frames, MAX_MOTION_SPEED, req.speed))
+        return _envelope("play_sequence",
+                         {"frames": len(req.frames), "halted_early": False}, start)
+    except Exception as e:
+        logging.error(f"  play_sequence error: {e}")
+        return _envelope("play_sequence",
+                         {"frames": len(req.frames), "halted_early": True}, start, str(e))
 
 
 # Front-left (leg 2) leads — the picrawler forward-gait parity-0 mid-step frame.

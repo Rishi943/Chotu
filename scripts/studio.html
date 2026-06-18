@@ -289,7 +289,7 @@ const CORNERS3D = [ {p:[-HALF_BODY,0, HALF_BODY], sgn:[-1, 1]},   // FR
                     {p:[ HALF_BODY,0,-HALF_BODY], sgn:[ 1,-1]},   // RL
                     {p:[-HALF_BODY,0,-HALF_BODY], sgn:[-1,-1]} ]; // RR
 
-let scene, camera, renderer, controls, legGroups, gizmoTarget, tcontrols;
+let scene, camera, renderer, controls, legGroups, gizmoTarget, tcontrols, grid;
 let dragging = false, threeReady = false, gizmoOn = true, freeDragging = false;
 
 function init3D() {
@@ -315,7 +315,7 @@ function init3D() {
   controls.target.set(0,-20,0);
   scene.add(new THREE.AmbientLight(0xffffff,0.7));
   const dl = new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(120,200,120); scene.add(dl);
-  const grid = new THREE.GridHelper(400,16,0x2a3744,0x202833); grid.position.y=-95; scene.add(grid);
+  grid = new THREE.GridHelper(400,16,0x2a3744,0x202833); grid.position.y=-95; scene.add(grid);
   scene.add(new THREE.AxesHelper(40));
 
   // body — silver chassis plate + dark Pi/board stack on top
@@ -429,6 +429,7 @@ function placeBone(bone, a, b){ // position a plate between two Vector3
 
 function render3D(){
   if(!threeReady) return;  // renderAll() runs once before init; no-op until the scene exists
+  let minFootY = Infinity;
   state.legs.forEach((leg,i)=>{
     const [x,y,z]=leg; const pl=legPlane(x,y,z);
     const corner=CORNERS3D[i];
@@ -438,6 +439,7 @@ function render3D(){
     const base=new THREE.Vector3(...corner.p);
     const P=(r,zz)=>base.clone().addScaledVector(dir,r).add(new THREE.Vector3(0,zz,0));
     const hip=P(0,0), kneeBase=P(C,0), knee=P(pl.kneeR,pl.kneeZ), foot=P(pl.footR,pl.footZ);
+    minFootY = Math.min(minFootY, foot.y);   // lowest foot = the ground contact level
     const grp=legGroups[i];
     placeBone(grp.hipBone, hip, kneeBase);   // C: hip link (body -> shoulder)
     placeBone(grp.upper, kneeBase, knee);    // A: thigh (shoulder -> knee)
@@ -456,6 +458,7 @@ function render3D(){
     grp.hipBone.material.color.setHex(i===state.editing?0x37b6ff:(ok?0x4ec77f:0xf2664f));
     if(i===state.editing && !dragging && !freeDragging) gizmoTarget.position.copy(foot);  // park gizmo on edited foot
   });
+  if(grid && isFinite(minFootY)) grid.position.y = minFootY;  // grid sits under the planted feet
 }
 
 // addFrame duplicates the current pose as a new frame placed after the selected one,
@@ -468,6 +471,12 @@ function addFrame() {
 function dupFrame(i){ const f=state.frames[i];
   state.frames.splice(i+1,0,{legs:f.legs.map(l=>l.slice()),speed:f.speed,hold_s:f.hold_s});
   state.selectedFrame=i+1; renderAll(); }
+function reorderFrame(from,to){
+  if(from===to||from<0||to<0||from>=state.frames.length||to>=state.frames.length) return;
+  const moved=state.frames.splice(from,1)[0];
+  state.frames.splice(to,0,moved);
+  selectFrame(to);   // keep the moved frame selected
+}
 function delFrame(i){
   if(state.frames.length<=1) return;              // keep at least one frame
   state.frames.splice(i,1);
@@ -501,12 +510,17 @@ function drawThumb(cv, legs, sel){
 function renderTimeline() {
   const el = document.getElementById("timeline");
   el.style.display="flex"; el.style.alignItems="stretch"; el.style.gap="9px";
+  el.style.overflowY="hidden"; el.style.overflowX="auto";
   el.innerHTML = state.frames.map((f,i)=>{
     const sel=i===state.selectedFrame;
     const card=sel
-      ? "flex:none;width:138px;border:1px solid #37b6ff;border-radius:7px;background:linear-gradient(180deg,rgba(55,182,255,.10),rgba(55,182,255,.02));padding:7px 9px;display:flex;flex-direction:column;gap:5px;box-shadow:0 0 14px rgba(55,182,255,.12);cursor:pointer"
-      : "flex:none;width:138px;border:1px solid #232934;border-radius:7px;background:#11151b;padding:7px 9px;display:flex;flex-direction:column;gap:5px;cursor:pointer";
-    return `<div onclick="loadFrame(${i})" style="${card}">
+      ? "flex:none;width:138px;border:1px solid #37b6ff;border-radius:7px;background:linear-gradient(180deg,rgba(55,182,255,.10),rgba(55,182,255,.02));padding:6px 8px;display:flex;flex-direction:column;gap:5px;box-shadow:0 0 14px rgba(55,182,255,.12);cursor:pointer"
+      : "flex:none;width:138px;border:1px solid #232934;border-radius:7px;background:#11151b;padding:6px 8px;display:flex;flex-direction:column;gap:5px;cursor:pointer";
+    return `<div draggable="true"
+      ondragstart="event.dataTransfer.setData('text/plain',${i})"
+      ondragover="event.preventDefault()"
+      ondrop="event.preventDefault();reorderFrame(+event.dataTransfer.getData('text/plain'),${i})"
+      onclick="loadFrame(${i})" style="${card}">
       <div style="display:flex;align-items:center;gap:6px">
         <b style="font:700 12px 'JetBrains Mono';color:${sel?'#eaf4fc':'#cdd6e0'}">F${i+1}</b>
         <span style="flex:1"></span>
@@ -514,10 +528,10 @@ function renderTimeline() {
         <span onclick="event.stopPropagation();dupFrame(${i})" title="duplicate" style="cursor:pointer;color:#7d8694;font-size:12px">⧉</span>
         <span onclick="event.stopPropagation();delFrame(${i})" title="delete" style="cursor:pointer;width:16px;height:16px;border-radius:3px;background:#2a1a1a;border:1px solid #5a2b2b;color:#f2664f;font-size:12px;line-height:14px;text-align:center">×</span>
       </div>
-      <canvas id="thumb${i}" width="120" height="50" style="width:120px;height:50px;border-radius:4px;background:${sel?'#08111a':'#0a0d12'}"></canvas>
+      <canvas id="thumb${i}" width="120" height="42" style="width:120px;height:42px;border-radius:4px;background:${sel?'#08111a':'#0a0d12'}"></canvas>
       <div style="display:flex;align-items:center;gap:5px;font:500 10px 'JetBrains Mono';color:${sel?'#8fb9d8':'#7d8694'}">
-        spd<input type="number" value="${f.speed}" onclick="event.stopPropagation()" oninput="setFrameSpeed(${i},this.value)" style="width:38px;padding:2px 4px">
-        hold<input type="number" step="0.1" value="${f.hold_s}" onclick="event.stopPropagation()" oninput="setHold(${i},this.value)" style="width:38px;padding:2px 4px">
+        spd<input type="number" value="${f.speed}" onclick="event.stopPropagation()" oninput="setFrameSpeed(${i},this.value)" style="width:36px;padding:1px 4px">
+        hold<input type="number" step="0.1" value="${f.hold_s}" onclick="event.stopPropagation()" oninput="setHold(${i},this.value)" style="width:36px;padding:1px 4px">
       </div>
     </div>`;
   }).join("") +
@@ -527,7 +541,6 @@ function renderTimeline() {
   const pb=document.getElementById("playBtn"); if(pb) pb.textContent = playing ? "⏸ Pause" : "▷ Play preview";
 }
 
-const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 // Looping preview: lerp between consecutive frames (easeInOut), like the redesign.
 function playPreview(){
@@ -554,12 +567,13 @@ function stopPreview(){
     renderAll();
   }
 }
-async function playOnRobot() {  // mirrors the generated _play_{tool} body
-  for (const f of state.frames) {
-    await fetch("/set_legs", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({legs: f.legs, speed: f.speed})});
-    if (f.hold_s) await sleep(f.hold_s*1000);
-  }
+async function playOnRobot() {  // one on-Pi sequence — matches the scaffolded tool
+  try {
+    const r = await fetch("/play_sequence", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({frames: state.frames})});
+    const j = await r.json();
+    if (!j.ok) alert("Pi error: " + (j.error || JSON.stringify(j)));
+  } catch (e) { alert("Play failed: " + e); }
 }
 
 // ---- export panel ----
@@ -642,12 +656,12 @@ function onSpeedInput(){ renderAll(); }   // readout + frame-speed sync handled 
 function renderSpeedBars(){
   const host=document.getElementById("speedBars"); if(!host) return;
   const v=Number(document.getElementById("speed").value);
-  const filled=Math.round(v/90*12);
+  const filled=Math.round(v/10);          // bar N (1-based) == speed N*10
   host.innerHTML="";
-  for(let i=0;i<12;i++){
+  for(let i=0;i<9;i++){
     const b=document.createElement("div");
-    b.style.cssText=`flex:1;height:${28+i*6}%;border-radius:1px;cursor:pointer;background:${i<filled?'#37b6ff':(i<filled+3?'#22323f':'#1c2630')}`;
-    b.onclick=()=>{document.getElementById("speed").value=Math.round((i+1)/12*90);onSpeedInput();};
+    b.style.cssText=`flex:1;height:${24+i*8}%;border-radius:1px;cursor:pointer;background:${i<filled?'#37b6ff':(i<filled+2?'#22323f':'#1c2630')}`;
+    b.onclick=()=>{document.getElementById("speed").value=(i+1)*10;onSpeedInput();};
     host.appendChild(b);
   }
 }
@@ -782,7 +796,7 @@ window.setLeg = setLeg;
 window.resetToStand = resetToStand;
 window.sendToRobot = sendToRobot;
 window.addFrame = addFrame; window.dupFrame = dupFrame; window.delFrame = delFrame;
-window.loadFrame = loadFrame;
+window.loadFrame = loadFrame; window.reorderFrame = reorderFrame;
 window.setHold = setHold; window.setFrameSpeed = setFrameSpeed;
 window.playPreview = playPreview; window.playOnRobot = playOnRobot;
 window.exportJSON = exportJSON; window.copyJSON = copyJSON; window.loadJSON = loadJSON;
