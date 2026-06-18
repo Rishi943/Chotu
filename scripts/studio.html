@@ -103,6 +103,7 @@
         default_speed <input id="defaultSpeed" type="number" value="60" style="width:60px;margin-top:6px"><br>
         <div style="margin-top:8px;display:flex;gap:6px">
           <button class="primary" onclick="exportJSON()">⬇ Export</button>
+          <button onclick="saveAnimation()">💾 Save</button>
           <button onclick="copyJSON()">⧉</button>
           <button onclick="document.getElementById('loadFile').click()">⬆</button>
           <input id="loadFile" type="file" accept=".json" onchange="loadJSON(this.files[0])" style="display:none">
@@ -598,6 +599,22 @@ function exportJSON() {
   a.href = URL.createObjectURL(blob); a.download = d.tool + ".json"; a.click();
 }
 
+async function saveAnimation(){
+  const d=buildExport(); const err=validateExport(d);
+  if(err){ alert("Cannot save: "+err); return; }
+  try{
+    const existing=(await (await fetch("/animations")).json()).animations||[];
+    if(existing.some(a=>!a.builtin && a.tool===d.tool)
+       && !confirm("Overwrite "+d.tool+".json?")) return;
+    const r=await fetch("/animations",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(d)});
+    const j=await r.json();
+    if(!j.ok){ alert("Save failed: "+(j.error||JSON.stringify(j))); return; }
+    const st=document.getElementById("exportStatus");
+    st.textContent="✓ saved "+j.file; st.style.color="#4ec77f";
+  }catch(e){ alert("Save failed: "+e); }
+}
+
 async function copyJSON() {
   const d = buildExport(); const err = validateExport(d);
   if (err) { alert("Cannot copy: " + err); return; }
@@ -768,6 +785,7 @@ window.loadFrame = loadFrame;
 window.setHold = setHold; window.setFrameSpeed = setFrameSpeed;
 window.playPreview = playPreview; window.playOnRobot = playOnRobot;
 window.exportJSON = exportJSON; window.copyJSON = copyJSON; window.loadJSON = loadJSON;
+window.saveAnimation = saveAnimation;
 window.renderExportStatus = renderExportStatus;
 
 setInterval(pollHealth, 4000); pollHealth();
