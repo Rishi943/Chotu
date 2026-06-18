@@ -33,7 +33,7 @@
 <!-- Preview / export / timeline mount points (filled in later tasks) -->
 <div id="topdown" class="col"><canvas id="topCanvas" width="260" height="220"></canvas></div>
 <div id="sideview" class="col"><canvas id="sideCanvas" width="260" height="220"></canvas></div>
-<div id="threed" class="col"></div>
+<div id="threed" class="col" style="width:360px;height:300px"></div>
 <div id="exportPanel" class="col">
 <div style="color:#777;letter-spacing:.1em;margin-bottom:6px">EXPORT → frames JSON</div>
 tool <input id="toolName" type="text" placeholder="shimmy" style="width:120px;background:#111;color:#fff;border:1px solid #333" oninput="renderExportStatus()"><br>
@@ -205,11 +205,21 @@ let dragging = false, threeReady = false;
 function init3D() {
   const host = document.getElementById("threed");
   scene = new THREE.Scene(); scene.background = new THREE.Color(0x232730);
-  const W = 360, H = 300;
-  camera = new THREE.PerspectiveCamera(48, W/H, 1, 4000);
+  const sizeOf = () => {
+    const r = host.getBoundingClientRect();
+    return { w: Math.max(1, Math.floor(r.width)), h: Math.max(1, Math.floor(r.height)) };
+  };
+  let { w, h } = sizeOf();
+  camera = new THREE.PerspectiveCamera(48, w/h, 1, 4000);
   camera.position.set(220,180,260);
   renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setSize(W, H); host.appendChild(renderer.domElement);
+  renderer.setSize(w, h); host.appendChild(renderer.domElement);
+  const ro = new ResizeObserver(() => {
+    const s = sizeOf();
+    camera.aspect = s.w / s.h; camera.updateProjectionMatrix();
+    renderer.setSize(s.w, s.h);
+  });
+  ro.observe(host);
   controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0,-20,0);
   scene.add(new THREE.AmbientLight(0xffffff,0.7));
   const dl = new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(120,200,120); scene.add(dl);
