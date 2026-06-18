@@ -84,10 +84,6 @@
 
     <!-- RIGHT RAIL -->
     <div class="rail-r">
-      <div>
-        <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">SIDE · LINKAGE</div>
-        <canvas id="sideCanvas" width="260" height="220" style="width:100%;height:auto"></canvas>
-      </div>
       <div id="exportPanel">
         <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">EXPORT → TOOL JSON</div>
         tool <input id="toolName" type="text" placeholder="shimmy" style="width:120px" oninput="renderExportStatus()"><br>
@@ -258,20 +254,6 @@ function renderDots() {
       st.style.color = color;
     }
   });
-}
-
-function renderSide() {  // articulated linkage for the leg being edited
-  const cv = document.getElementById("sideCanvas"), g = cv.getContext("2d");
-  g.clearRect(0,0,cv.width,cv.height);
-  const leg = state.legs[state.editing], p = legPlane(leg[0], leg[1], leg[2]);
-  const ox = 40, oy = 50, s = 0.7;
-  const P = (r,z) => [ox + r*s, oy - z*s];   // z up on screen
-  const seg = (aR,aZ,bR,bZ,col) => { const [a0,a1]=P(aR,aZ),[b0,b1]=P(bR,bZ);
-    g.strokeStyle=col; g.lineWidth=3; g.beginPath(); g.moveTo(a0,a1); g.lineTo(b0,b1); g.stroke(); };
-  g.strokeStyle="#2a2a2a"; g.beginPath(); g.moveTo(0,oy); g.lineTo(cv.width,oy); g.stroke();
-  seg(0,0, p.baseR,p.baseZ, "#556");   // C offset (hip at origin)
-  seg(p.baseR,p.baseZ, p.kneeR,p.kneeZ, "#9ad");  // A
-  seg(p.kneeR,p.kneeZ, p.footR,p.footZ, "#9ad");  // B
 }
 
 // ---- live 3D model + CAD-style drag-to-pose (three.js) ----
@@ -655,7 +637,6 @@ function renderAll() {
   renderSpeedBars();
   renderLegEditor();
   renderDots();
-  renderSide();
   render3D();
   renderTimeline();
   renderExportStatus();
