@@ -266,10 +266,12 @@ const HALF_BODY = LENGTH_SIDE/2;
 // (body frame: +x=right, +y=front): each leg's local (x,y) maps to body (x,z) by a
 // reflection — the left/right mirror real quadrupeds use. This is exact, not tuned.
 // Verified against the calibration helper's leg layout: idx [0,1,2,3] = [FR,FL,RL,RR].
-const CORNERS3D = [ {p:[ HALF_BODY,0, HALF_BODY], sgn:[ 1, 1]},   // FR  local(x,y)->body(+x,+z)
-                    {p:[-HALF_BODY,0, HALF_BODY], sgn:[-1, 1]},   // FL          (-x,+z)
-                    {p:[-HALF_BODY,0,-HALF_BODY], sgn:[-1,-1]},   // RL          (-x,-z)
-                    {p:[ HALF_BODY,0,-HALF_BODY], sgn:[ 1,-1]} ]; // RR          (+x,-z)
+// Lateral (three.js x) axis negated vs the raw body frame so the TOP view matches the
+// real robot's handedness (verified against a top-down photo). Front-back (z) unchanged.
+const CORNERS3D = [ {p:[-HALF_BODY,0, HALF_BODY], sgn:[-1, 1]},   // FR
+                    {p:[ HALF_BODY,0, HALF_BODY], sgn:[ 1, 1]},   // FL
+                    {p:[ HALF_BODY,0,-HALF_BODY], sgn:[ 1,-1]},   // RL
+                    {p:[-HALF_BODY,0,-HALF_BODY], sgn:[-1,-1]} ]; // RR
 
 let scene, camera, renderer, controls, legGroups, gizmoTarget, tcontrols;
 let dragging = false, threeReady = false, gizmoOn = true, freeDragging = false;
