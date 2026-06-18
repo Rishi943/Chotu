@@ -289,7 +289,7 @@ const CORNERS3D = [ {p:[-HALF_BODY,0, HALF_BODY], sgn:[-1, 1]},   // FR
                     {p:[ HALF_BODY,0,-HALF_BODY], sgn:[ 1,-1]},   // RL
                     {p:[-HALF_BODY,0,-HALF_BODY], sgn:[-1,-1]} ]; // RR
 
-let scene, camera, renderer, controls, legGroups, gizmoTarget, tcontrols;
+let scene, camera, renderer, controls, legGroups, gizmoTarget, tcontrols, grid;
 let dragging = false, threeReady = false, gizmoOn = true, freeDragging = false;
 
 function init3D() {
@@ -315,7 +315,7 @@ function init3D() {
   controls.target.set(0,-20,0);
   scene.add(new THREE.AmbientLight(0xffffff,0.7));
   const dl = new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(120,200,120); scene.add(dl);
-  const grid = new THREE.GridHelper(400,16,0x2a3744,0x202833); grid.position.y=-95; scene.add(grid);
+  grid = new THREE.GridHelper(400,16,0x2a3744,0x202833); grid.position.y=-95; scene.add(grid);
   scene.add(new THREE.AxesHelper(40));
 
   // body — silver chassis plate + dark Pi/board stack on top
@@ -429,6 +429,7 @@ function placeBone(bone, a, b){ // position a plate between two Vector3
 
 function render3D(){
   if(!threeReady) return;  // renderAll() runs once before init; no-op until the scene exists
+  let minFootY = Infinity;
   state.legs.forEach((leg,i)=>{
     const [x,y,z]=leg; const pl=legPlane(x,y,z);
     const corner=CORNERS3D[i];
@@ -438,6 +439,7 @@ function render3D(){
     const base=new THREE.Vector3(...corner.p);
     const P=(r,zz)=>base.clone().addScaledVector(dir,r).add(new THREE.Vector3(0,zz,0));
     const hip=P(0,0), kneeBase=P(C,0), knee=P(pl.kneeR,pl.kneeZ), foot=P(pl.footR,pl.footZ);
+    minFootY = Math.min(minFootY, foot.y);   // lowest foot = the ground contact level
     const grp=legGroups[i];
     placeBone(grp.hipBone, hip, kneeBase);   // C: hip link (body -> shoulder)
     placeBone(grp.upper, kneeBase, knee);    // A: thigh (shoulder -> knee)
@@ -456,6 +458,7 @@ function render3D(){
     grp.hipBone.material.color.setHex(i===state.editing?0x37b6ff:(ok?0x4ec77f:0xf2664f));
     if(i===state.editing && !dragging && !freeDragging) gizmoTarget.position.copy(foot);  // park gizmo on edited foot
   });
+  if(grid && isFinite(minFootY)) grid.position.y = minFootY;  // grid sits under the planted feet
 }
 
 // addFrame duplicates the current pose as a new frame placed after the selected one,
