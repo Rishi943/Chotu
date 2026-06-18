@@ -656,12 +656,12 @@ function onSpeedInput(){ renderAll(); }   // readout + frame-speed sync handled 
 function renderSpeedBars(){
   const host=document.getElementById("speedBars"); if(!host) return;
   const v=Number(document.getElementById("speed").value);
-  const filled=Math.round(v/90*12);
+  const filled=Math.round(v/10);          // bar N (1-based) == speed N*10
   host.innerHTML="";
-  for(let i=0;i<12;i++){
+  for(let i=0;i<9;i++){
     const b=document.createElement("div");
-    b.style.cssText=`flex:1;height:${28+i*6}%;border-radius:1px;cursor:pointer;background:${i<filled?'#37b6ff':(i<filled+3?'#22323f':'#1c2630')}`;
-    b.onclick=()=>{document.getElementById("speed").value=Math.round((i+1)/12*90);onSpeedInput();};
+    b.style.cssText=`flex:1;height:${24+i*8}%;border-radius:1px;cursor:pointer;background:${i<filled?'#37b6ff':(i<filled+2?'#22323f':'#1c2630')}`;
+    b.onclick=()=>{document.getElementById("speed").value=(i+1)*10;onSpeedInput();};
     host.appendChild(b);
   }
 }
