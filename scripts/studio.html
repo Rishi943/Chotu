@@ -294,7 +294,7 @@ const CORNERS3D = [ {p:[ HALF_BODY,0, HALF_BODY], yaw:Math.PI*0.5 },   // FR
                     {p:[ HALF_BODY,0,-HALF_BODY], yaw:Math.PI*2.0 } ]; // RR
 
 let scene, camera, renderer, controls, legGroups, gizmoTarget, tcontrols;
-let dragging = false, threeReady = false;
+let dragging = false, threeReady = false, gizmoOn = true, freeDragging = false;
 
 function init3D() {
   const host = document.getElementById("threed");
@@ -369,18 +369,52 @@ function init3D() {
     renderAll();
   });
 
-  // --- click a leg in the viewport to select it (gizmo switches to that leg) ---
+  // --- leg-pick (click) + free foot-drag (gizmo OFF) ---
   const picker = new THREE.Raycaster();
   const pndc = new THREE.Vector2();
-  let downX=0, downY=0;
-  renderer.domElement.addEventListener('pointerdown', e=>{ downX=e.clientX; downY=e.clientY; });
-  renderer.domElement.addEventListener('pointerup', e=>{
-    if(dragging) return;                                   // gizmo drag, not a click
-    if(Math.hypot(e.clientX-downX, e.clientY-downY) > 5) return;  // it was an orbit/pan drag
+  const dragPlane = new THREE.Plane();
+  let downX=0, downY=0, freeMoved=false;
+  const toNDC = (e) => {
     const r = renderer.domElement.getBoundingClientRect();
     pndc.x = ((e.clientX-r.left)/r.width)*2 - 1;
     pndc.y = -((e.clientY-r.top)/r.height)*2 + 1;
-    picker.setFromCamera(pndc, camera);
+  };
+
+  renderer.domElement.addEventListener('pointerdown', e=>{
+    downX=e.clientX; downY=e.clientY; freeMoved=false;
+    if(gizmoOn) return;                          // gizmo handles its own drags
+    // start a free-drag only if the press lands near the edited foot (screen space)
+    const foot = gizmoTarget.position.clone();
+    const sc = foot.clone().project(camera);
+    toNDC(e);
+    if(Math.hypot(sc.x-pndc.x, sc.y-pndc.y) > 0.06) return;  // else let OrbitControls/pick handle it
+    dragPlane.setFromNormalAndCoplanarPoint(
+      camera.getWorldDirection(new THREE.Vector3()).negate(), foot);
+    freeDragging = true; controls.enabled = false;
+    e.target.setPointerCapture?.(e.pointerId);
+  });
+
+  renderer.domElement.addEventListener('pointermove', e=>{
+    if(!freeDragging) return;
+    freeMoved = true;
+    toNDC(e); picker.setFromCamera(pndc, camera);
+    const hit = new THREE.Vector3();
+    if(!picker.ray.intersectPlane(dragPlane, hit)) return;
+    const i=state.editing, c=CORNERS3D[i];
+    const rel=hit.clone().sub(new THREE.Vector3(...c.p));
+    const w=Math.hypot(rel.x, rel.z), la=c.yaw - Math.atan2(rel.z, rel.x);
+    state.legs[i]=[ Math.round(w*Math.cos(la)), Math.round(w*Math.sin(la)), Math.round(rel.y) ];
+    renderAll();
+  });
+
+  const endFree = ()=>{ if(freeDragging){ freeDragging=false; controls.enabled=true; } };
+  renderer.domElement.addEventListener('pointercancel', endFree);
+  renderer.domElement.addEventListener('pointerup', e=>{
+    const wasFree = freeDragging; endFree();
+    if(dragging) return;                                   // gizmo drag, not a click
+    if(wasFree && freeMoved) return;                       // a free-drag, not a select-click
+    if(Math.hypot(e.clientX-downX, e.clientY-downY) > 5) return;  // orbit/pan drag
+    toNDC(e); picker.setFromCamera(pndc, camera);
     const meshes = legGroups.flatMap(g=>[g.hipBone, g.upper, g.blade, ...g.sv]);
     const hit = picker.intersectObjects(meshes, false)[0];
     if(hit && hit.object.userData.legIndex !== undefined){
@@ -424,7 +458,7 @@ function render3D(){
     const col=(i===state.editing)?0x37b6ff:(ok?0x4ec77f:0xf2664f);
     grp.upper.material.color.setHex(col); grp.blade.material.color.setHex(col);
     grp.hipBone.material.color.setHex(i===state.editing?0x37b6ff:(ok?0x4ec77f:0xf2664f));
-    if(i===state.editing && !dragging) gizmoTarget.position.copy(foot);  // park gizmo on edited foot
+    if(i===state.editing && !dragging && !freeDragging) gizmoTarget.position.copy(foot);  // park gizmo on edited foot
   });
 }
 
@@ -602,6 +636,15 @@ function setView(v){
   });
 }
 window.setView = setView;
+
+function toggleGizmo(){
+  gizmoOn = !gizmoOn;
+  if(tcontrols){ tcontrols.visible = gizmoOn; tcontrols.enabled = gizmoOn; }
+  const btn = document.getElementById("gizmoBtn");
+  if(btn) btn.style.color = gizmoOn ? "#37b6ff" : "#aab2bd";
+  document.getElementById("viewSub").textContent = gizmoOn ? "drag to pose" : "free-drag foot";
+}
+window.toggleGizmo = toggleGizmo;
 
 // Inline HTML handlers call these by global name; the module scope is not global, so expose them.
 window.state = state;
