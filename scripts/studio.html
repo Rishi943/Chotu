@@ -3,16 +3,30 @@
 <head>
 <meta charset="UTF-8">
 <title>Chotu Animation Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-  /* Dark theme, Share Tech Mono. 3-column grid + bottom timeline (Layout A). */
-  body { background:#0a0a0a; color:#ddd; font-family:'Share Tech Mono',monospace; margin:0; padding:16px; }
-  .col { border:1px solid #2a2a2a; border-radius:4px; padding:10px; }
-  .leg.editing { border-left:2px solid #ffb13d; background:#161616; }
-  .dot-ok { color:#3ddc6f; } .dot-clamp { color:#ff5b5b; }
-  input[type=number] { width:64px; background:#111; color:#fff; border:1px solid #333; }
-  button { background:#222; color:#ddd; border:1px solid #444; padding:6px 10px; cursor:pointer; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button.primary { background:#1c3a24; color:#3ddc6f; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:#0e1014;color:#e9edf2;font-family:'Space Grotesk',sans-serif;overflow:hidden}
+  .app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  .toolbar{flex:none;height:54px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#14171d;border-bottom:1px solid #23272f}
+  .mid{flex:1;display:flex;min-height:0}
+  .rail-l{flex:none;width:330px;background:#101319;border-right:1px solid #20242d;display:flex;flex-direction:column;padding:12px 13px;gap:10px;overflow:hidden}
+  .center{flex:1;position:relative;min-width:0;overflow:hidden;background:radial-gradient(120% 90% at 50% 30%,#262c38 0%,#181c25 55%,#10131a 100%)}
+  .rail-r{flex:none;width:316px;background:#101319;border-left:1px solid #20242d;display:flex;flex-direction:column;padding:12px 13px;gap:12px;overflow-y:auto}
+  .timeline{flex:none;height:150px;background:#0c0f14;border-top:1px solid #23272f;display:flex;flex-direction:column;padding:10px 16px;overflow:hidden}
+  #threed{position:absolute;inset:0}
+  #threed canvas{display:block}
+  .ov{position:absolute;font-family:'JetBrains Mono',monospace}
+  .leg.editing{outline:1px solid #37b6ff}
+  .dot-ok{color:#4ec77f} .dot-clamp{color:#f2664f}
+  input[type=number],input[type=text]{background:#0b0e13;color:#e9edf2;border:1px solid #232934;border-radius:5px;padding:5px 7px}
+  button{background:#1a1e25;color:#c3cad4;border:1px solid #2c313b;border-radius:6px;padding:7px 12px;cursor:pointer;font-family:inherit}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:#37b6ff;color:#06121d;border-color:#37b6ff}
+  .romono{font:500 9px 'JetBrains Mono',monospace;color:#5b6470;margin-top:2px}
 </style>
 <script type="importmap">
 { "imports": {
@@ -22,33 +36,95 @@
 </script>
 </head>
 <body>
-<h1 style="font-size:13px;letter-spacing:.2em;color:#888">▟ CHOTU ANIMATION STUDIO</h1>
-<div id="conn" style="color:#888">● checking Pi…</div>
+<div class="app">
+  <div id="libraryModal" style="display:none;position:fixed;inset:0;z-index:50;background:rgba(8,10,14,.78);backdrop-filter:blur(3px)">
+    <div style="position:absolute;inset:5% 8%;background:#0e1116;border:1px solid #23272f;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">
+      <div style="flex:none;display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid #20242d">
+        <span style="font:700 12px 'JetBrains Mono';letter-spacing:.18em;color:#cdd6e0">ANIMATION LIBRARY</span>
+        <span style="flex:1"></span>
+        <span onclick="closeLibrary()" style="cursor:pointer;color:#7d8694;font-size:20px;line-height:1">×</span>
+      </div>
+      <div id="libraryBody" style="flex:1;overflow-y:auto;padding:16px 18px"></div>
+    </div>
+  </div>
+  <!-- TOP TOOLBAR -->
+  <div class="toolbar">
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="width:22px;height:22px;border-radius:5px;background:linear-gradient(135deg,#37b6ff,#1d7fd0);display:flex;align-items:center;justify-content:center;color:#06121d;font-weight:700">◣</div>
+      <span style="font-weight:700">CHOTU</span>
+      <span style="font-size:11px;color:#6b7280;letter-spacing:.18em;font-family:'JetBrains Mono',monospace">ANIMATION&nbsp;STUDIO</span>
+    </div>
+    <div style="flex:1"></div>
+    <div id="conn" style="color:#888;font-family:'JetBrains Mono',monospace;font-size:12px">● checking Pi…</div>
+    <div style="flex:1"></div>
+    <button onclick="openLibrary()">⊞ Library</button>
+    <button onclick="resetToStand()">⟲ Reset to stand</button>
+    <button class="primary needs-pi" onclick="sendToRobot()">▶ Send to robot</button>
+  </div>
 
-<div id="legEditor" class="col"></div>
-<div style="margin:8px 0">speed <input id="speed" type="number" min="0" max="90" value="60"></div>
-<button class="primary needs-pi" onclick="sendToRobot()">▶ Send to robot</button>
-<button onclick="resetToStand()">⟲ Reset to stand</button>
+  <div class="mid">
+    <!-- LEFT RAIL -->
+    <div class="rail-l">
+      <div style="font:600 11px 'JetBrains Mono';letter-spacing:.16em;color:#7d8694">LEG&nbsp;EDITOR</div>
+      <div id="legEditor"></div>
+      <div style="border-top:1px solid #20242d;padding-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694">SERVO&nbsp;SPEED</span>
+          <span style="font-family:'JetBrains Mono',monospace;color:#5fc6ff" id="speedReadout">60<span style="color:#5b6470">/90</span></span>
+        </div>
+        <div id="speedBars" style="height:28px;display:flex;align-items:flex-end;gap:3px;margin-bottom:6px"></div>
+        speed <input id="speed" type="number" min="0" max="90" value="60" style="width:64px" oninput="onSpeedInput()">
+      </div>
+    </div>
 
-<!-- Preview / export / timeline mount points (filled in later tasks) -->
-<div id="topdown" class="col"><canvas id="topCanvas" width="260" height="220"></canvas></div>
-<div id="sideview" class="col"><canvas id="sideCanvas" width="260" height="220"></canvas></div>
-<div id="threed" class="col"></div>
-<div id="exportPanel" class="col">
-<div style="color:#777;letter-spacing:.1em;margin-bottom:6px">EXPORT → frames JSON</div>
-tool <input id="toolName" type="text" placeholder="shimmy" style="width:120px;background:#111;color:#fff;border:1px solid #333" oninput="renderExportStatus()"><br>
-desc <input id="desc" type="text" placeholder="A quick description." style="width:220px;background:#111;color:#fff;border:1px solid #333"><br>
-<label><input id="personaGated" type="checkbox"> persona_gated (reel only)</label><br>
-default_speed <input id="defaultSpeed" type="number" value="60" style="width:60px;background:#111;color:#fff;border:1px solid #333"><br>
-<div style="margin-top:8px">
-  <button onclick="exportJSON()">⬇ Export JSON</button>
-  <button onclick="copyJSON()">⧉ Copy</button>
-  <button onclick="document.getElementById('loadFile').click()">⬆ Load JSON</button>
-  <input id="loadFile" type="file" accept=".json" onchange="loadJSON(this.files[0])" style="display:none">
+    <!-- CENTER VIEWPORT -->
+    <div class="center">
+      <div id="threed"></div>
+      <div class="ov" style="left:14px;top:12px">
+        <div id="viewLabel" style="font-size:11px;color:#cdd6e0;letter-spacing:.12em">PERSPECTIVE</div>
+        <div style="font-size:10px;color:#5b6470" id="viewSub">drag to pose</div>
+      </div>
+      <div class="ov" style="left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:4px;background:rgba(14,18,24,.82);border:1px solid #283041;border-radius:9px;padding:5px;font-size:11px">
+        <span class="viewbtn" data-view="PERSP" onclick="setView('PERSP')">PERSP</span>
+        <span class="viewbtn" data-view="TOP" onclick="setView('TOP')">TOP</span>
+        <span class="viewbtn" data-view="SIDE" onclick="setView('SIDE')">SIDE</span>
+        <span class="viewbtn" data-view="FRONT" onclick="setView('FRONT')">FRONT</span>
+        <span style="width:1px;background:#283041;margin:2px 3px"></span>
+        <span id="gizmoBtn" onclick="toggleGizmo()" style="padding:6px 10px;border-radius:6px;cursor:pointer;color:#37b6ff">⊹ Gizmo</span>
+      </div>
+    </div>
+
+    <!-- RIGHT RAIL -->
+    <div class="rail-r">
+      <div id="exportPanel">
+        <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">EXPORT → TOOL JSON</div>
+        tool <input id="toolName" type="text" placeholder="shimmy" style="width:120px" oninput="renderExportStatus()"><br>
+        desc <input id="desc" type="text" placeholder="A quick description." style="width:200px;margin-top:6px"><br>
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-top:6px"><input id="personaGated" type="checkbox"> persona_gated (reel only)</label><br>
+        default_speed <input id="defaultSpeed" type="number" value="60" style="width:60px;margin-top:6px"><br>
+        <div style="margin-top:8px;display:flex;gap:6px">
+          <button class="primary" onclick="exportJSON()">⬇ Export</button>
+          <button onclick="saveAnimation()">💾 Save</button>
+          <button onclick="copyJSON()">⧉</button>
+          <button onclick="document.getElementById('loadFile').click()">⬆</button>
+          <input id="loadFile" type="file" accept=".json" onchange="loadJSON(this.files[0])" style="display:none">
+        </div>
+        <div id="exportStatus" style="margin-top:6px;color:#777;font-family:'JetBrains Mono',monospace;font-size:11px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIMELINE -->
+  <div class="timeline">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <span style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694">TIMELINE</span>
+      <span style="flex:1"></span>
+      <button id="playBtn" onclick="playPreview()">▷ Play preview</button>
+      <button class="primary needs-pi" onclick="playOnRobot()">▶▶ Play on robot</button>
+    </div>
+    <div id="timeline" style="flex:1;overflow-x:auto;white-space:nowrap"></div>
+  </div>
 </div>
-<div id="exportStatus" style="margin-top:6px;color:#777"></div>
-</div>
-<div id="timeline" class="col"></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -65,9 +141,11 @@ const state = {
   legs: STAND.map(l => l.slice()),  // current editable pose, 4x[x,y,z]
   speed: 60,
   editing: 1,                       // index of leg highlighted in the editor
-  frames: [],                       // timeline: [{legs, speed, hold_s}]
-  selectedFrame: null,
+  // timeline always has >=1 frame; the selected frame is what you're editing (auto-committed).
+  frames: [{legs: STAND.map(l=>l.slice()), speed: 60, hold_s: 0}],
+  selectedFrame: 0,
 };
+let playing = false, _raf = null;   // preview playback state
 
 function setLeg(i, axis, val) {
   state.legs[i][axis] = Number(val);
@@ -81,13 +159,33 @@ function resetToStand() {
 
 function renderLegEditor() {
   const el = document.getElementById("legEditor");
-  el.innerHTML = state.legs.map((leg, i) => `
-    <div class="leg ${i===state.editing?'editing':''}" onclick="state.editing=${i};renderAll()">
-      <div>${LEG_NAMES[i]} <span id="dot${i}"></span></div>
-      ${["x","y","z"].map((ax, a) =>
-        `${ax} <input type="number" value="${leg[a]}" oninput="setLeg(${i},${a},this.value)">`
-      ).join(" ")}
-    </div>`).join("");
+  el.innerHTML = state.legs.map((leg, i) => {
+    const editing = i===state.editing;
+    const card = editing
+      ? "border:1px solid #37b6ff;border-radius:7px;background:linear-gradient(180deg,rgba(55,182,255,.10),rgba(55,182,255,.03));padding:9px 11px;margin-bottom:8px"
+      : "border:1px solid #20252e;border-radius:7px;background:#12161c;padding:9px 11px;margin-bottom:8px";
+    const [code, meta] = LEG_NAMES[i].split(' · ');
+    return `<div class="leg" style="${card}" onclick="state.editing=${i};renderAll()">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:7px">
+        <span id="dot${i}"></span>
+        <span style="font-weight:600">${code}</span>
+        <span style="font-size:10.5px;color:#6b7280;font-family:'JetBrains Mono',monospace">${meta||''}</span>
+        <span style="flex:1"></span>
+        <span id="status${i}" style="font-size:10px;font-family:'JetBrains Mono',monospace"></span>
+      </div>
+      <div style="display:flex;gap:6px">
+        ${["X","Y","Z"].map((ax, a) =>
+          `<div style="flex:1;display:flex;align-items:center;background:#0b0e13;border:1px solid #232934;border-radius:5px;overflow:hidden">
+             <span style="width:24px;text-align:center;font:600 11px 'JetBrains Mono';color:#6b7280;border-right:1px solid #232934;padding:6px 0">${ax}</span>
+             <input type="number" value="${leg[a]}" oninput="setLeg(${i},${a},this.value)" style="flex:1;min-width:0;border:none;background:none;text-align:right;padding:6px 7px">
+           </div>`
+        ).join("")}
+      </div>
+      ${(()=>{ const ok=isReachable(leg[0],leg[1],leg[2]); if(ok) return "";
+        const r=realizedFoot(leg[0],leg[1],leg[2]);
+        return `<div style="margin-top:5px;font:500 10px 'JetBrains Mono';color:#f2a594">↳ clamps to [${r[0]}, ${r[1]}, ${r[2]}]</div>`; })()}
+    </div>`;
+  }).join("");
 }
 
 // ---- kinematics (mirror of scripts/kinematics_ref.py) ----
@@ -108,6 +206,20 @@ function coord2polar(x, y, z) {
   const alpha = angle2 + angle1;
   const gamma = Math.atan2(y, x);
   return [90 - alpha*180/Math.PI, beta*180/Math.PI - 90, -(gamma*180/Math.PI - 45)];
+}
+
+// Forward kinematics (mirror of picrawler.polar2coord). Round-tripping a coord through
+// coord2polar -> polar2coord yields where the foot ACTUALLY lands after the L/u clamps —
+// validated against the real robot. Used to show "realized" coords for clamped poses.
+function realizedFoot(x, y, z) {
+  const [al, be, ga] = coord2polar(x, y, z);
+  const L1 = Math.sqrt(A*A + B*B - 2*A*B*Math.cos((90+al)/180*Math.PI));
+  let ang = Math.acos((A*A + L1*L1 - B*B) / (2*A*L1)) * 180/Math.PI;
+  ang = 90 - be - ang;
+  const L = L1*Math.cos(ang*Math.PI/180) + C;
+  return [ Math.round(L*Math.sin((45+ga)*Math.PI/180)),
+           Math.round(L*Math.cos((45+ga)*Math.PI/180)),
+           Math.round(L1*Math.sin(ang*Math.PI/180)) ];
 }
 
 function isReachable(x, y, z) {
@@ -143,47 +255,18 @@ function legPlane(x, y, z) {
 function renderDots() {
   state.legs.forEach((leg, i) => {
     const ok = isReachable(leg[0], leg[1], leg[2]);
-    const el = document.getElementById("dot"+i);
-    el.className = ok ? "dot-ok" : "dot-clamp";
-    el.textContent = ok ? "● reachable" : "● will clamp";
+    const editing = i===state.editing;
+    // clamp warning always wins (red) — even for the leg being edited, so it's never hidden.
+    const color = !ok ? "#f2664f" : (editing ? "#37b6ff" : "#4ec77f");
+    const dot = document.getElementById("dot"+i);
+    dot.textContent = "●"; dot.style.color = color;
+    const st = document.getElementById("status"+i);
+    if (st) {
+      st.textContent = !ok ? (editing ? "● EDITING · ⚠ CLAMP" : "⚠ WILL CLAMP")
+                           : (editing ? "● EDITING" : "REACHABLE");
+      st.style.color = color;
+    }
   });
-}
-
-// Top-down: plot each foot (x,y) at its body corner. Corner placement is a
-// display convention (front = up); tune signs by eye against the real robot.
-const CORNERS = [  // [cx, cy, sx, sy] body corner + axis sign for [FR,FL,RL,RR]
-  [ 1,-1,  1,-1], [-1,-1, -1,-1], [-1, 1, -1, 1], [ 1, 1,  1, 1],
-];
-function renderTopDown() {
-  const cv = document.getElementById("topCanvas"), g = cv.getContext("2d");
-  g.clearRect(0,0,cv.width,cv.height);
-  const cx = cv.width/2, cy = cv.height/2, s = 0.6;  // mm -> px
-  const hs = LENGTH_SIDE/2 * s;
-  g.strokeStyle = "#33373d"; g.strokeRect(cx-hs, cy-hs, hs*2, hs*2);
-  state.legs.forEach((leg, i) => {
-    const [bx, by, sgx, sgy] = CORNERS[i];
-    const hx = cx + bx*hs, hy = cy + by*hs;
-    const fx = hx + sgx*leg[0]*s, fy = hy - sgy*leg[1]*s;  // x reach, y outward
-    const ok = isReachable(leg[0], leg[1], leg[2]);
-    g.strokeStyle = ok ? "#3a6" : "#a33"; g.beginPath();
-    g.moveTo(hx,hy); g.lineTo(fx,fy); g.stroke();
-    g.fillStyle = i===state.editing ? "#ffb13d" : (ok ? "#3ddc6f" : "#ff5b5b");
-    g.beginPath(); g.arc(fx, fy, i===state.editing?5:4, 0, 7); g.fill();
-  });
-}
-
-function renderSide() {  // articulated linkage for the leg being edited
-  const cv = document.getElementById("sideCanvas"), g = cv.getContext("2d");
-  g.clearRect(0,0,cv.width,cv.height);
-  const leg = state.legs[state.editing], p = legPlane(leg[0], leg[1], leg[2]);
-  const ox = 40, oy = 50, s = 0.7;
-  const P = (r,z) => [ox + r*s, oy - z*s];   // z up on screen
-  const seg = (aR,aZ,bR,bZ,col) => { const [a0,a1]=P(aR,aZ),[b0,b1]=P(bR,bZ);
-    g.strokeStyle=col; g.lineWidth=3; g.beginPath(); g.moveTo(a0,a1); g.lineTo(b0,b1); g.stroke(); };
-  g.strokeStyle="#2a2a2a"; g.beginPath(); g.moveTo(0,oy); g.lineTo(cv.width,oy); g.stroke();
-  seg(0,0, p.baseR,p.baseZ, "#556");   // C offset (hip at origin)
-  seg(p.baseR,p.baseZ, p.kneeR,p.kneeZ, "#9ad");  // A
-  seg(p.kneeR,p.kneeZ, p.footR,p.footZ, "#9ad");  // B
 }
 
 // ---- live 3D model + CAD-style drag-to-pose (three.js) ----
@@ -194,26 +277,45 @@ const SILVER = 0xe2e5ea;  // white-steel grey
 // Body corners + base yaw so legs splay to corners (display convention; calibrated so the real
 // per-leg stand renders as a symmetric X-splay). Named CORNERS3D to avoid clashing with the 2D CORNERS.
 const HALF_BODY = LENGTH_SIDE/2;
-const CORNERS3D = [ {p:[ HALF_BODY,0, HALF_BODY], yaw:Math.PI*0.5 },   // FR
-                    {p:[-HALF_BODY,0, HALF_BODY], yaw:Math.PI*0.75},   // FL
-                    {p:[-HALF_BODY,0,-HALF_BODY], yaw:Math.PI*1.25},   // RL
-                    {p:[ HALF_BODY,0,-HALF_BODY], yaw:Math.PI*2.0 } ]; // RR
+// Hip corners (three.js x=right, z=front; nose at +z) and the per-leg local->body
+// SIGN-FLIP transform. Derived from the picrawler library's own move_body_absolute
+// (body frame: +x=right, +y=front): each leg's local (x,y) maps to body (x,z) by a
+// reflection — the left/right mirror real quadrupeds use. This is exact, not tuned.
+// Verified against the calibration helper's leg layout: idx [0,1,2,3] = [FR,FL,RL,RR].
+// Lateral (three.js x) axis negated vs the raw body frame so the TOP view matches the
+// real robot's handedness (verified against a top-down photo). Front-back (z) unchanged.
+const CORNERS3D = [ {p:[-HALF_BODY,0, HALF_BODY], sgn:[-1, 1]},   // FR
+                    {p:[ HALF_BODY,0, HALF_BODY], sgn:[ 1, 1]},   // FL
+                    {p:[ HALF_BODY,0,-HALF_BODY], sgn:[ 1,-1]},   // RL
+                    {p:[-HALF_BODY,0,-HALF_BODY], sgn:[-1,-1]} ]; // RR
 
 let scene, camera, renderer, controls, legGroups, gizmoTarget, tcontrols;
-let dragging = false, threeReady = false;
+let dragging = false, threeReady = false, gizmoOn = true, freeDragging = false;
 
 function init3D() {
   const host = document.getElementById("threed");
-  scene = new THREE.Scene(); scene.background = new THREE.Color(0x232730);
-  const W = 360, H = 300;
-  camera = new THREE.PerspectiveCamera(48, W/H, 1, 4000);
+  scene = new THREE.Scene(); scene.background = new THREE.Color(0x10131a);
+  const sizeOf = () => {
+    const r = host.getBoundingClientRect();
+    return { w: Math.max(1, Math.floor(r.width)), h: Math.max(1, Math.floor(r.height)) };
+  };
+  let { w, h } = sizeOf();
+  camera = new THREE.PerspectiveCamera(48, w/h, 1, 4000);
   camera.position.set(220,180,260);
   renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setSize(W, H); host.appendChild(renderer.domElement);
-  controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0,-20,0);
+  renderer.setSize(w, h); host.appendChild(renderer.domElement);
+  const ro = new ResizeObserver(() => {
+    const s = sizeOf();
+    camera.aspect = s.w / s.h; camera.updateProjectionMatrix();
+    renderer.setSize(s.w, s.h);
+  });
+  ro.observe(host);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enablePan = true; controls.enableZoom = true; controls.screenSpacePanning = true;
+  controls.target.set(0,-20,0);
   scene.add(new THREE.AmbientLight(0xffffff,0.7));
   const dl = new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(120,200,120); scene.add(dl);
-  const grid = new THREE.GridHelper(400,16,0x4a4f57,0x363b42); grid.position.y=-95; scene.add(grid);
+  const grid = new THREE.GridHelper(400,16,0x2a3744,0x202833); grid.position.y=-95; scene.add(grid);
   scene.add(new THREE.AxesHelper(40));
 
   // body — silver chassis plate + dark Pi/board stack on top
@@ -240,12 +342,12 @@ function init3D() {
     const g=new THREE.ExtrudeGeometry(s,{depth:2.5,bevelEnabled:false}); g.translate(0,0,-1.25);
     return new THREE.Mesh(g, new THREE.MeshStandardMaterial({color:SILVER, metalness:.55, roughness:.45, side:THREE.DoubleSide}));
   };
-  const mkServo = () => new THREE.Mesh(new THREE.BoxGeometry(13,12,22),
+  const mkServo = () => new THREE.Mesh(new THREE.BoxGeometry(9,9,15),
     new THREE.MeshStandardMaterial({color:0x8b9099, metalness:.35, roughness:.6}));
-  legGroups = CORNERS3D.map(()=>{
+  legGroups = CORNERS3D.map((_,i)=>{
     const hipBone=mkPlate(11), upper=mkPlate(13), blade=mkBlade();
     const sv=[mkServo(),mkServo(),mkServo()];  // yaw(gamma), thigh(alpha), knee(beta)
-    [hipBone,upper,blade,...sv].forEach(m=>scene.add(m));
+    [hipBone,upper,blade,...sv].forEach(m=>{ m.userData.legIndex=i; scene.add(m); });
     return { hipBone, upper, blade, sv };
   });
 
@@ -258,9 +360,60 @@ function init3D() {
     if(!dragging) return;                       // ignore our own programmatic repositioning
     const i=state.editing, c=CORNERS3D[i];
     const rel=gizmoTarget.position.clone().sub(new THREE.Vector3(...c.p));  // world -> leg-local
-    const w=Math.hypot(rel.x, rel.z), la=c.yaw - Math.atan2(rel.z, rel.x);
-    state.legs[i]=[ Math.round(w*Math.cos(la)), Math.round(w*Math.sin(la)), Math.round(rel.y) ];
+    state.legs[i]=[ Math.round(c.sgn[0]*rel.x), Math.round(c.sgn[1]*rel.z), Math.round(rel.y) ];
     renderAll();
+  });
+
+  // --- leg-pick (click) + free foot-drag (gizmo OFF) ---
+  const picker = new THREE.Raycaster();
+  const pndc = new THREE.Vector2();
+  const dragPlane = new THREE.Plane();
+  let downX=0, downY=0, freeMoved=false;
+  const toNDC = (e) => {
+    const r = renderer.domElement.getBoundingClientRect();
+    pndc.x = ((e.clientX-r.left)/r.width)*2 - 1;
+    pndc.y = -((e.clientY-r.top)/r.height)*2 + 1;
+  };
+
+  renderer.domElement.addEventListener('pointerdown', e=>{
+    downX=e.clientX; downY=e.clientY; freeMoved=false;
+    if(gizmoOn) return;                          // gizmo handles its own drags
+    // start a free-drag only if the press lands near the edited foot (screen space)
+    const foot = gizmoTarget.position.clone();
+    const sc = foot.clone().project(camera);
+    toNDC(e);
+    if(Math.hypot(sc.x-pndc.x, sc.y-pndc.y) > 0.06) return;  // else let OrbitControls/pick handle it
+    dragPlane.setFromNormalAndCoplanarPoint(
+      camera.getWorldDirection(new THREE.Vector3()).negate(), foot);
+    freeDragging = true; controls.enabled = false;
+    e.target.setPointerCapture?.(e.pointerId);
+  });
+
+  renderer.domElement.addEventListener('pointermove', e=>{
+    if(!freeDragging) return;
+    freeMoved = true;
+    toNDC(e); picker.setFromCamera(pndc, camera);
+    const hit = new THREE.Vector3();
+    if(!picker.ray.intersectPlane(dragPlane, hit)) return;
+    const i=state.editing, c=CORNERS3D[i];
+    const rel=hit.clone().sub(new THREE.Vector3(...c.p));
+    state.legs[i]=[ Math.round(c.sgn[0]*rel.x), Math.round(c.sgn[1]*rel.z), Math.round(rel.y) ];
+    renderAll();
+  });
+
+  const endFree = ()=>{ if(freeDragging){ freeDragging=false; controls.enabled=true; } };
+  renderer.domElement.addEventListener('pointercancel', endFree);
+  renderer.domElement.addEventListener('pointerup', e=>{
+    const wasFree = freeDragging; endFree();
+    if(dragging) return;                                   // gizmo drag, not a click
+    if(wasFree && freeMoved) return;                       // a free-drag, not a select-click
+    if(Math.hypot(e.clientX-downX, e.clientY-downY) > 5) return;  // orbit/pan drag
+    toNDC(e); picker.setFromCamera(pndc, camera);
+    const meshes = legGroups.flatMap(g=>[g.hipBone, g.upper, g.blade, ...g.sv]);
+    const hit = picker.intersectObjects(meshes, false)[0];
+    if(hit && hit.object.userData.legIndex !== undefined){
+      state.editing = hit.object.userData.legIndex; renderAll();
+    }
   });
 
   threeReady = true;
@@ -278,8 +431,10 @@ function render3D(){
   if(!threeReady) return;  // renderAll() runs once before init; no-op until the scene exists
   state.legs.forEach((leg,i)=>{
     const [x,y,z]=leg; const pl=legPlane(x,y,z);
-    const corner=CORNERS3D[i]; const worldYaw=corner.yaw-Math.atan2(y,x);
-    const dir=new THREE.Vector3(Math.cos(worldYaw),0,Math.sin(worldYaw));
+    const corner=CORNERS3D[i];
+    const hx=corner.sgn[0]*x, hz=corner.sgn[1]*y;   // local (x,y) -> body horizontal (x,z)
+    const r2=Math.hypot(hx,hz)||1e-6;
+    const dir=new THREE.Vector3(hx/r2,0,hz/r2);
     const base=new THREE.Vector3(...corner.p);
     const P=(r,zz)=>base.clone().addScaledVector(dir,r).add(new THREE.Vector3(0,zz,0));
     const hip=P(0,0), kneeBase=P(C,0), knee=P(pl.kneeR,pl.kneeZ), foot=P(pl.footR,pl.footZ);
@@ -296,49 +451,107 @@ function render3D(){
     grp.sv[1].position.copy(kneeBase);  // thigh (alpha)
     grp.sv[2].position.copy(knee);      // knee  (beta)
     const ok=isReachable(x,y,z);
-    const col=(i===state.editing)?0xffb13d:(ok?SILVER:0xff5b5b);
+    const col=(i===state.editing)?0x37b6ff:(ok?0x4ec77f:0xf2664f);
     grp.upper.material.color.setHex(col); grp.blade.material.color.setHex(col);
-    grp.hipBone.material.color.setHex(i===state.editing?0xffb13d:SILVER);
-    if(i===state.editing && !dragging) gizmoTarget.position.copy(foot);  // park gizmo on edited foot
+    grp.hipBone.material.color.setHex(i===state.editing?0x37b6ff:(ok?0x4ec77f:0xf2664f));
+    if(i===state.editing && !dragging && !freeDragging) gizmoTarget.position.copy(foot);  // park gizmo on edited foot
   });
 }
 
+// addFrame duplicates the current pose as a new frame placed after the selected one,
+// then selects it — the standard keyframe workflow (tweak → add → tweak).
 function addFrame() {
-  state.frames.push({legs: state.legs.map(l=>l.slice()), speed: state.speed, hold_s: 0});
-  state.selectedFrame = state.frames.length-1; renderAll();
+  const at = state.selectedFrame==null ? state.frames.length-1 : state.selectedFrame;
+  state.frames.splice(at+1, 0, {legs: state.legs.map(l=>l.slice()), speed: state.speed, hold_s: 0});
+  state.selectedFrame = at+1; renderAll();
 }
 function dupFrame(i){ const f=state.frames[i];
-  state.frames.splice(i+1,0,{legs:f.legs.map(l=>l.slice()),speed:f.speed,hold_s:f.hold_s}); renderAll(); }
-function delFrame(i){ state.frames.splice(i,1); state.selectedFrame=null; renderAll(); }
-function moveFrame(i,d){ const j=i+d; if(j<0||j>=state.frames.length) return;
-  [state.frames[i],state.frames[j]]=[state.frames[j],state.frames[i]]; renderAll(); }
-function loadFrame(i){ const f=state.frames[i];
+  state.frames.splice(i+1,0,{legs:f.legs.map(l=>l.slice()),speed:f.speed,hold_s:f.hold_s});
+  state.selectedFrame=i+1; renderAll(); }
+function delFrame(i){
+  if(state.frames.length<=1) return;              // keep at least one frame
+  state.frames.splice(i,1);
+  selectFrame(Math.min(state.selectedFrame, state.frames.length-1));
+}
+function selectFrame(i){ const f=state.frames[i];
   state.legs=f.legs.map(l=>l.slice()); state.speed=f.speed;
   document.getElementById("speed").value=f.speed; state.selectedFrame=i; renderAll(); }
+const loadFrame = selectFrame;   // inline handlers call loadFrame(i)
 function setHold(i,v){ state.frames[i].hold_s=Number(v); }
-function setFrameSpeed(i,v){ state.frames[i].speed=Number(v); }
+function setFrameSpeed(i,v){ state.frames[i].speed=Number(v); if(i===state.selectedFrame){
+  state.speed=Number(v); document.getElementById("speed").value=v; } renderAll(); }
+
+// Mini top-down pose preview, same geometry as the 3D top view (sign-flip mount).
+function drawThumb(cv, legs, sel){
+  const g=cv.getContext("2d"); g.clearRect(0,0,cv.width,cv.height);
+  const cx=cv.width/2, cy=cv.height/2, s=0.30;          // mm -> px
+  const hb=HALF_BODY*s;
+  g.strokeStyle=sel?"#2b6a93":"#33414f"; g.lineWidth=1; g.strokeRect(cx-hb,cy-hb,hb*2,hb*2);
+  legs.forEach((leg,i)=>{
+    const [x,y,z]=leg; const c=CORNERS3D[i]; const pl=legPlane(x,y,z);
+    const hx=c.sgn[0]*x, hz=c.sgn[1]*y; const r2=Math.hypot(hx,hz)||1e-6;
+    const hipX=cx+c.p[0]*s, hipY=cy-c.p[2]*s;            // three.js x->canvasX, z(front)->up
+    const fx=cx+(c.p[0]+hx/r2*pl.footR)*s, fy=cy-(c.p[2]+hz/r2*pl.footR)*s;
+    const ok=isReachable(x,y,z);
+    g.strokeStyle=ok?"#3a6":"#a44"; g.lineWidth=1.4; g.beginPath(); g.moveTo(hipX,hipY); g.lineTo(fx,fy); g.stroke();
+    g.fillStyle=ok?"#4ec77f":"#f2664f"; g.beginPath(); g.arc(fx,fy,2.2,0,7); g.fill();
+  });
+}
 
 function renderTimeline() {
   const el = document.getElementById("timeline");
-  el.innerHTML = state.frames.map((f,i)=>`
-    <span class="${i===state.selectedFrame?'editing':''}" style="border:1px solid #333;padding:6px;margin:2px;display:inline-block">
-      <b onclick="loadFrame(${i})" style="cursor:pointer">F${i+1}</b>
-      spd <input type="number" value="${f.speed}" style="width:48px" oninput="setFrameSpeed(${i},this.value)">
-      hold <input type="number" step="0.1" value="${f.hold_s}" style="width:48px" oninput="setHold(${i},this.value)">
-      <button onclick="moveFrame(${i},-1)">◀</button><button onclick="moveFrame(${i},1)">▶</button>
-      <button onclick="dupFrame(${i})">⧉</button><button onclick="delFrame(${i})">🗑</button>
-    </span>`).join(" → ") +
-    `<div style="margin-top:6px">
-      <button onclick="addFrame()">＋ Add frame</button>
-      <button onclick="playPreview()">▷ Play preview</button>
-      <button class="needs-pi" onclick="playOnRobot()">▶▶ Play on robot</button></div>`;
+  el.style.display="flex"; el.style.alignItems="stretch"; el.style.gap="9px";
+  el.innerHTML = state.frames.map((f,i)=>{
+    const sel=i===state.selectedFrame;
+    const card=sel
+      ? "flex:none;width:138px;border:1px solid #37b6ff;border-radius:7px;background:linear-gradient(180deg,rgba(55,182,255,.10),rgba(55,182,255,.02));padding:7px 9px;display:flex;flex-direction:column;gap:5px;box-shadow:0 0 14px rgba(55,182,255,.12);cursor:pointer"
+      : "flex:none;width:138px;border:1px solid #232934;border-radius:7px;background:#11151b;padding:7px 9px;display:flex;flex-direction:column;gap:5px;cursor:pointer";
+    return `<div onclick="loadFrame(${i})" style="${card}">
+      <div style="display:flex;align-items:center;gap:6px">
+        <b style="font:700 12px 'JetBrains Mono';color:${sel?'#eaf4fc':'#cdd6e0'}">F${i+1}</b>
+        <span style="flex:1"></span>
+        <span style="font-size:9px;color:#37b6ff;font-family:'JetBrains Mono'">${sel?'● SEL':''}</span>
+        <span onclick="event.stopPropagation();dupFrame(${i})" title="duplicate" style="cursor:pointer;color:#7d8694;font-size:12px">⧉</span>
+        <span onclick="event.stopPropagation();delFrame(${i})" title="delete" style="cursor:pointer;width:16px;height:16px;border-radius:3px;background:#2a1a1a;border:1px solid #5a2b2b;color:#f2664f;font-size:12px;line-height:14px;text-align:center">×</span>
+      </div>
+      <canvas id="thumb${i}" width="120" height="50" style="width:120px;height:50px;border-radius:4px;background:${sel?'#08111a':'#0a0d12'}"></canvas>
+      <div style="display:flex;align-items:center;gap:5px;font:500 10px 'JetBrains Mono';color:${sel?'#8fb9d8':'#7d8694'}">
+        spd<input type="number" value="${f.speed}" onclick="event.stopPropagation()" oninput="setFrameSpeed(${i},this.value)" style="width:38px;padding:2px 4px">
+        hold<input type="number" step="0.1" value="${f.hold_s}" onclick="event.stopPropagation()" oninput="setHold(${i},this.value)" style="width:38px;padding:2px 4px">
+      </div>
+    </div>`;
+  }).join("") +
+    `<div onclick="addFrame()" style="flex:none;width:58px;border:1px dashed #2c333f;border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#5b6470;cursor:pointer">
+       <span style="font-size:20px">＋</span><span style="font-size:9px;font-family:'JetBrains Mono'">ADD</span></div>`;
+  state.frames.forEach((f,i)=>{ const cv=document.getElementById("thumb"+i); if(cv) drawThumb(cv,f.legs,i===state.selectedFrame); });
+  const pb=document.getElementById("playBtn"); if(pb) pb.textContent = playing ? "⏸ Pause" : "▷ Play preview";
 }
 
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
-async function playPreview() {
-  for (const f of state.frames) {
-    state.legs = f.legs.map(l=>l.slice()); renderAll();
-    await sleep(700 + f.hold_s*1000);  // ~servo travel + hold, visual only
+
+// Looping preview: lerp between consecutive frames (easeInOut), like the redesign.
+function playPreview(){
+  if(playing){ stopPreview(); return; }
+  if(state.frames.length<2){ alert("Add at least 2 frames to preview a sequence."); return; }
+  playing=true;
+  let seg=0, t0=performance.now(); const segDur=800;
+  const lerp=(a,b,k)=>a.map((leg,li)=>leg.map((v,j)=>v+(b[li][j]-v)*k));
+  const tick=()=>{
+    if(!playing) return;
+    const now=performance.now(); let k=(now-t0)/segDur;
+    if(k>=1){ seg=(seg+1)%state.frames.length; t0=now; k=0; }
+    const a=state.frames[seg].legs, b=state.frames[(seg+1)%state.frames.length].legs;
+    const e=k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+    state.legs=lerp(a,b,e); state.selectedFrame=seg; renderAll();
+    _raf=requestAnimationFrame(tick);
+  };
+  _raf=requestAnimationFrame(tick);
+}
+function stopPreview(){
+  if(_raf){ cancelAnimationFrame(_raf); _raf=null; }
+  if(playing){ playing=false;
+    if(state.selectedFrame!=null){ const f=state.frames[state.selectedFrame]; state.legs=f.legs.map(l=>l.slice()); }
+    renderAll();
   }
 }
 async function playOnRobot() {  // mirrors the generated _play_{tool} body
@@ -387,6 +600,22 @@ function exportJSON() {
   a.href = URL.createObjectURL(blob); a.download = d.tool + ".json"; a.click();
 }
 
+async function saveAnimation(){
+  const d=buildExport(); const err=validateExport(d);
+  if(err){ alert("Cannot save: "+err); return; }
+  try{
+    const existing=(await (await fetch("/animations")).json()).animations||[];
+    if(existing.some(a=>!a.builtin && a.tool===d.tool)
+       && !confirm("Overwrite "+d.tool+".json?")) return;
+    const r=await fetch("/animations",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(d)});
+    const j=await r.json();
+    if(!j.ok){ alert("Save failed: "+(j.error||JSON.stringify(j))); return; }
+    const st=document.getElementById("exportStatus");
+    st.textContent="✓ saved "+j.file; st.style.color="#4ec77f";
+  }catch(e){ alert("Save failed: "+e); }
+}
+
 async function copyJSON() {
   const d = buildExport(); const err = validateExport(d);
   if (err) { alert("Cannot copy: " + err); return; }
@@ -402,18 +631,41 @@ function loadJSON(file) {
     document.getElementById("personaGated").checked = !!d.persona_gated;
     document.getElementById("defaultSpeed").value = d.default_speed ?? 60;
     state.frames = (d.frames || []).map(f => ({legs: f.legs.map(l=>l.slice()), speed: f.speed, hold_s: f.hold_s}));
-    state.selectedFrame = null; renderAll();
+    if (!state.frames.length) state.frames = [{legs: STAND.map(l=>l.slice()), speed: 60, hold_s: 0}];
+    selectFrame(0);
   };
   reader.readAsText(file);
+}
+
+function onSpeedInput(){ renderAll(); }   // readout + frame-speed sync handled in renderAll
+
+function renderSpeedBars(){
+  const host=document.getElementById("speedBars"); if(!host) return;
+  const v=Number(document.getElementById("speed").value);
+  const filled=Math.round(v/90*12);
+  host.innerHTML="";
+  for(let i=0;i<12;i++){
+    const b=document.createElement("div");
+    b.style.cssText=`flex:1;height:${28+i*6}%;border-radius:1px;cursor:pointer;background:${i<filled?'#37b6ff':(i<filled+3?'#22323f':'#1c2630')}`;
+    b.onclick=()=>{document.getElementById("speed").value=Math.round((i+1)/12*90);onSpeedInput();};
+    host.appendChild(b);
+  }
 }
 
 // renderAll() is extended by later tasks (previews, export, timeline).
 function renderAll() {
   state.speed = Number(document.getElementById("speed").value);
+  const ro = document.getElementById("speedReadout");
+  if (ro) ro.innerHTML = `${state.speed}<span style="color:#5b6470">/90</span>`;
+  // Auto-commit live edits into the selected frame (skip during playback) so its
+  // thumbnail and the saved sequence always match what you're editing.
+  if (!playing && state.selectedFrame!=null && state.frames[state.selectedFrame]) {
+    state.frames[state.selectedFrame].legs = state.legs.map(l=>l.slice());
+    state.frames[state.selectedFrame].speed = state.speed;
+  }
+  renderSpeedBars();
   renderLegEditor();
   renderDots();
-  renderTopDown();
-  renderSide();
   render3D();
   renderTimeline();
   renderExportStatus();
@@ -434,22 +686,107 @@ async function pollHealth() {
     const r = await fetch("/health");
     const ok = r.ok && (await r.json()).ok;
     el.textContent = ok ? "● Pi connected" : "● Pi unreachable";
-    el.style.color = ok ? "#3ddc6f" : "#ff5b5b";
+    el.style.color = ok ? "#4ec77f" : "#f2664f";
     document.querySelectorAll(".needs-pi").forEach(b => b.disabled = !ok);
-  } catch { el.textContent = "● Pi unreachable"; el.style.color = "#ff5b5b"; }
+  } catch { el.textContent = "● Pi unreachable"; el.style.color = "#f2664f";
+    document.querySelectorAll(".needs-pi").forEach(b => b.disabled = true); }
+}
+
+// ---- camera view presets (snap the real camera) ----
+const VIEWS = {
+  PERSP: { pos:[220,180,260], target:[0,-20,0], label:"PERSPECTIVE" },
+  TOP:   { pos:[0,360,0.1],   target:[0,-20,0], label:"TOP VIEW" },
+  SIDE:  { pos:[360,0,0],     target:[0,-20,0], label:"SIDE VIEW" },
+  FRONT: { pos:[0,0,360],     target:[0,-20,0], label:"FRONT VIEW" },
+};
+function setView(v){
+  const cfg = VIEWS[v]; if(!cfg || !camera) return;
+  camera.position.set(...cfg.pos);
+  controls.target.set(...cfg.target); controls.update();
+  document.getElementById("viewLabel").textContent = cfg.label;
+  document.querySelectorAll(".viewbtn").forEach(b=>{
+    const on = b.dataset.view===v;
+    b.style.cssText = on
+      ? "padding:6px 11px;border-radius:6px;background:#37b6ff;color:#06121d;font-weight:700;cursor:pointer"
+      : "padding:6px 11px;border-radius:6px;color:#aab2bd;cursor:pointer";
+  });
+}
+window.setView = setView;
+
+function toggleGizmo(){
+  gizmoOn = !gizmoOn;
+  if(tcontrols){ tcontrols.visible = gizmoOn; tcontrols.enabled = gizmoOn; }
+  const btn = document.getElementById("gizmoBtn");
+  if(btn) btn.style.color = gizmoOn ? "#37b6ff" : "#aab2bd";
+  document.getElementById("viewSub").textContent = gizmoOn ? "drag to pose" : "free-drag foot";
+}
+window.toggleGizmo = toggleGizmo;
+
+// ---- animation library ----
+let _animations = [];
+async function openLibrary(){
+  document.getElementById("libraryModal").style.display="block";
+  const body=document.getElementById("libraryBody");
+  body.innerHTML='<div style="color:#7d8694;font-family:\'JetBrains Mono\'">loading…</div>';
+  try{
+    _animations=(await (await fetch("/animations")).json()).animations||[];
+  }catch(e){ body.innerHTML='<div style="color:#f2664f">library unavailable: '+e+'</div>'; return; }
+  renderLibrary();
+}
+function closeLibrary(){ document.getElementById("libraryModal").style.display="none"; }
+
+function renderLibrary(){
+  const body=document.getElementById("libraryBody");
+  const groups=[["MY ANIMATIONS",_animations.filter(a=>!a.builtin)],
+                ["BUILT-IN",_animations.filter(a=>a.builtin)]];
+  body.innerHTML=groups.map(([title,list],gi)=>`
+    <div style="font:600 11px 'JetBrains Mono';letter-spacing:.16em;color:#7d8694;margin:${gi?18:0}px 0 10px">${title}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px">
+      ${list.length?list.map((a,i)=>`
+        <div onclick="loadAnimation('${gi}',${i})" style="width:150px;border:1px solid #232934;border-radius:8px;background:#11151b;padding:9px;cursor:pointer">
+          <canvas id="libthumb${gi}_${i}" width="132" height="60" style="width:132px;height:60px;border-radius:4px;background:#0a0d12"></canvas>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:7px">
+            <span style="font:600 12px 'Space Grotesk';color:#dfe5ec">${a.tool}</span>
+            <span style="flex:1"></span>
+            <span style="font:500 10px 'JetBrains Mono';color:#7d8694">${a.frames.length}f</span>
+          </div>
+          ${a.builtin?'<div class="romono">read-only</div>':''}
+        </div>`).join(""):'<div style="color:#5b6470;font-size:12px">none yet</div>'}
+    </div>`).join("");
+  groups.forEach(([_,list],gi)=>list.forEach((a,i)=>{
+    const cv=document.getElementById("libthumb"+gi+"_"+i);
+    if(cv && a.frames[0]) drawThumb(cv, a.frames[0].legs, false);
+  }));
+}
+
+function loadAnimation(gi,i){
+  const list=Number(gi)===0?_animations.filter(a=>!a.builtin):_animations.filter(a=>a.builtin);
+  const a=list[i]; if(!a) return;
+  if(!confirm("Replace the current sequence with \""+a.tool+"\"?")) return;
+  document.getElementById("toolName").value=a.builtin?"":a.tool;  // builtins load nameless -> save as new
+  document.getElementById("desc").value=a.description||"";
+  document.getElementById("personaGated").checked=!!a.persona_gated;
+  document.getElementById("defaultSpeed").value=a.default_speed??60;
+  state.frames=a.frames.map(f=>({legs:f.legs.map(l=>l.slice()),speed:f.speed,hold_s:f.hold_s}));
+  selectFrame(0);
+  closeLibrary();
 }
 
 // Inline HTML handlers call these by global name; the module scope is not global, so expose them.
 window.state = state;
+window.openLibrary = openLibrary; window.closeLibrary = closeLibrary;
+window.loadAnimation = loadAnimation;
 window.renderAll = renderAll;
+window.onSpeedInput = onSpeedInput;
 window.setLeg = setLeg;
 window.resetToStand = resetToStand;
 window.sendToRobot = sendToRobot;
 window.addFrame = addFrame; window.dupFrame = dupFrame; window.delFrame = delFrame;
-window.moveFrame = moveFrame; window.loadFrame = loadFrame;
+window.loadFrame = loadFrame;
 window.setHold = setHold; window.setFrameSpeed = setFrameSpeed;
 window.playPreview = playPreview; window.playOnRobot = playOnRobot;
 window.exportJSON = exportJSON; window.copyJSON = copyJSON; window.loadJSON = loadJSON;
+window.saveAnimation = saveAnimation;
 window.renderExportStatus = renderExportStatus;
 
 setInterval(pollHealth, 4000); pollHealth();
@@ -457,6 +794,7 @@ setInterval(pollHealth, 4000); pollHealth();
 renderAll();
 init3D();   // scene-init runs ONCE, after the first renderAll()
 render3D(); // first 3D draw now that the scene exists
+setView("PERSP"); // set initial active view-button state
 </script>
 </body>
 </html>
