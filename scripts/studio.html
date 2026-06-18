@@ -152,13 +152,30 @@ function resetToStand() {
 
 function renderLegEditor() {
   const el = document.getElementById("legEditor");
-  el.innerHTML = state.legs.map((leg, i) => `
-    <div class="leg ${i===state.editing?'editing':''}" onclick="state.editing=${i};renderAll()">
-      <div>${LEG_NAMES[i]} <span id="dot${i}"></span></div>
-      ${["x","y","z"].map((ax, a) =>
-        `${ax} <input type="number" value="${leg[a]}" oninput="setLeg(${i},${a},this.value)">`
-      ).join(" ")}
-    </div>`).join("");
+  el.innerHTML = state.legs.map((leg, i) => {
+    const editing = i===state.editing;
+    const card = editing
+      ? "border:1px solid #37b6ff;border-radius:7px;background:linear-gradient(180deg,rgba(55,182,255,.10),rgba(55,182,255,.03));padding:9px 11px;margin-bottom:8px"
+      : "border:1px solid #20252e;border-radius:7px;background:#12161c;padding:9px 11px;margin-bottom:8px";
+    const [code, meta] = LEG_NAMES[i].split(' · ');
+    return `<div class="leg" style="${card}" onclick="state.editing=${i};renderAll()">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:7px">
+        <span id="dot${i}"></span>
+        <span style="font-weight:600">${code}</span>
+        <span style="font-size:10.5px;color:#6b7280;font-family:'JetBrains Mono',monospace">${meta||''}</span>
+        <span style="flex:1"></span>
+        <span id="status${i}" style="font-size:10px;font-family:'JetBrains Mono',monospace"></span>
+      </div>
+      <div style="display:flex;gap:6px">
+        ${["X","Y","Z"].map((ax, a) =>
+          `<div style="flex:1;display:flex;align-items:center;background:#0b0e13;border:1px solid #232934;border-radius:5px;overflow:hidden">
+             <span style="width:24px;text-align:center;font:600 11px 'JetBrains Mono';color:#6b7280;border-right:1px solid #232934;padding:6px 0">${ax}</span>
+             <input type="number" value="${leg[a]}" oninput="setLeg(${i},${a},this.value)" style="flex:1;min-width:0;border:none;background:none;text-align:right;padding:6px 7px">
+           </div>`
+        ).join("")}
+      </div>
+    </div>`;
+  }).join("");
 }
 
 // ---- kinematics (mirror of scripts/kinematics_ref.py) ----
@@ -214,9 +231,15 @@ function legPlane(x, y, z) {
 function renderDots() {
   state.legs.forEach((leg, i) => {
     const ok = isReachable(leg[0], leg[1], leg[2]);
-    const el = document.getElementById("dot"+i);
-    el.className = ok ? "dot-ok" : "dot-clamp";
-    el.textContent = ok ? "● reachable" : "● will clamp";
+    const editing = i===state.editing;
+    const color = editing ? "#37b6ff" : (ok ? "#4ec77f" : "#f2664f");
+    const dot = document.getElementById("dot"+i);
+    dot.textContent = "●"; dot.style.color = color;
+    const st = document.getElementById("status"+i);
+    if (st) {
+      st.textContent = editing ? "● EDITING" : (ok ? "REACHABLE" : "⚠ WILL CLAMP");
+      st.style.color = color;
+    }
   });
 }
 
@@ -551,9 +574,10 @@ async function pollHealth() {
     const r = await fetch("/health");
     const ok = r.ok && (await r.json()).ok;
     el.textContent = ok ? "● Pi connected" : "● Pi unreachable";
-    el.style.color = ok ? "#3ddc6f" : "#ff5b5b";
+    el.style.color = ok ? "#4ec77f" : "#f2664f";
     document.querySelectorAll(".needs-pi").forEach(b => b.disabled = !ok);
-  } catch { el.textContent = "● Pi unreachable"; el.style.color = "#ff5b5b"; }
+  } catch { el.textContent = "● Pi unreachable"; el.style.color = "#f2664f";
+    document.querySelectorAll(".needs-pi").forEach(b => b.disabled = true); }
 }
 
 // Inline HTML handlers call these by global name; the module scope is not global, so expose them.
