@@ -45,9 +45,9 @@ def _read_anim(path: pathlib.Path, builtin: bool):
     }
 
 
-async def _forward(method: str, path: str, json: dict | None = None):
+async def _forward(method: str, path: str, json: dict | None = None, timeout: float | None = None):
     try:
-        r = await _client.request(method, f"{PI_HOST}{path}", json=json)
+        r = await _client.request(method, f"{PI_HOST}{path}", json=json, timeout=timeout)
         return JSONResponse(r.json(), status_code=r.status_code)
     except Exception as e:
         return JSONResponse(
@@ -70,6 +70,16 @@ async def set_legs(req: Request):
     body = await req.json()
     return await _forward(
         "POST", "/set_legs", {"legs": body["legs"], "speed": body.get("speed", 60)}
+    )
+
+
+@app.post("/play_sequence")
+async def play_sequence(req: Request):
+    body = await req.json()
+    return await _forward(
+        "POST", "/play_sequence",
+        {"frames": body["frames"], "speed": body.get("speed")},
+        timeout=120.0,   # sequences with holds can run far past the 30s default
     )
 
 
