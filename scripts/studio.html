@@ -323,10 +323,10 @@ function init3D() {
   };
   const mkServo = () => new THREE.Mesh(new THREE.BoxGeometry(13,12,22),
     new THREE.MeshStandardMaterial({color:0x8b9099, metalness:.35, roughness:.6}));
-  legGroups = CORNERS3D.map(()=>{
+  legGroups = CORNERS3D.map((_,i)=>{
     const hipBone=mkPlate(11), upper=mkPlate(13), blade=mkBlade();
     const sv=[mkServo(),mkServo(),mkServo()];  // yaw(gamma), thigh(alpha), knee(beta)
-    [hipBone,upper,blade,...sv].forEach(m=>scene.add(m));
+    [hipBone,upper,blade,...sv].forEach(m=>{ m.userData.legIndex=i; scene.add(m); });
     return { hipBone, upper, blade, sv };
   });
 
@@ -342,6 +342,25 @@ function init3D() {
     const w=Math.hypot(rel.x, rel.z), la=c.yaw - Math.atan2(rel.z, rel.x);
     state.legs[i]=[ Math.round(w*Math.cos(la)), Math.round(w*Math.sin(la)), Math.round(rel.y) ];
     renderAll();
+  });
+
+  // --- click a leg in the viewport to select it (gizmo switches to that leg) ---
+  const picker = new THREE.Raycaster();
+  const pndc = new THREE.Vector2();
+  let downX=0, downY=0;
+  renderer.domElement.addEventListener('pointerdown', e=>{ downX=e.clientX; downY=e.clientY; });
+  renderer.domElement.addEventListener('pointerup', e=>{
+    if(dragging) return;                                   // gizmo drag, not a click
+    if(Math.hypot(e.clientX-downX, e.clientY-downY) > 5) return;  // it was an orbit/pan drag
+    const r = renderer.domElement.getBoundingClientRect();
+    pndc.x = ((e.clientX-r.left)/r.width)*2 - 1;
+    pndc.y = -((e.clientY-r.top)/r.height)*2 + 1;
+    picker.setFromCamera(pndc, camera);
+    const meshes = legGroups.flatMap(g=>[g.hipBone, g.upper, g.blade, ...g.sv]);
+    const hit = picker.intersectObjects(meshes, false)[0];
+    if(hit && hit.object.userData.legIndex !== undefined){
+      state.editing = hit.object.userData.legIndex; renderAll();
+    }
   });
 
   threeReady = true;
@@ -377,9 +396,9 @@ function render3D(){
     grp.sv[1].position.copy(kneeBase);  // thigh (alpha)
     grp.sv[2].position.copy(knee);      // knee  (beta)
     const ok=isReachable(x,y,z);
-    const col=(i===state.editing)?0xffb13d:(ok?SILVER:0xff5b5b);
+    const col=(i===state.editing)?0x37b6ff:(ok?0x4ec77f:0xf2664f);
     grp.upper.material.color.setHex(col); grp.blade.material.color.setHex(col);
-    grp.hipBone.material.color.setHex(i===state.editing?0xffb13d:SILVER);
+    grp.hipBone.material.color.setHex(i===state.editing?0x37b6ff:(ok?0x4ec77f:0xf2664f));
     if(i===state.editing && !dragging) gizmoTarget.position.copy(foot);  // park gizmo on edited foot
   });
 }
