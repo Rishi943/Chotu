@@ -3,16 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <title>Chotu Animation Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-  /* Dark theme, Share Tech Mono. 3-column grid + bottom timeline (Layout A). */
-  body { background:#0a0a0a; color:#ddd; font-family:'Share Tech Mono',monospace; margin:0; padding:16px; }
-  .col { border:1px solid #2a2a2a; border-radius:4px; padding:10px; }
-  .leg.editing { border-left:2px solid #ffb13d; background:#161616; }
-  .dot-ok { color:#3ddc6f; } .dot-clamp { color:#ff5b5b; }
-  input[type=number] { width:64px; background:#111; color:#fff; border:1px solid #333; }
-  button { background:#222; color:#ddd; border:1px solid #444; padding:6px 10px; cursor:pointer; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button.primary { background:#1c3a24; color:#3ddc6f; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:#0e1014;color:#e9edf2;font-family:'Space Grotesk',sans-serif;overflow:hidden}
+  .app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  .toolbar{flex:none;height:54px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#14171d;border-bottom:1px solid #23272f}
+  .mid{flex:1;display:flex;min-height:0}
+  .rail-l{flex:none;width:330px;background:#101319;border-right:1px solid #20242d;display:flex;flex-direction:column;padding:12px 13px;gap:10px;overflow:hidden}
+  .center{flex:1;position:relative;min-width:0;overflow:hidden;background:radial-gradient(120% 90% at 50% 30%,#262c38 0%,#181c25 55%,#10131a 100%)}
+  .rail-r{flex:none;width:316px;background:#101319;border-left:1px solid #20242d;display:flex;flex-direction:column;padding:12px 13px;gap:12px;overflow-y:auto}
+  .timeline{flex:none;height:150px;background:#0c0f14;border-top:1px solid #23272f;display:flex;flex-direction:column;padding:10px 16px;overflow:hidden}
+  #threed{position:absolute;inset:0}
+  #threed canvas{display:block}
+  .ov{position:absolute;font-family:'JetBrains Mono',monospace}
+  .leg.editing{outline:1px solid #37b6ff}
+  .dot-ok{color:#4ec77f} .dot-clamp{color:#f2664f}
+  input[type=number],input[type=text]{background:#0b0e13;color:#e9edf2;border:1px solid #232934;border-radius:5px;padding:5px 7px}
+  button{background:#1a1e25;color:#c3cad4;border:1px solid #2c313b;border-radius:6px;padding:7px 12px;cursor:pointer;font-family:inherit}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:#37b6ff;color:#06121d;border-color:#37b6ff}
 </style>
 <script type="importmap">
 { "imports": {
@@ -22,33 +35,91 @@
 </script>
 </head>
 <body>
-<h1 style="font-size:13px;letter-spacing:.2em;color:#888">▟ CHOTU ANIMATION STUDIO</h1>
-<div id="conn" style="color:#888">● checking Pi…</div>
+<div class="app">
+  <!-- TOP TOOLBAR -->
+  <div class="toolbar">
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="width:22px;height:22px;border-radius:5px;background:linear-gradient(135deg,#37b6ff,#1d7fd0);display:flex;align-items:center;justify-content:center;color:#06121d;font-weight:700">◣</div>
+      <span style="font-weight:700">CHOTU</span>
+      <span style="font-size:11px;color:#6b7280;letter-spacing:.18em;font-family:'JetBrains Mono',monospace">ANIMATION&nbsp;STUDIO</span>
+    </div>
+    <div style="flex:1"></div>
+    <div id="conn" style="color:#888;font-family:'JetBrains Mono',monospace;font-size:12px">● checking Pi…</div>
+    <div style="flex:1"></div>
+    <button onclick="resetToStand()">⟲ Reset to stand</button>
+    <button class="primary needs-pi" onclick="sendToRobot()">▶ Send to robot</button>
+  </div>
 
-<div id="legEditor" class="col"></div>
-<div style="margin:8px 0">speed <input id="speed" type="number" min="0" max="90" value="60"></div>
-<button class="primary needs-pi" onclick="sendToRobot()">▶ Send to robot</button>
-<button onclick="resetToStand()">⟲ Reset to stand</button>
+  <div class="mid">
+    <!-- LEFT RAIL -->
+    <div class="rail-l">
+      <div style="font:600 11px 'JetBrains Mono';letter-spacing:.16em;color:#7d8694">LEG&nbsp;EDITOR</div>
+      <div id="legEditor"></div>
+      <div style="border-top:1px solid #20242d;padding-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694">SERVO&nbsp;SPEED</span>
+          <span style="font-family:'JetBrains Mono',monospace;color:#5fc6ff" id="speedReadout">60<span style="color:#5b6470">/90</span></span>
+        </div>
+        <div id="speedBars" style="height:28px;display:flex;align-items:flex-end;gap:3px;margin-bottom:6px"></div>
+        speed <input id="speed" type="number" min="0" max="90" value="60" style="width:64px" oninput="onSpeedInput()">
+      </div>
+    </div>
 
-<!-- Preview / export / timeline mount points (filled in later tasks) -->
-<div id="topdown" class="col"><canvas id="topCanvas" width="260" height="220"></canvas></div>
-<div id="sideview" class="col"><canvas id="sideCanvas" width="260" height="220"></canvas></div>
-<div id="threed" class="col" style="width:360px;height:300px"></div>
-<div id="exportPanel" class="col">
-<div style="color:#777;letter-spacing:.1em;margin-bottom:6px">EXPORT → frames JSON</div>
-tool <input id="toolName" type="text" placeholder="shimmy" style="width:120px;background:#111;color:#fff;border:1px solid #333" oninput="renderExportStatus()"><br>
-desc <input id="desc" type="text" placeholder="A quick description." style="width:220px;background:#111;color:#fff;border:1px solid #333"><br>
-<label><input id="personaGated" type="checkbox"> persona_gated (reel only)</label><br>
-default_speed <input id="defaultSpeed" type="number" value="60" style="width:60px;background:#111;color:#fff;border:1px solid #333"><br>
-<div style="margin-top:8px">
-  <button onclick="exportJSON()">⬇ Export JSON</button>
-  <button onclick="copyJSON()">⧉ Copy</button>
-  <button onclick="document.getElementById('loadFile').click()">⬆ Load JSON</button>
-  <input id="loadFile" type="file" accept=".json" onchange="loadJSON(this.files[0])" style="display:none">
+    <!-- CENTER VIEWPORT -->
+    <div class="center">
+      <div id="threed"></div>
+      <div class="ov" style="left:14px;top:12px">
+        <div id="viewLabel" style="font-size:11px;color:#cdd6e0;letter-spacing:.12em">PERSPECTIVE</div>
+        <div style="font-size:10px;color:#5b6470" id="viewSub">drag to pose</div>
+      </div>
+      <div class="ov" style="left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:4px;background:rgba(14,18,24,.82);border:1px solid #283041;border-radius:9px;padding:5px;font-size:11px">
+        <span class="viewbtn" data-view="PERSP" onclick="setView('PERSP')">PERSP</span>
+        <span class="viewbtn" data-view="TOP" onclick="setView('TOP')">TOP</span>
+        <span class="viewbtn" data-view="SIDE" onclick="setView('SIDE')">SIDE</span>
+        <span class="viewbtn" data-view="FRONT" onclick="setView('FRONT')">FRONT</span>
+        <span style="width:1px;background:#283041;margin:2px 3px"></span>
+        <span id="gizmoBtn" onclick="toggleGizmo()" style="padding:6px 10px;border-radius:6px;cursor:pointer;color:#37b6ff">⊹ Gizmo</span>
+      </div>
+    </div>
+
+    <!-- RIGHT RAIL -->
+    <div class="rail-r">
+      <div>
+        <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">TOP-DOWN · FOOT MAP</div>
+        <canvas id="topCanvas" width="260" height="220" style="width:100%;height:auto"></canvas>
+      </div>
+      <div>
+        <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">SIDE · LINKAGE</div>
+        <canvas id="sideCanvas" width="260" height="220" style="width:100%;height:auto"></canvas>
+      </div>
+      <div id="exportPanel">
+        <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">EXPORT → TOOL JSON</div>
+        tool <input id="toolName" type="text" placeholder="shimmy" style="width:120px" oninput="renderExportStatus()"><br>
+        desc <input id="desc" type="text" placeholder="A quick description." style="width:200px;margin-top:6px"><br>
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-top:6px"><input id="personaGated" type="checkbox"> persona_gated (reel only)</label><br>
+        default_speed <input id="defaultSpeed" type="number" value="60" style="width:60px;margin-top:6px"><br>
+        <div style="margin-top:8px;display:flex;gap:6px">
+          <button class="primary" onclick="exportJSON()">⬇ Export</button>
+          <button onclick="copyJSON()">⧉</button>
+          <button onclick="document.getElementById('loadFile').click()">⬆</button>
+          <input id="loadFile" type="file" accept=".json" onchange="loadJSON(this.files[0])" style="display:none">
+        </div>
+        <div id="exportStatus" style="margin-top:6px;color:#777;font-family:'JetBrains Mono',monospace;font-size:11px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIMELINE -->
+  <div class="timeline">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <span style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694">TIMELINE</span>
+      <span style="flex:1"></span>
+      <button onclick="playPreview()">▷ Play preview</button>
+      <button class="primary needs-pi" onclick="playOnRobot()">▶▶ Play on robot</button>
+    </div>
+    <div id="timeline" style="flex:1;overflow-x:auto;white-space:nowrap"></div>
+  </div>
 </div>
-<div id="exportStatus" style="margin-top:6px;color:#777"></div>
-</div>
-<div id="timeline" class="col"></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -338,10 +409,7 @@ function renderTimeline() {
       <button onclick="moveFrame(${i},-1)">◀</button><button onclick="moveFrame(${i},1)">▶</button>
       <button onclick="dupFrame(${i})">⧉</button><button onclick="delFrame(${i})">🗑</button>
     </span>`).join(" → ") +
-    `<div style="margin-top:6px">
-      <button onclick="addFrame()">＋ Add frame</button>
-      <button onclick="playPreview()">▷ Play preview</button>
-      <button class="needs-pi" onclick="playOnRobot()">▶▶ Play on robot</button></div>`;
+    `<div style="margin-top:6px"><button onclick="addFrame()">＋ Add frame</button></div>`;
 }
 
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
@@ -417,9 +485,29 @@ function loadJSON(file) {
   reader.readAsText(file);
 }
 
+function onSpeedInput(){
+  document.getElementById("speedReadout").innerHTML =
+    `${document.getElementById("speed").value}<span style="color:#5b6470">/90</span>`;
+  renderAll();
+}
+
+function renderSpeedBars(){
+  const host=document.getElementById("speedBars"); if(!host) return;
+  const v=Number(document.getElementById("speed").value);
+  const filled=Math.round(v/90*12);
+  host.innerHTML="";
+  for(let i=0;i<12;i++){
+    const b=document.createElement("div");
+    b.style.cssText=`flex:1;height:${28+i*6}%;border-radius:1px;cursor:pointer;background:${i<filled?'#37b6ff':(i<filled+3?'#22323f':'#1c2630')}`;
+    b.onclick=()=>{document.getElementById("speed").value=Math.round((i+1)/12*90);onSpeedInput();};
+    host.appendChild(b);
+  }
+}
+
 // renderAll() is extended by later tasks (previews, export, timeline).
 function renderAll() {
   state.speed = Number(document.getElementById("speed").value);
+  renderSpeedBars();
   renderLegEditor();
   renderDots();
   renderTopDown();
@@ -452,6 +540,7 @@ async function pollHealth() {
 // Inline HTML handlers call these by global name; the module scope is not global, so expose them.
 window.state = state;
 window.renderAll = renderAll;
+window.onSpeedInput = onSpeedInput;
 window.setLeg = setLeg;
 window.resetToStand = resetToStand;
 window.sendToRobot = sendToRobot;
