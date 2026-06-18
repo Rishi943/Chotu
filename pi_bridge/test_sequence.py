@@ -16,15 +16,15 @@ def _frames():
     ]
 
 
-def test_plays_each_frame_in_order_then_stands():
+def test_plays_each_frame_in_order_ends_on_last_frame():
     c = FakeCrawler()
     slept = []
     play_frames(c, _frames(), cap=90, sleep=slept.append)
-    # one do_step per frame + a final stand
-    assert len(c.calls) == 3
+    # exactly one do_step per frame, NO appended library stand
+    assert len(c.calls) == 2
     assert c.calls[0] == ([[45, 45, -50]] * 4, 60)
     assert c.calls[1][1] == 90                       # 200 capped to 90
-    assert c.calls[2] == ("stand", 40)               # ends standing
+    assert all(call[0] != "stand" for call in c.calls)
     assert slept == [0.3]                            # only the non-zero hold
 
 
