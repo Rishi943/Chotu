@@ -527,7 +527,6 @@ function renderTimeline() {
   const pb=document.getElementById("playBtn"); if(pb) pb.textContent = playing ? "⏸ Pause" : "▷ Play preview";
 }
 
-const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 // Looping preview: lerp between consecutive frames (easeInOut), like the redesign.
 function playPreview(){
@@ -554,12 +553,13 @@ function stopPreview(){
     renderAll();
   }
 }
-async function playOnRobot() {  // mirrors the generated _play_{tool} body
-  for (const f of state.frames) {
-    await fetch("/set_legs", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({legs: f.legs, speed: f.speed})});
-    if (f.hold_s) await sleep(f.hold_s*1000);
-  }
+async function playOnRobot() {  // one on-Pi sequence — matches the scaffolded tool
+  try {
+    const r = await fetch("/play_sequence", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({frames: state.frames})});
+    const j = await r.json();
+    if (!j.ok) alert("Pi error: " + (j.error || JSON.stringify(j)));
+  } catch (e) { alert("Play failed: " + e); }
 }
 
 // ---- export panel ----
