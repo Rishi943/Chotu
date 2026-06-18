@@ -75,6 +75,10 @@
         <div id="speedBars" style="height:28px;display:flex;align-items:flex-end;gap:3px;margin-bottom:6px"></div>
         speed <input id="speed" type="number" min="0" max="90" value="60" style="width:64px" oninput="onSpeedInput()">
       </div>
+      <div style="border-top:1px solid #20242d;padding-top:10px;margin-top:10px">
+        <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:7px">SNAP &amp; SYMMETRY</div>
+        <div id="snapBar" style="font-size:11px;display:flex;flex-direction:column;gap:7px"></div>
+      </div>
     </div>
 
     <!-- CENTER VIEWPORT -->
@@ -91,6 +95,11 @@
         <span class="viewbtn" data-view="FRONT" onclick="setView('FRONT')">FRONT</span>
         <span style="width:1px;background:#283041;margin:2px 3px"></span>
         <span id="gizmoBtn" onclick="toggleGizmo()" style="padding:6px 10px;border-radius:6px;cursor:pointer;color:#37b6ff">⊹ Gizmo</span>
+        <span style="width:1px;background:#283041;margin:2px 3px"></span>
+        <span id="onionBtn" onclick="cycleOnion()" style="padding:6px 10px;border-radius:6px;cursor:pointer;color:#7d8694">◍ Onion: off</span>
+        <span style="width:1px;background:#283041;margin:2px 3px"></span>
+        <span onclick="undo()" title="Ctrl+Z" style="padding:6px 9px;border-radius:6px;cursor:pointer;color:#cdd6e0">↶</span>
+        <span onclick="redo()" title="Ctrl+Shift+Z" style="padding:6px 9px;border-radius:6px;cursor:pointer;color:#cdd6e0">↷</span>
       </div>
     </div>
 
@@ -144,17 +153,96 @@ const state = {
   // timeline always has >=1 frame; the selected frame is what you're editing (auto-committed).
   frames: [{legs: STAND.map(l=>l.slice()), speed: 60, hold_s: 0}],
   selectedFrame: 0,
+  snap: { on:true, step:5, grid:true, symAxis:"off", tol:8 },  // symAxis: off|LR|FB
+  onion: { mode:"off" },                                       // off|prev|next|both
+  history: { stack:[], index:-1 },
 };
 let playing = false, _raf = null;   // preview playback state
 
-function setLeg(i, axis, val) {
-  state.legs[i][axis] = Number(val);
-  renderAll();
+// ---- snapping (grid + world-space symmetry) ----
+// Forward foot (world horizontal) is exact-linear: footR == hypot(x,y) and footZ == z,
+// so worldFoot = base.p + (sgn[0]*x, z, sgn[1]*y). Inverse is the same relation solved for local.
+const SYM_PAIR = { LR:{0:1,1:0,2:3,3:2}, FB:{0:3,3:0,1:2,2:1} };
+function symTarget(i, axis) {
+  const p = SYM_PAIR[axis][i], cp = CORNERS3D[p], ce = CORNERS3D[i];
+  const [xp,yp,zp] = state.legs[p];
+  let Fx = cp.p[0] + cp.sgn[0]*xp, Fz = cp.p[2] + cp.sgn[1]*yp;       // partner world foot (x,z)
+  if (axis==="LR") Fx = -Fx; else Fz = -Fz;                          // reflect across centerline
+  return [ ce.sgn[0]*(Fx - ce.p[0]), ce.sgn[1]*(Fz - ce.p[2]), zp ];  // -> edited leg local
 }
+function applySnap(i, c) {
+  const s = state.snap;
+  if (!s.on) return c.map(Math.round);
+  let out = c.slice();
+  if (s.symAxis !== "off") {
+    const t = symTarget(i, s.symAxis);
+    if (Math.hypot(out[0]-t[0], out[1]-t[1], out[2]-t[2]) <= s.tol) out = t;
+  }
+  if (s.grid) out = out.map(v => Math.round(v/s.step)*s.step);
+  return out.map(v => Math.round(v));
+}
+
+// ---- undo/redo (pose edits only, per selected frame) ----
+function pushHist() {
+  const h = state.history;
+  h.stack = h.stack.slice(0, h.index+1);
+  h.stack.push(state.legs.map(l => l.slice()));
+  if (h.stack.length > 50) h.stack.shift();
+  h.index = h.stack.length - 1;
+}
+function resetHist() { state.history = { stack:[state.legs.map(l=>l.slice())], index:0 }; }
+function undo() { const h=state.history; if(h.index>0){ h.index--; state.legs=h.stack[h.index].map(l=>l.slice()); renderAll(); } }
+function redo() { const h=state.history; if(h.index<h.stack.length-1){ h.index++; state.legs=h.stack[h.index].map(l=>l.slice()); renderAll(); } }
+
+function setLeg(i, axis, val) {
+  const c = state.legs[i].slice(); c[axis] = Number(val);
+  state.legs[i] = c;                 // numeric input: no snap-while-typing
+  pushHist(); renderAll();
+}
+
+function groundDrop(i) {              // plant foot at current ground (lowest local z == world height)
+  const minz = Math.min(...state.legs.map(l => l[2]));
+  const c = state.legs[i].slice(); c[2] = minz;
+  state.legs[i] = applySnap(i, c); pushHist(); renderAll();
+}
+
+function setSnap(k, v) { state.snap[k] = v; renderAll(); }
+function cycleOnion() { const o=["off","prev","next","both"]; state.onion.mode=o[(o.indexOf(state.onion.mode)+1)%4]; renderAll(); }
+
+// chip helper: filled when active
+function chip(label, active, onclick) {
+  const st = active
+    ? "background:rgba(55,182,255,.16);border:1px solid #37b6ff;color:#9bdcff"
+    : "background:#0b0e13;border:1px solid #232934;color:#7d8694";
+  return `<span onclick="${onclick}" style="${st};padding:4px 8px;border-radius:5px;cursor:pointer">${label}</span>`;
+}
+function renderSnapBar() {
+  const el = document.getElementById("snapBar"); if (!el) return;
+  const s = state.snap;
+  el.innerHTML =
+    `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+       ${chip("Snap "+(s.on?"on":"off"), s.on, "setSnap('on',!state.snap.on)")}
+       <span style="color:#6b7280">step</span>
+       <input type="number" min="1" value="${s.step}" oninput="setSnap('step',Math.max(1,Number(this.value)))" style="width:52px">
+       <span style="color:#5b6470">mm · Shift=×4</span>
+     </div>
+     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+       ${chip("grid", s.grid, "setSnap('grid',!state.snap.grid)")}
+       <span style="color:#6b7280">sym</span>
+       ${chip("off", s.symAxis==='off', "setSnap('symAxis','off')")}
+       ${chip("L/R", s.symAxis==='LR', "setSnap('symAxis','LR')")}
+       ${chip("F/B", s.symAxis==='FB', "setSnap('symAxis','FB')")}
+       ${chip("⤓ ground", false, "groundDrop(state.editing)")}
+     </div>`;
+  const ob = document.getElementById("onionBtn");
+  if (ob) { ob.textContent = "◍ Onion: "+state.onion.mode; ob.style.color = state.onion.mode==="off" ? "#7d8694" : "#37b6ff"; }
+}
+
+function setOnion(m) { state.onion.mode = m; renderAll(); }
 
 function resetToStand() {
   state.legs = STAND.map(l => l.slice());
-  renderAll();
+  pushHist(); renderAll();
 }
 
 function renderLegEditor() {
@@ -355,12 +443,12 @@ function init3D() {
   gizmoTarget = new THREE.Object3D(); scene.add(gizmoTarget);
   tcontrols = new TransformControls(camera, renderer.domElement);
   tcontrols.setSize(0.7); tcontrols.attach(gizmoTarget); scene.add(tcontrols);
-  tcontrols.addEventListener('dragging-changed', e=>{ dragging=e.value; controls.enabled=!e.value; });
+  tcontrols.addEventListener('dragging-changed', e=>{ dragging=e.value; controls.enabled=!e.value; if(!e.value) pushHist(); });
   tcontrols.addEventListener('objectChange', ()=>{
     if(!dragging) return;                       // ignore our own programmatic repositioning
     const i=state.editing, c=CORNERS3D[i];
     const rel=gizmoTarget.position.clone().sub(new THREE.Vector3(...c.p));  // world -> leg-local
-    state.legs[i]=[ Math.round(c.sgn[0]*rel.x), Math.round(c.sgn[1]*rel.z), Math.round(rel.y) ];
+    state.legs[i]=applySnap(i, [c.sgn[0]*rel.x, c.sgn[1]*rel.z, rel.y]);
     renderAll();
   });
 
@@ -397,11 +485,11 @@ function init3D() {
     if(!picker.ray.intersectPlane(dragPlane, hit)) return;
     const i=state.editing, c=CORNERS3D[i];
     const rel=hit.clone().sub(new THREE.Vector3(...c.p));
-    state.legs[i]=[ Math.round(c.sgn[0]*rel.x), Math.round(c.sgn[1]*rel.z), Math.round(rel.y) ];
+    state.legs[i]=applySnap(i, [c.sgn[0]*rel.x, c.sgn[1]*rel.z, rel.y]);
     renderAll();
   });
 
-  const endFree = ()=>{ if(freeDragging){ freeDragging=false; controls.enabled=true; } };
+  const endFree = ()=>{ if(freeDragging){ freeDragging=false; controls.enabled=true; if(freeMoved) pushHist(); } };
   renderer.domElement.addEventListener('pointercancel', endFree);
   renderer.domElement.addEventListener('pointerup', e=>{
     const wasFree = freeDragging; endFree();
@@ -419,6 +507,48 @@ function init3D() {
   threeReady = true;
   (function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene,camera); })();
 }
+
+// joints (hip, knee, foot) for one leg in a given pose — shared by onion-skinning.
+function legJoints(i, legs){
+  const [x,y,z]=legs[i]; const pl=legPlane(x,y,z); const c=CORNERS3D[i];
+  const hx=c.sgn[0]*x, hz=c.sgn[1]*y; const r2=Math.hypot(hx,hz)||1e-6;
+  const dir=new THREE.Vector3(hx/r2,0,hz/r2); const base=new THREE.Vector3(...c.p);
+  const P=(r,zz)=>base.clone().addScaledVector(dir,r).add(new THREE.Vector3(0,zz,0));
+  return [P(0,0), P(pl.kneeR,pl.kneeZ), P(pl.footR,pl.footZ)];
+}
+
+let onionGroup;
+function renderOnion(){
+  if(!threeReady) return;
+  if(!onionGroup){ onionGroup=new THREE.Group(); scene.add(onionGroup); }
+  while(onionGroup.children.length){ const o=onionGroup.children[0]; onionGroup.remove(o); o.geometry?.dispose(); }
+  const m=state.onion.mode; if(m==="off") return;
+  const idx=state.selectedFrame; const nbrs=[];
+  if((m==="prev"||m==="both") && idx>0) nbrs.push(idx-1);
+  if((m==="next"||m==="both") && idx<state.frames.length-1) nbrs.push(idx+1);
+  const mat=new THREE.LineBasicMaterial({color:0x9aa4b2, transparent:true, opacity:0.32});
+  nbrs.forEach(fi=>{ const legs=state.frames[fi].legs;
+    for(let i=0;i<4;i++){
+      onionGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(legJoints(i,legs)), mat));
+    }
+  });
+}
+
+// keyboard: arrow/page nudge by snap step (Shift = x4); Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo-redo.
+window.addEventListener('keydown', e=>{
+  const t=e.target, typing = t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA');
+  const k=e.key.toLowerCase();
+  if((e.ctrlKey||e.metaKey) && k==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
+  if((e.ctrlKey||e.metaKey) && k==='y'){ e.preventDefault(); redo(); return; }
+  if(typing) return;
+  const i=state.editing; if(i==null) return;
+  const step=(e.shiftKey?state.snap.step*4:state.snap.step);
+  const map={ArrowLeft:[0,-1],ArrowRight:[0,1],ArrowUp:[1,1],ArrowDown:[1,-1],PageUp:[2,1],PageDown:[2,-1]};
+  const mv=map[e.key]; if(!mv) return;
+  e.preventDefault();
+  const c=state.legs[i].slice(); c[mv[0]]+=mv[1]*step;
+  state.legs[i]=applySnap(i,c); pushHist(); renderAll();
+});
 
 function placeBone(bone, a, b){ // position a plate between two Vector3
   const dir=new THREE.Vector3().subVectors(b,a); const len=dir.length();
@@ -484,7 +614,7 @@ function delFrame(i){
 }
 function selectFrame(i){ const f=state.frames[i];
   state.legs=f.legs.map(l=>l.slice()); state.speed=f.speed;
-  document.getElementById("speed").value=f.speed; state.selectedFrame=i; renderAll(); }
+  document.getElementById("speed").value=f.speed; state.selectedFrame=i; resetHist(); renderAll(); }
 const loadFrame = selectFrame;   // inline handlers call loadFrame(i)
 function setHold(i,v){ state.frames[i].hold_s=Number(v); }
 function setFrameSpeed(i,v){ state.frames[i].speed=Number(v); if(i===state.selectedFrame){
@@ -681,8 +811,10 @@ function renderAll() {
   renderLegEditor();
   renderDots();
   render3D();
+  renderOnion();
   renderTimeline();
   renderExportStatus();
+  renderSnapBar();
 }
 
 async function sendToRobot() {
@@ -794,6 +926,9 @@ window.renderAll = renderAll;
 window.onSpeedInput = onSpeedInput;
 window.setLeg = setLeg;
 window.resetToStand = resetToStand;
+window.setSnap = setSnap; window.groundDrop = groundDrop;
+window.cycleOnion = cycleOnion; window.setOnion = setOnion;
+window.undo = undo; window.redo = redo;
 window.sendToRobot = sendToRobot;
 window.addFrame = addFrame; window.dupFrame = dupFrame; window.delFrame = delFrame;
 window.loadFrame = loadFrame; window.reorderFrame = reorderFrame;
@@ -805,6 +940,7 @@ window.renderExportStatus = renderExportStatus;
 
 setInterval(pollHealth, 4000); pollHealth();
 
+resetHist();
 renderAll();
 init3D();   // scene-init runs ONCE, after the first renderAll()
 render3D(); // first 3D draw now that the scene exists
