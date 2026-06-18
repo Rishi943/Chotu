@@ -314,7 +314,9 @@ function init3D() {
     renderer.setSize(s.w, s.h);
   });
   ro.observe(host);
-  controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0,-20,0);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enablePan = true; controls.enableZoom = true; controls.screenSpacePanning = true;
+  controls.target.set(0,-20,0);
   scene.add(new THREE.AmbientLight(0xffffff,0.7));
   const dl = new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(120,200,120); scene.add(dl);
   const grid = new THREE.GridHelper(400,16,0x2a3744,0x202833); grid.position.y=-95; scene.add(grid);
@@ -580,6 +582,27 @@ async function pollHealth() {
     document.querySelectorAll(".needs-pi").forEach(b => b.disabled = true); }
 }
 
+// ---- camera view presets (snap the real camera) ----
+const VIEWS = {
+  PERSP: { pos:[220,180,260], target:[0,-20,0], label:"PERSPECTIVE" },
+  TOP:   { pos:[0,360,0.1],   target:[0,-20,0], label:"TOP VIEW" },
+  SIDE:  { pos:[360,0,0],     target:[0,-20,0], label:"SIDE VIEW" },
+  FRONT: { pos:[0,0,360],     target:[0,-20,0], label:"FRONT VIEW" },
+};
+function setView(v){
+  const cfg = VIEWS[v]; if(!cfg || !camera) return;
+  camera.position.set(...cfg.pos);
+  controls.target.set(...cfg.target); controls.update();
+  document.getElementById("viewLabel").textContent = cfg.label;
+  document.querySelectorAll(".viewbtn").forEach(b=>{
+    const on = b.dataset.view===v;
+    b.style.cssText = on
+      ? "padding:6px 11px;border-radius:6px;background:#37b6ff;color:#06121d;font-weight:700;cursor:pointer"
+      : "padding:6px 11px;border-radius:6px;color:#aab2bd;cursor:pointer";
+  });
+}
+window.setView = setView;
+
 // Inline HTML handlers call these by global name; the module scope is not global, so expose them.
 window.state = state;
 window.renderAll = renderAll;
@@ -599,6 +622,7 @@ setInterval(pollHealth, 4000); pollHealth();
 renderAll();
 init3D();   // scene-init runs ONCE, after the first renderAll()
 render3D(); // first 3D draw now that the scene exists
+setView("PERSP"); // set initial active view-button state
 </script>
 </body>
 </html>
