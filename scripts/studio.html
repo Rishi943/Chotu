@@ -85,10 +85,6 @@
     <!-- RIGHT RAIL -->
     <div class="rail-r">
       <div>
-        <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">TOP-DOWN · FOOT MAP</div>
-        <canvas id="topCanvas" width="260" height="220" style="width:100%;height:auto"></canvas>
-      </div>
-      <div>
         <div style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694;margin-bottom:8px">SIDE · LINKAGE</div>
         <canvas id="sideCanvas" width="260" height="220" style="width:100%;height:auto"></canvas>
       </div>
@@ -240,29 +236,6 @@ function renderDots() {
       st.textContent = editing ? "● EDITING" : (ok ? "REACHABLE" : "⚠ WILL CLAMP");
       st.style.color = color;
     }
-  });
-}
-
-// Top-down: plot each foot (x,y) at its body corner. Corner placement is a
-// display convention (front = up); tune signs by eye against the real robot.
-const CORNERS = [  // [cx, cy, sx, sy] body corner + axis sign for [FR,FL,RL,RR]
-  [ 1,-1,  1,-1], [-1,-1, -1,-1], [-1, 1, -1, 1], [ 1, 1,  1, 1],
-];
-function renderTopDown() {
-  const cv = document.getElementById("topCanvas"), g = cv.getContext("2d");
-  g.clearRect(0,0,cv.width,cv.height);
-  const cx = cv.width/2, cy = cv.height/2, s = 0.6;  // mm -> px
-  const hs = LENGTH_SIDE/2 * s;
-  g.strokeStyle = "#33373d"; g.strokeRect(cx-hs, cy-hs, hs*2, hs*2);
-  state.legs.forEach((leg, i) => {
-    const [bx, by, sgx, sgy] = CORNERS[i];
-    const hx = cx + bx*hs, hy = cy + by*hs;
-    const fx = hx + sgx*leg[0]*s, fy = hy - sgy*leg[1]*s;  // x reach, y outward
-    const ok = isReachable(leg[0], leg[1], leg[2]);
-    g.strokeStyle = ok ? "#3a6" : "#a33"; g.beginPath();
-    g.moveTo(hx,hy); g.lineTo(fx,fy); g.stroke();
-    g.fillStyle = i===state.editing ? "#ffb13d" : (ok ? "#3ddc6f" : "#ff5b5b");
-    g.beginPath(); g.arc(fx, fy, i===state.editing?5:4, 0, 7); g.fill();
   });
 }
 
@@ -588,7 +561,6 @@ function renderAll() {
   renderSpeedBars();
   renderLegEditor();
   renderDots();
-  renderTopDown();
   renderSide();
   render3D();
   renderTimeline();
