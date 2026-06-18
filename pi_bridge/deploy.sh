@@ -11,6 +11,9 @@ REMOTE_DIR="~/chotu-bridge"
 echo "==> Copying server.py to Pi..."
 scp pi_bridge/server.py ${PI_USER}@${PI_HOST}:${REMOTE_DIR}/server.py
 
+echo "==> Copying sequence.py to Pi..."
+scp pi_bridge/sequence.py ${PI_USER}@${PI_HOST}:${REMOTE_DIR}/sequence.py
+
 echo "==> Copying chotu package to Pi..."
 ssh ${PI_USER}@${PI_HOST} "mkdir -p ${REMOTE_DIR}/chotu/faces"
 scp pi_bridge/chotu/__init__.py ${PI_USER}@${PI_HOST}:${REMOTE_DIR}/chotu/__init__.py
