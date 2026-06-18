@@ -110,7 +110,7 @@
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
       <span style="font:600 11px 'JetBrains Mono';letter-spacing:.14em;color:#7d8694">TIMELINE</span>
       <span style="flex:1"></span>
-      <button onclick="playPreview()">▷ Play preview</button>
+      <button id="playBtn" onclick="playPreview()">▷ Play preview</button>
       <button class="primary needs-pi" onclick="playOnRobot()">▶▶ Play on robot</button>
     </div>
     <div id="timeline" style="flex:1;overflow-x:auto;white-space:nowrap"></div>
@@ -132,9 +132,11 @@ const state = {
   legs: STAND.map(l => l.slice()),  // current editable pose, 4x[x,y,z]
   speed: 60,
   editing: 1,                       // index of leg highlighted in the editor
-  frames: [],                       // timeline: [{legs, speed, hold_s}]
-  selectedFrame: null,
+  // timeline always has >=1 frame; the selected frame is what you're editing (auto-committed).
+  frames: [{legs: STAND.map(l=>l.slice()), speed: 60, hold_s: 0}],
+  selectedFrame: 0,
 };
+let playing = false, _raf = null;   // preview playback state
 
 function setLeg(i, axis, val) {
   state.legs[i][axis] = Number(val);
@@ -442,39 +444,100 @@ function render3D(){
   });
 }
 
+// addFrame duplicates the current pose as a new frame placed after the selected one,
+// then selects it — the standard keyframe workflow (tweak → add → tweak).
 function addFrame() {
-  state.frames.push({legs: state.legs.map(l=>l.slice()), speed: state.speed, hold_s: 0});
-  state.selectedFrame = state.frames.length-1; renderAll();
+  const at = state.selectedFrame==null ? state.frames.length-1 : state.selectedFrame;
+  state.frames.splice(at+1, 0, {legs: state.legs.map(l=>l.slice()), speed: state.speed, hold_s: 0});
+  state.selectedFrame = at+1; renderAll();
 }
 function dupFrame(i){ const f=state.frames[i];
-  state.frames.splice(i+1,0,{legs:f.legs.map(l=>l.slice()),speed:f.speed,hold_s:f.hold_s}); renderAll(); }
-function delFrame(i){ state.frames.splice(i,1); state.selectedFrame=null; renderAll(); }
-function moveFrame(i,d){ const j=i+d; if(j<0||j>=state.frames.length) return;
-  [state.frames[i],state.frames[j]]=[state.frames[j],state.frames[i]]; renderAll(); }
-function loadFrame(i){ const f=state.frames[i];
+  state.frames.splice(i+1,0,{legs:f.legs.map(l=>l.slice()),speed:f.speed,hold_s:f.hold_s});
+  state.selectedFrame=i+1; renderAll(); }
+function delFrame(i){
+  if(state.frames.length<=1) return;              // keep at least one frame
+  state.frames.splice(i,1);
+  selectFrame(Math.min(state.selectedFrame, state.frames.length-1));
+}
+function selectFrame(i){ const f=state.frames[i];
   state.legs=f.legs.map(l=>l.slice()); state.speed=f.speed;
   document.getElementById("speed").value=f.speed; state.selectedFrame=i; renderAll(); }
+const loadFrame = selectFrame;   // inline handlers call loadFrame(i)
 function setHold(i,v){ state.frames[i].hold_s=Number(v); }
-function setFrameSpeed(i,v){ state.frames[i].speed=Number(v); }
+function setFrameSpeed(i,v){ state.frames[i].speed=Number(v); if(i===state.selectedFrame){
+  state.speed=Number(v); document.getElementById("speed").value=v; } renderAll(); }
+
+// Mini top-down pose preview, same geometry as the 3D top view (sign-flip mount).
+function drawThumb(cv, legs, sel){
+  const g=cv.getContext("2d"); g.clearRect(0,0,cv.width,cv.height);
+  const cx=cv.width/2, cy=cv.height/2, s=0.30;          // mm -> px
+  const hb=HALF_BODY*s;
+  g.strokeStyle=sel?"#2b6a93":"#33414f"; g.lineWidth=1; g.strokeRect(cx-hb,cy-hb,hb*2,hb*2);
+  legs.forEach((leg,i)=>{
+    const [x,y,z]=leg; const c=CORNERS3D[i]; const pl=legPlane(x,y,z);
+    const hx=c.sgn[0]*x, hz=c.sgn[1]*y; const r2=Math.hypot(hx,hz)||1e-6;
+    const hipX=cx+c.p[0]*s, hipY=cy-c.p[2]*s;            // three.js x->canvasX, z(front)->up
+    const fx=cx+(c.p[0]+hx/r2*pl.footR)*s, fy=cy-(c.p[2]+hz/r2*pl.footR)*s;
+    const ok=isReachable(x,y,z);
+    g.strokeStyle=ok?"#3a6":"#a44"; g.lineWidth=1.4; g.beginPath(); g.moveTo(hipX,hipY); g.lineTo(fx,fy); g.stroke();
+    g.fillStyle=ok?"#4ec77f":"#f2664f"; g.beginPath(); g.arc(fx,fy,2.2,0,7); g.fill();
+  });
+}
 
 function renderTimeline() {
   const el = document.getElementById("timeline");
-  el.innerHTML = state.frames.map((f,i)=>`
-    <span class="${i===state.selectedFrame?'editing':''}" style="border:1px solid #333;padding:6px;margin:2px;display:inline-block">
-      <b onclick="loadFrame(${i})" style="cursor:pointer">F${i+1}</b>
-      spd <input type="number" value="${f.speed}" style="width:48px" oninput="setFrameSpeed(${i},this.value)">
-      hold <input type="number" step="0.1" value="${f.hold_s}" style="width:48px" oninput="setHold(${i},this.value)">
-      <button onclick="moveFrame(${i},-1)">◀</button><button onclick="moveFrame(${i},1)">▶</button>
-      <button onclick="dupFrame(${i})">⧉</button><button onclick="delFrame(${i})">🗑</button>
-    </span>`).join(" → ") +
-    `<div style="margin-top:6px"><button onclick="addFrame()">＋ Add frame</button></div>`;
+  el.style.display="flex"; el.style.alignItems="stretch"; el.style.gap="9px";
+  el.innerHTML = state.frames.map((f,i)=>{
+    const sel=i===state.selectedFrame;
+    const card=sel
+      ? "flex:none;width:138px;border:1px solid #37b6ff;border-radius:7px;background:linear-gradient(180deg,rgba(55,182,255,.10),rgba(55,182,255,.02));padding:7px 9px;display:flex;flex-direction:column;gap:5px;box-shadow:0 0 14px rgba(55,182,255,.12);cursor:pointer"
+      : "flex:none;width:138px;border:1px solid #232934;border-radius:7px;background:#11151b;padding:7px 9px;display:flex;flex-direction:column;gap:5px;cursor:pointer";
+    return `<div onclick="loadFrame(${i})" style="${card}">
+      <div style="display:flex;align-items:center;gap:6px">
+        <b style="font:700 12px 'JetBrains Mono';color:${sel?'#eaf4fc':'#cdd6e0'}">F${i+1}</b>
+        <span style="flex:1"></span>
+        <span style="font-size:9px;color:#37b6ff;font-family:'JetBrains Mono'">${sel?'● SEL':''}</span>
+        <span onclick="event.stopPropagation();dupFrame(${i})" title="duplicate" style="cursor:pointer;color:#7d8694;font-size:12px">⧉</span>
+        <span onclick="event.stopPropagation();delFrame(${i})" title="delete" style="cursor:pointer;width:16px;height:16px;border-radius:3px;background:#2a1a1a;border:1px solid #5a2b2b;color:#f2664f;font-size:12px;line-height:14px;text-align:center">×</span>
+      </div>
+      <canvas id="thumb${i}" width="120" height="50" style="width:120px;height:50px;border-radius:4px;background:${sel?'#08111a':'#0a0d12'}"></canvas>
+      <div style="display:flex;align-items:center;gap:5px;font:500 10px 'JetBrains Mono';color:${sel?'#8fb9d8':'#7d8694'}">
+        spd<input type="number" value="${f.speed}" onclick="event.stopPropagation()" oninput="setFrameSpeed(${i},this.value)" style="width:38px;padding:2px 4px">
+        hold<input type="number" step="0.1" value="${f.hold_s}" onclick="event.stopPropagation()" oninput="setHold(${i},this.value)" style="width:38px;padding:2px 4px">
+      </div>
+    </div>`;
+  }).join("") +
+    `<div onclick="addFrame()" style="flex:none;width:58px;border:1px dashed #2c333f;border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#5b6470;cursor:pointer">
+       <span style="font-size:20px">＋</span><span style="font-size:9px;font-family:'JetBrains Mono'">ADD</span></div>`;
+  state.frames.forEach((f,i)=>{ const cv=document.getElementById("thumb"+i); if(cv) drawThumb(cv,f.legs,i===state.selectedFrame); });
+  const pb=document.getElementById("playBtn"); if(pb) pb.textContent = playing ? "⏸ Pause" : "▷ Play preview";
 }
 
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
-async function playPreview() {
-  for (const f of state.frames) {
-    state.legs = f.legs.map(l=>l.slice()); renderAll();
-    await sleep(700 + f.hold_s*1000);  // ~servo travel + hold, visual only
+
+// Looping preview: lerp between consecutive frames (easeInOut), like the redesign.
+function playPreview(){
+  if(playing){ stopPreview(); return; }
+  if(state.frames.length<2){ alert("Add at least 2 frames to preview a sequence."); return; }
+  playing=true;
+  let seg=0, t0=performance.now(); const segDur=800;
+  const lerp=(a,b,k)=>a.map((leg,li)=>leg.map((v,j)=>v+(b[li][j]-v)*k));
+  const tick=()=>{
+    if(!playing) return;
+    const now=performance.now(); let k=(now-t0)/segDur;
+    if(k>=1){ seg=(seg+1)%state.frames.length; t0=now; k=0; }
+    const a=state.frames[seg].legs, b=state.frames[(seg+1)%state.frames.length].legs;
+    const e=k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+    state.legs=lerp(a,b,e); state.selectedFrame=seg; renderAll();
+    _raf=requestAnimationFrame(tick);
+  };
+  _raf=requestAnimationFrame(tick);
+}
+function stopPreview(){
+  if(_raf){ cancelAnimationFrame(_raf); _raf=null; }
+  if(playing){ playing=false;
+    if(state.selectedFrame!=null){ const f=state.frames[state.selectedFrame]; state.legs=f.legs.map(l=>l.slice()); }
+    renderAll();
   }
 }
 async function playOnRobot() {  // mirrors the generated _play_{tool} body
@@ -538,16 +601,13 @@ function loadJSON(file) {
     document.getElementById("personaGated").checked = !!d.persona_gated;
     document.getElementById("defaultSpeed").value = d.default_speed ?? 60;
     state.frames = (d.frames || []).map(f => ({legs: f.legs.map(l=>l.slice()), speed: f.speed, hold_s: f.hold_s}));
-    state.selectedFrame = null; renderAll();
+    if (!state.frames.length) state.frames = [{legs: STAND.map(l=>l.slice()), speed: 60, hold_s: 0}];
+    selectFrame(0);
   };
   reader.readAsText(file);
 }
 
-function onSpeedInput(){
-  document.getElementById("speedReadout").innerHTML =
-    `${document.getElementById("speed").value}<span style="color:#5b6470">/90</span>`;
-  renderAll();
-}
+function onSpeedInput(){ renderAll(); }   // readout + frame-speed sync handled in renderAll
 
 function renderSpeedBars(){
   const host=document.getElementById("speedBars"); if(!host) return;
@@ -565,6 +625,14 @@ function renderSpeedBars(){
 // renderAll() is extended by later tasks (previews, export, timeline).
 function renderAll() {
   state.speed = Number(document.getElementById("speed").value);
+  const ro = document.getElementById("speedReadout");
+  if (ro) ro.innerHTML = `${state.speed}<span style="color:#5b6470">/90</span>`;
+  // Auto-commit live edits into the selected frame (skip during playback) so its
+  // thumbnail and the saved sequence always match what you're editing.
+  if (!playing && state.selectedFrame!=null && state.frames[state.selectedFrame]) {
+    state.frames[state.selectedFrame].legs = state.legs.map(l=>l.slice());
+    state.frames[state.selectedFrame].speed = state.speed;
+  }
   renderSpeedBars();
   renderLegEditor();
   renderDots();
@@ -633,7 +701,7 @@ window.setLeg = setLeg;
 window.resetToStand = resetToStand;
 window.sendToRobot = sendToRobot;
 window.addFrame = addFrame; window.dupFrame = dupFrame; window.delFrame = delFrame;
-window.moveFrame = moveFrame; window.loadFrame = loadFrame;
+window.loadFrame = loadFrame;
 window.setHold = setHold; window.setFrameSpeed = setFrameSpeed;
 window.playPreview = playPreview; window.playOnRobot = playOnRobot;
 window.exportJSON = exportJSON; window.copyJSON = copyJSON; window.loadJSON = loadJSON;
