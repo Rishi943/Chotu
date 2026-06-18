@@ -172,6 +172,9 @@ function renderLegEditor() {
            </div>`
         ).join("")}
       </div>
+      ${(()=>{ const ok=isReachable(leg[0],leg[1],leg[2]); if(ok) return "";
+        const r=realizedFoot(leg[0],leg[1],leg[2]);
+        return `<div style="margin-top:5px;font:500 10px 'JetBrains Mono';color:#f2a594">↳ clamps to [${r[0]}, ${r[1]}, ${r[2]}]</div>`; })()}
     </div>`;
   }).join("");
 }
@@ -194,6 +197,20 @@ function coord2polar(x, y, z) {
   const alpha = angle2 + angle1;
   const gamma = Math.atan2(y, x);
   return [90 - alpha*180/Math.PI, beta*180/Math.PI - 90, -(gamma*180/Math.PI - 45)];
+}
+
+// Forward kinematics (mirror of picrawler.polar2coord). Round-tripping a coord through
+// coord2polar -> polar2coord yields where the foot ACTUALLY lands after the L/u clamps —
+// validated against the real robot. Used to show "realized" coords for clamped poses.
+function realizedFoot(x, y, z) {
+  const [al, be, ga] = coord2polar(x, y, z);
+  const L1 = Math.sqrt(A*A + B*B - 2*A*B*Math.cos((90+al)/180*Math.PI));
+  let ang = Math.acos((A*A + L1*L1 - B*B) / (2*A*L1)) * 180/Math.PI;
+  ang = 90 - be - ang;
+  const L = L1*Math.cos(ang*Math.PI/180) + C;
+  return [ Math.round(L*Math.sin((45+ga)*Math.PI/180)),
+           Math.round(L*Math.cos((45+ga)*Math.PI/180)),
+           Math.round(L1*Math.sin(ang*Math.PI/180)) ];
 }
 
 function isReachable(x, y, z) {
@@ -230,12 +247,14 @@ function renderDots() {
   state.legs.forEach((leg, i) => {
     const ok = isReachable(leg[0], leg[1], leg[2]);
     const editing = i===state.editing;
-    const color = editing ? "#37b6ff" : (ok ? "#4ec77f" : "#f2664f");
+    // clamp warning always wins (red) — even for the leg being edited, so it's never hidden.
+    const color = !ok ? "#f2664f" : (editing ? "#37b6ff" : "#4ec77f");
     const dot = document.getElementById("dot"+i);
     dot.textContent = "●"; dot.style.color = color;
     const st = document.getElementById("status"+i);
     if (st) {
-      st.textContent = editing ? "● EDITING" : (ok ? "REACHABLE" : "⚠ WILL CLAMP");
+      st.textContent = !ok ? (editing ? "● EDITING · ⚠ CLAMP" : "⚠ WILL CLAMP")
+                           : (editing ? "● EDITING" : "REACHABLE");
       st.style.color = color;
     }
   });
