@@ -24,7 +24,7 @@ def client():
 def test_set_legs_forwards_legs_and_speed(monkeypatch, client):
     calls = {}
 
-    async def fake_request(method, url, json=None):
+    async def fake_request(method, url, json=None, timeout=None):
         calls.update(method=method, url=url, json=json)
         return _FakeResp({"ok": True, "tool": "set_legs"})
 
@@ -40,7 +40,7 @@ def test_set_legs_forwards_legs_and_speed(monkeypatch, client):
 def test_pose_forwards_name_and_speed(monkeypatch, client):
     calls = {}
 
-    async def fake_request(method, url, json=None):
+    async def fake_request(method, url, json=None, timeout=None):
         calls.update(method=method, url=url, json=json)
         return _FakeResp({"ok": True, "tool": "pose"})
 
