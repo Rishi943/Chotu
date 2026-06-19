@@ -545,7 +545,7 @@ async def main():
         await asyncio.gather(*tasks, _stop_task, return_exceptions=True)
         from pathlib import Path as _Path
         _out = _profiler.save(
-            _Path(__file__).resolve().parent.parent / "Test outputs",
+            _Path(__file__).resolve().parent.parent / "out",
             llm_client.model, _pi_reachable,
         )
         if _out:

@@ -3,7 +3,7 @@
 For each .gguf in models/ (or a specified model), auto-starts llama-server,
 runs the Chotu workload (fake Pi + rotating JPEG frames + full system prompt +
 tools), collects per-call llama.cpp timings, and writes a markdown comparison
-table to 'Test outputs/'.
+table to 'out/'.
 
 Usage:
     python -m scripts.benchmark_models                   # all models, 8 iters each
@@ -40,7 +40,7 @@ os.environ.setdefault("PALIV_PTT", "0")
 
 REPO = Path(__file__).resolve().parent.parent
 MODELS_DIR = REPO / "models"
-OUTPUT_DIR = REPO / "Test outputs"
+OUTPUT_DIR = REPO / "out"
 PORT = 8080
 HEALTH_URL = f"http://localhost:{PORT}/health"
 STARTUP_TIMEOUT = 120  # seconds to wait for llama-server to become healthy

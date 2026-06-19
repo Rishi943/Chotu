@@ -30,7 +30,7 @@ assets/
 Launch
 .superpowers/
 Github repos/
-Test outputs/
+out/
 *.swp
 *.kate-swp
 *.crdownload

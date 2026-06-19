@@ -48,7 +48,7 @@ COMPACT_AT_TOKENS = int(os.getenv("PALIV_COMPACT_AT_TOKENS", "10000"))
 COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "6000"))
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"
-TESTOUT_DIR = Path(__file__).parent.parent / "Test outputs"
+TESTOUT_DIR = Path(__file__).parent.parent / "out"
 
 # ANSI
 DIM, BOLD, CYAN, YEL, GRN, RED, MAG = (
@@ -343,7 +343,7 @@ async def run_tick(llm, memory, frame_stack, scratch, tick, prev_motion, m: Metr
 
 def write_transcript(scenario_name: str, model: str, text_last: bool,
                      prompt_label: str, records: list, m: Metrics) -> Path:
-    """Write the run's dialogue + metrics to Test outputs/<scenario>_<date>_<time>.md."""
+    """Write the run's dialogue + metrics to out/<scenario>_<date>_<time>.md."""
     TESTOUT_DIR.mkdir(exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "", scenario_name.lower()) or "run"
     stamp = time.strftime("%Y-%m-%d_%H-%M")
