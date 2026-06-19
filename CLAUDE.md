@@ -21,8 +21,6 @@ Minimum code that solves the problem. Nothing speculative.
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
 
-Test: would a senior engineer call this overcomplicated? If yes, simplify.
-
 ### 3. Surgical changes
 Touch only what you must. Clean up only your own mess.
 - Don't "improve" adjacent code, comments, or formatting.
@@ -30,8 +28,7 @@ Touch only what you must. Clean up only your own mess.
 - Match existing style even if you'd do it differently.
 - If you notice unrelated dead code, mention it — don't delete it.
 - Remove imports/variables/functions that YOUR changes orphaned. Don't remove pre-existing dead code unless asked.
-
-Test: every changed line should trace directly to the user's request.
+- Every changed line should trace directly to the user's request.
 
 ### 4. Goal-driven execution
 Define success criteria. Loop until verified.
@@ -41,7 +38,11 @@ Define success criteria. Loop until verified.
 
 For multi-step tasks, state a brief plan with a verify step per item. Strong criteria let you loop independently; weak ones ("make it work") require constant clarification.
 
-These are working if: fewer unnecessary changes in diffs, fewer rewrites from overcomplication, clarifying questions come before implementation rather than after mistakes.
+### 5. Token economy
+CLAUDE.md loads every session — keep output and process frugal.
+- End summary = one paragraph (expand only if asked). Specs/plans/comments carry only load-bearing info.
+- Don't re-read a file to confirm an edit landed (Edit/Write errors if it didn't).
+- Prefer one targeted check over broad runs. Batch clarifying questions into one round.
 
 ## Project
 
@@ -66,18 +67,7 @@ The system prompt at runtime is `PALIV.md + CHOTU_BASE.md`, composed by `core/pr
 
 ## Dev setup
 
-- Laptop venv: `.venv/` at project root.
-- Pi venv: `~/chotu-bridge/.venv` (created with `--system-site-packages`).
-- Pi access: SSH only. Hostname `chotu.local` via mDNS, fallback to IP in `.env`.
-- Start llama-server: `llama-server -m <model.gguf> --mmproj <mmproj.gguf> --port 8080 -ngl 99 -c 32768 --parallel 1`
-- Start Pi bridge: `ssh chotu@chotu.local 'sudo ~/chotu-bridge/.venv/bin/python3 ~/chotu-bridge/server.py'`
-- Start brain: `source .venv/bin/activate && python3 -m core.brain`
-- Voice input: `PALIV_VOICE=1 python3 -m core.brain`
-- Push-to-talk GUI: `PALIV_PTT=1 python3 -m core.brain` (independent of `PALIV_VOICE`; shows `🎤|∞` pill in browser)
-- Debug logging: `PALIV_DEBUG=1`
-- Mute audio: `PALIV_MUTE=1`
-- Offline dry-run: `python -m scripts.dry_run "walk forward"` (real LLM, faked Pi)
-- Animation studio: `python -m scripts.animation_studio` (pose/animation editor on :8899, proxies to the Pi; exports frames JSON for `add-chotu-tool`)
+Venvs (`.venv/` laptop, `~/chotu-bridge/.venv` Pi), Pi access (SSH `chotu.local`), and all run/start commands + env flags: see `docs/DEV.md`.
 
 ## Code layout
 
