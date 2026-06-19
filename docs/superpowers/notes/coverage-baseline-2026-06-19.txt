@@ -1,0 +1,27 @@
+Name                            Stmts   Miss  Cover
+---------------------------------------------------
+core/__init__.py                    0      0   100%
+core/brain.py                     385    218    43%
+core/explore_agent.py              90     24    73%
+core/explore_tools.py             139     25    82%
+core/gui_server.py                 92     46    50%
+core/habits.py                     40     10    75%
+core/launcher.py                  120     42    65%
+core/llm_client.py                191     99    48%
+core/loop_helpers.py              119      3    97%
+core/motion_lock.py                45      5    89%
+core/pi_client.py                  67     42    37%
+core/prompts.py                    11      0   100%
+core/scope.py                      88      1    99%
+core/scratchpad.py                 51      1    98%
+core/session_profiler.py           53     39    26%
+core/tools.py                     166    125    25%
+core/voice.py                     129     86    33%
+core/world.py                      58      2    97%
+scripts/__init__.py                 0      0   100%
+scripts/animation_studio.py        79     31    61%
+scripts/kinematics_ref.py          43      6    86%
+scripts/render_animation.py        76      6    92%
+scripts/validate_animation.py      65     21    68%
+---------------------------------------------------
+TOTAL                            2107    832    61%
