@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 
 from core.pi_client import PiClient
-from core.scope import (
+from core.explore.scope import (
     Scope,
     TURNS_PER_REVOLUTION,
     bump_x,

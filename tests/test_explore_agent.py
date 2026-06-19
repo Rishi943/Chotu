@@ -3,7 +3,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from core import explore_agent, world
+from core.explore import agent as explore_agent
+from core import world
 
 
 @pytest.fixture

@@ -1,8 +1,8 @@
 """Pure-text chat loop for benchmarking. No tools, no heartbeat, no Pi.
 
 Usage:
-    python -m core.chat
-    PALIV_LLM_PROVIDER=claude python -m core.chat
+    python -m core.chat.chat
+    PALIV_LLM_PROVIDER=claude python -m core.chat.chat
 """
 
 import asyncio
@@ -11,7 +11,7 @@ from collections import deque
 
 from dotenv import load_dotenv
 
-from core.chat_prompt import CHAT_PROMPT
+from core.chat.prompt import CHAT_PROMPT
 from core.llm_client import LLMClient
 
 load_dotenv()

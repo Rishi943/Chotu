@@ -83,9 +83,9 @@ def test_load_corrupt_file_starts_empty(isolated_world):
 
 def test_world_records_commit_from_scope(isolated_world):
     """When scope commits a node, persist_committed_node should write to world."""
-    from core.scope import ExploreState, record_photo_state, commit_node_state, bump_x
+    from core.explore.scope import ExploreState, record_photo_state, commit_node_state, bump_x
     from core import world as world_mod
-    from core.explore_tools import persist_committed_node
+    from core.explore.tools import persist_committed_node
 
     state = ExploreState()
     record_photo_state(state, anchors=["wall"], objects=["chair"], description="d0",

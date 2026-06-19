@@ -27,8 +27,8 @@ def _fail(tool: str, error: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_scoped_move_rejects_forward():
-    from core.explore_tools import scoped_move
-    from core.scope import open_scope
+    from core.explore.tools import scoped_move
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     env = await scoped_move(pi, sc, direction="forward", steps=1)
@@ -40,8 +40,8 @@ async def test_scoped_move_rejects_forward():
 
 @pytest.mark.asyncio
 async def test_scoped_move_rejects_multi_step_turn():
-    from core.explore_tools import scoped_move
-    from core.scope import open_scope
+    from core.explore.tools import scoped_move
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     env = await scoped_move(pi, sc, direction="turn right", steps=2)
@@ -51,8 +51,8 @@ async def test_scoped_move_rejects_multi_step_turn():
 
 @pytest.mark.asyncio
 async def test_scoped_move_turn_right_calls_pi_and_bumps_x():
-    from core.explore_tools import scoped_move
-    from core.scope import open_scope
+    from core.explore.tools import scoped_move
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     pi.move.return_value = _ok("move")
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
@@ -66,8 +66,8 @@ async def test_scoped_move_turn_right_calls_pi_and_bumps_x():
 
 @pytest.mark.asyncio
 async def test_scoped_move_turn_left_decrements_x():
-    from core.explore_tools import scoped_move
-    from core.scope import open_scope, TURNS_PER_REVOLUTION
+    from core.explore.tools import scoped_move
+    from core.explore.scope import open_scope, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     pi.move.return_value = _ok("move")
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
@@ -81,8 +81,8 @@ async def test_scoped_move_turn_left_decrements_x():
 
 @pytest.mark.asyncio
 async def test_scoped_move_no_x_update_on_pi_failure():
-    from core.explore_tools import scoped_move
-    from core.scope import open_scope
+    from core.explore.tools import scoped_move
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     pi.move.return_value = _fail("move", "bridge down")
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
@@ -95,8 +95,8 @@ async def test_scoped_move_no_x_update_on_pi_failure():
 @pytest.mark.asyncio
 async def test_scoped_capture_vision_attaches_current_x(monkeypatch):
     """capture_vision result envelope is augmented with current_x."""
-    from core import explore_tools
-    from core.scope import open_scope
+    from core.explore import tools as explore_tools
+    from core.explore.scope import open_scope
 
     async def fake_capture(pi):
         return _ok("capture_vision", {"image_base64": "abc", "format": "jpeg"})
@@ -113,8 +113,8 @@ async def test_scoped_capture_vision_attaches_current_x(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scoped_record_photo_appends():
-    from core.explore_tools import scoped_record_photo
-    from core.scope import open_scope
+    from core.explore.tools import scoped_record_photo
+    from core.explore.scope import open_scope
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     sc.state.current_x = 2
     env = await scoped_record_photo(
@@ -129,8 +129,8 @@ async def test_scoped_record_photo_appends():
 @pytest.mark.asyncio
 async def test_scoped_record_photo_rejects_double_open_path_same_heading():
     """Two open_path photos at the SAME heading are rejected; different headings are allowed."""
-    from core.explore_tools import scoped_record_photo
-    from core.scope import open_scope
+    from core.explore.tools import scoped_record_photo
+    from core.explore.scope import open_scope
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     sc.state.current_x = 3
     env1 = await scoped_record_photo(sc, anchors=[], objects=[], description="d1", open_path=True, forward_steps=8)
@@ -145,8 +145,8 @@ async def test_scoped_record_photo_rejects_double_open_path_same_heading():
 @pytest.mark.asyncio
 async def test_commit_and_advance_terminal():
     """No open_path tagged → terminal: commits node, advanced:false."""
-    from core.explore_tools import scoped_commit_node_and_advance
-    from core.scope import open_scope, TURNS_PER_REVOLUTION
+    from core.explore.tools import scoped_commit_node_and_advance
+    from core.explore.scope import open_scope, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     for i in range(TURNS_PER_REVOLUTION):
@@ -166,8 +166,8 @@ async def test_commit_and_advance_terminal():
 async def test_commit_and_advance_happy_path(isolated_world):
     """open_path set, distance clear, Pi succeeds: turn from current_x to open_path_x via
     shortest side, walk forward, push edge onto path_stack, reset local state."""
-    from core.explore_tools import scoped_commit_node_and_advance
-    from core.scope import open_scope, record_photo_state, TURNS_PER_REVOLUTION
+    from core.explore.tools import scoped_commit_node_and_advance
+    from core.explore.scope import open_scope, record_photo_state, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     pi.get_distance.return_value = _ok("get_distance", {"cm": 200, "reliable": True})
     pi.move.return_value = _ok("move")
@@ -198,8 +198,8 @@ async def test_commit_and_advance_happy_path(isolated_world):
 @pytest.mark.asyncio
 async def test_commit_and_advance_blocked_by_distance(isolated_world):
     """Ultrasonic reports obstacle < 15cm: don't walk; clear open_path; bump failed_advances."""
-    from core.explore_tools import scoped_commit_node_and_advance
-    from core.scope import open_scope, record_photo_state
+    from core.explore.tools import scoped_commit_node_and_advance
+    from core.explore.scope import open_scope, record_photo_state
     pi = AsyncMock()
     pi.get_distance.return_value = _ok("get_distance", {"cm": 8, "reliable": True})
     pi.move.return_value = _ok("move")
@@ -227,8 +227,8 @@ async def test_commit_and_advance_blocked_by_distance(isolated_world):
 @pytest.mark.asyncio
 async def test_commit_and_advance_three_failures_force_return(isolated_world):
     """After 3 cumulative failed advances, the tool returns aborted:true."""
-    from core.explore_tools import scoped_commit_node_and_advance
-    from core.scope import open_scope
+    from core.explore.tools import scoped_commit_node_and_advance
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     pi.get_distance.return_value = _ok("get_distance", {"cm": 5})
     pi.move.return_value = _ok("move")
@@ -249,8 +249,8 @@ async def test_commit_and_advance_three_failures_force_return(isolated_world):
 
 @pytest.mark.asyncio
 async def test_return_to_origin_two_node_chain():
-    from core.explore_tools import scoped_return_to_origin
-    from core.scope import open_scope, TURNS_PER_REVOLUTION
+    from core.explore.tools import scoped_return_to_origin
+    from core.explore.scope import open_scope, TURNS_PER_REVOLUTION
     pi = AsyncMock()
     pi.move.return_value = _ok("move")
     pi.get_distance.return_value = _ok("get_distance", {"cm": 200})
@@ -271,8 +271,8 @@ async def test_return_to_origin_two_node_chain():
 
 @pytest.mark.asyncio
 async def test_return_to_origin_stops_on_failure():
-    from core.explore_tools import scoped_return_to_origin
-    from core.scope import open_scope
+    from core.explore.tools import scoped_return_to_origin
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     pi.get_distance.return_value = _ok("get_distance", {"cm": 200})
     # First move ok, second move (forward) fails.
@@ -290,8 +290,8 @@ async def test_return_to_origin_stops_on_failure():
 
 @pytest.mark.asyncio
 async def test_conclude_builds_map_and_signals_done():
-    from core.explore_tools import scoped_conclude
-    from core.scope import open_scope
+    from core.explore.tools import scoped_conclude
+    from core.explore.scope import open_scope
     sc = open_scope(originating_tool_call_id="call_99", originating_tool_name="explore")
     sc.state.nodes = [{"id": 0, "anchors_summary": ["bed"], "photos": []}]
     sc.state.returned_to_origin = True
@@ -309,8 +309,8 @@ async def test_conclude_builds_map_and_signals_done():
 
 @pytest.mark.asyncio
 async def test_conclude_rejects_bad_status():
-    from core.explore_tools import scoped_conclude
-    from core.scope import open_scope
+    from core.explore.tools import scoped_conclude
+    from core.explore.scope import open_scope
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     env = await scoped_conclude(sc, status="bogus", notes="")
     assert env["ok"] is False
@@ -334,14 +334,14 @@ def test_explore_schema_has_reason_param():
 
 
 def test_scope_schemas_have_no_speed_param():
-    from core.explore_tools import SCOPE_TOOL_SCHEMAS
+    from core.explore.tools import SCOPE_TOOL_SCHEMAS
     for t in SCOPE_TOOL_SCHEMAS:
         params = t["function"]["parameters"].get("properties", {})
         assert "speed" not in params, f"{t['function']['name']} must not expose speed"
 
 
 def test_scope_schemas_include_required_tools():
-    from core.explore_tools import SCOPE_TOOL_SCHEMAS
+    from core.explore.tools import SCOPE_TOOL_SCHEMAS
     names = {t["function"]["name"] for t in SCOPE_TOOL_SCHEMAS}
     assert {"move", "capture_vision", "record_photo",
             "commit_node_and_advance", "return_to_origin", "conclude"} <= names
@@ -349,8 +349,8 @@ def test_scope_schemas_include_required_tools():
 
 @pytest.mark.asyncio
 async def test_scope_dispatch_routes_record_photo():
-    from core.explore_tools import build_scope_dispatch
-    from core.scope import open_scope
+    from core.explore.tools import build_scope_dispatch
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     dispatch = build_scope_dispatch(pi, sc)
@@ -363,8 +363,8 @@ async def test_scope_dispatch_routes_record_photo():
 @pytest.mark.asyncio
 async def test_scope_dispatch_passive_tools_pass_through():
     """get_distance, get_battery, set_face, speak, wait stay available unchanged."""
-    from core.explore_tools import build_scope_dispatch
-    from core.scope import open_scope
+    from core.explore.tools import build_scope_dispatch
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     pi.get_distance.return_value = _ok("get_distance", {"cm": 100})
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
@@ -377,8 +377,8 @@ async def test_scope_dispatch_passive_tools_pass_through():
 @pytest.mark.asyncio
 async def test_scope_dispatch_blocks_pose_do_trick_investigate():
     """pose, do_trick, get_perception, investigate, explore are NOT in the scope dispatch."""
-    from core.explore_tools import build_scope_dispatch
-    from core.scope import open_scope
+    from core.explore.tools import build_scope_dispatch
+    from core.explore.scope import open_scope
     pi = AsyncMock()
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     dispatch = build_scope_dispatch(pi, sc)

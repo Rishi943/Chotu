@@ -7,13 +7,13 @@ import logging
 import os
 from pathlib import Path
 
-from core.explore_tools import SCOPE_TOOL_SCHEMAS, build_scope_dispatch
+from core.explore.tools import SCOPE_TOOL_SCHEMAS, build_scope_dispatch
 from core.pi_client import PiClient
-from core.scope import Scope, ExploreState
+from core.explore.scope import Scope, ExploreState
 
 log = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 EXPLORE_PROMPT = (REPO_ROOT / "EXPLORE.md").read_text(encoding="utf-8")
 
 MAX_NODES = int(os.getenv("PALIV_EXPLORE_MAX_NODES", "5"))

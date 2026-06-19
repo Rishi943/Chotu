@@ -76,7 +76,7 @@ async def explore_entry(pi, *, brain_module=None, tool_call_id: str, assistant_i
     appending the returned message to the local `messages` list and tagging its
     index via tag_message_index().
     """
-    from core.scope import open_scope
+    from core.explore.scope import open_scope
     if brain_module is None:
         from core import brain as brain_module_default
         brain_module = brain_module_default

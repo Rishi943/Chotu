@@ -41,7 +41,7 @@ CAPTURE_PATH = Path("/tmp/chotu_capture.jpg")
 
 
 def _load_state():
-    from core.scope import Scope, ExploreState
+    from core.explore.scope import Scope, ExploreState
 
     if STATE_PATH.exists():
         raw = json.loads(STATE_PATH.read_text())
@@ -67,7 +67,7 @@ def _load_state():
 
 
 def _fresh_scope():
-    from core.scope import Scope, ExploreState
+    from core.explore.scope import Scope, ExploreState
     import uuid
 
     return Scope(
@@ -98,7 +98,7 @@ def _save_state(scope):
 
 async def _run(tool: str, args: dict) -> dict:
     from core.pi_client import PiClient
-    from core.explore_tools import (
+    from core.explore.tools import (
         scoped_move, scoped_capture_vision, scoped_record_photo,
         scoped_commit_node_and_advance, scoped_return_to_origin, scoped_conclude,
     )

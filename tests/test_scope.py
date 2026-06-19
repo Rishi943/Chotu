@@ -2,7 +2,7 @@
 
 import pytest
 import os
-from core.scope import ExploreState, bump_x, TURNS_PER_REVOLUTION
+from core.explore.scope import ExploreState, bump_x, TURNS_PER_REVOLUTION
 
 
 def test_turns_per_revolution_default_is_10():
@@ -19,16 +19,16 @@ def test_bump_x_wraps_at_turns_per_revolution():
 def test_turns_per_revolution_env_override(monkeypatch):
     # constant is module-level; re-import after monkeypatch
     monkeypatch.setenv("PALIV_EXPLORE_TURNS_PER_REVOLUTION", "12")
-    import importlib, core.scope
-    importlib.reload(core.scope)
-    assert core.scope.TURNS_PER_REVOLUTION == 12
+    import importlib, core.explore.scope
+    importlib.reload(core.explore.scope)
+    assert core.explore.scope.TURNS_PER_REVOLUTION == 12
     # reset for other tests
     monkeypatch.delenv("PALIV_EXPLORE_TURNS_PER_REVOLUTION")
-    importlib.reload(core.scope)
+    importlib.reload(core.explore.scope)
 
 
 def test_explore_state_defaults():
-    from core.scope import ExploreState
+    from core.explore.scope import ExploreState
     s = ExploreState()
     assert s.current_node_id == 0
     assert s.current_x == 0
@@ -41,7 +41,7 @@ def test_explore_state_defaults():
 
 
 def test_scope_construction():
-    from core.scope import Scope, ExploreState
+    from core.explore.scope import Scope, ExploreState
     state = ExploreState()
     sc = Scope(
         scope_id="explore-abc",
@@ -57,7 +57,7 @@ def test_scope_construction():
 
 
 def test_bump_x_right():
-    from core.scope import ExploreState, bump_x
+    from core.explore.scope import ExploreState, bump_x
     s = ExploreState(current_x=0)
     bump_x(s, +1)
     assert s.current_x == 1
@@ -66,21 +66,21 @@ def test_bump_x_right():
 
 
 def test_bump_x_wraps_right():
-    from core.scope import ExploreState, bump_x
+    from core.explore.scope import ExploreState, bump_x
     s = ExploreState(current_x=9)
     bump_x(s, +1)
     assert s.current_x == 0
 
 
 def test_bump_x_left_wraps():
-    from core.scope import ExploreState, bump_x
+    from core.explore.scope import ExploreState, bump_x
     s = ExploreState(current_x=0)
     bump_x(s, -1)
     assert s.current_x == 9
 
 
 def test_bump_x_multi_step():
-    from core.scope import ExploreState, bump_x
+    from core.explore.scope import ExploreState, bump_x
     s = ExploreState(current_x=3)
     bump_x(s, +5)
     assert s.current_x == 8
@@ -89,7 +89,7 @@ def test_bump_x_multi_step():
 
 
 def test_record_photo_appends_with_current_x():
-    from core.scope import ExploreState, record_photo_state
+    from core.explore.scope import ExploreState, record_photo_state
     s = ExploreState(current_x=3)
     err = record_photo_state(
         s, anchors=["desk"], objects=["laptop"], description="desk ahead"
@@ -105,7 +105,7 @@ def test_record_photo_appends_with_current_x():
 
 
 def test_record_photo_open_path_requires_steps():
-    from core.scope import ExploreState, record_photo_state
+    from core.explore.scope import ExploreState, record_photo_state
     s = ExploreState(current_x=3)
     err = record_photo_state(
         s, anchors=["desk"], objects=[], description="floor clear",
@@ -118,7 +118,7 @@ def test_record_photo_open_path_requires_steps():
 
 
 def test_record_photo_open_path_sets_node_open_path():
-    from core.scope import ExploreState, record_photo_state
+    from core.explore.scope import ExploreState, record_photo_state
     s = ExploreState(current_x=3)
     err = record_photo_state(
         s, anchors=["desk"], objects=[], description="floor clear",
@@ -131,7 +131,7 @@ def test_record_photo_open_path_sets_node_open_path():
 
 
 def test_record_photo_rejects_second_open_path():
-    from core.scope import ExploreState, record_photo_state
+    from core.explore.scope import ExploreState, record_photo_state
     s = ExploreState(current_x=3)
     record_photo_state(s, ["desk"], [], "first", open_path=True, forward_steps=8)
     # same heading x=3 — should be rejected
@@ -143,7 +143,7 @@ def test_record_photo_rejects_second_open_path():
 
 
 def test_record_photo_requires_positive_forward_steps():
-    from core.scope import ExploreState, record_photo_state
+    from core.explore.scope import ExploreState, record_photo_state
     s = ExploreState(current_x=3)
     err = record_photo_state(s, [], [], "", open_path=True, forward_steps=0)
     assert err is not None
@@ -160,7 +160,7 @@ def _photo(x, anchors=(), objects=(), open_path=False, forward_steps=None, descr
 
 
 def test_commit_node_terminal():
-    from core.scope import ExploreState, commit_node_state
+    from core.explore.scope import ExploreState, commit_node_state
     s = ExploreState(current_node_id=0)
     s.current_node_photos = [_photo(i, anchors=["bed"]) for i in range(12)]
     # current_node_open_paths defaults to {} — terminal node
@@ -174,7 +174,7 @@ def test_commit_node_terminal():
 
 
 def test_commit_node_advance_resets_local_state():
-    from core.scope import ExploreState, commit_node_state
+    from core.explore.scope import ExploreState, commit_node_state
     s = ExploreState(current_node_id=0, current_x=3)
     s.current_node_photos = [_photo(i) for i in range(12)]
     s.current_node_open_paths = {3: {"x": 3, "forward_steps": 8}}
@@ -189,7 +189,7 @@ def test_commit_node_advance_resets_local_state():
 
 
 def test_anchors_summary_dedup_preserves_order():
-    from core.scope import ExploreState, commit_node_state
+    from core.explore.scope import ExploreState, commit_node_state
     s = ExploreState(current_node_id=0)
     s.current_node_photos = [
         _photo(0, anchors=["bed", "vent"]),
@@ -204,7 +204,7 @@ def test_plan_return_two_node_chain():
     """Path: node 0 → (x=3, 8 steps) → node 1 (terminal).
     Robot is at node 1, current_x=0 (arrival heading).
     Return = turn right 5 (180° with mod 10), forward 8."""
-    from core.scope import plan_return_steps
+    from core.explore.scope import plan_return_steps
     path_stack = [{"from_node": 0, "open_path_x": 3, "forward_steps": 8}]
     current_x = 0
     steps = plan_return_steps(path_stack, current_x)
@@ -215,7 +215,7 @@ def test_plan_return_two_node_chain():
 
 
 def test_plan_return_three_node_chain():
-    from core.scope import plan_return_steps
+    from core.explore.scope import plan_return_steps
     path_stack = [
         {"from_node": 0, "open_path_x": 3, "forward_steps": 8},
         {"from_node": 1, "open_path_x": 1, "forward_steps": 6},
@@ -232,7 +232,7 @@ def test_plan_return_three_node_chain():
 
 
 def test_build_map_minimal():
-    from core.scope import ExploreState, build_map
+    from core.explore.scope import ExploreState, build_map
     s = ExploreState()
     s.nodes = [
         {"id": 0, "anchors_summary": ["bed"], "photos": [{"x": 0}]},
@@ -250,7 +250,7 @@ def test_build_map_minimal():
 def test_build_map_returned_false_when_unset():
     """If return_to_origin was never called (e.g. LLM concluded without it),
     returned_to_origin should serialize as False, not None."""
-    from core.scope import ExploreState, build_map
+    from core.explore.scope import ExploreState, build_map
     s = ExploreState()
     s.nodes = [{"id": 0, "anchors_summary": [], "photos": []}]
     s.returned_to_origin = None
@@ -259,7 +259,7 @@ def test_build_map_returned_false_when_unset():
 
 
 def test_splice_messages_removes_tagged_and_appends_tool_result():
-    from core.scope import splice_messages
+    from core.explore.scope import splice_messages
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "hi"},
@@ -280,7 +280,7 @@ def test_splice_messages_removes_tagged_and_appends_tool_result():
 
 
 def test_splice_messages_preserves_input_when_no_tags():
-    from core.scope import splice_messages
+    from core.explore.scope import splice_messages
     messages = [{"role": "user", "content": "hi"}]
     spliced = splice_messages(messages, tagged_indexes=[], tool_call_id="call_x", result_json="{}")
     assert spliced == [
@@ -290,7 +290,7 @@ def test_splice_messages_preserves_input_when_no_tags():
 
 
 def test_open_scope_returns_scope_with_state():
-    from core.scope import open_scope
+    from core.explore.scope import open_scope
     sc = open_scope(originating_tool_call_id="call_99", originating_tool_name="explore")
     assert sc.originating_tool_call_id == "call_99"
     assert sc.originating_tool_name == "explore"
@@ -300,7 +300,7 @@ def test_open_scope_returns_scope_with_state():
 
 
 def test_tag_message_index():
-    from core.scope import open_scope, tag_message_index
+    from core.explore.scope import open_scope, tag_message_index
     sc = open_scope(originating_tool_call_id="x", originating_tool_name="explore")
     tag_message_index(sc, 5)
     tag_message_index(sc, 7)
@@ -308,7 +308,7 @@ def test_tag_message_index():
 
 
 def test_open_path_allowed_on_distinct_headings():
-    from core.scope import ExploreState, record_photo_state, bump_x
+    from core.explore.scope import ExploreState, record_photo_state, bump_x
     state = ExploreState()
     err = record_photo_state(state, anchors=["a"], objects=[], description="d0",
                              open_path=True, forward_steps=3)
@@ -320,7 +320,7 @@ def test_open_path_allowed_on_distinct_headings():
 
 
 def test_open_path_same_heading_rejected():
-    from core.scope import ExploreState, record_photo_state
+    from core.explore.scope import ExploreState, record_photo_state
     state = ExploreState()
     record_photo_state(state, anchors=["a"], objects=[], description="d0",
                        open_path=True, forward_steps=3)
@@ -330,7 +330,7 @@ def test_open_path_same_heading_rejected():
 
 
 def test_commit_node_advances_first_open_path():
-    from core.scope import ExploreState, record_photo_state, commit_node_state, bump_x
+    from core.explore.scope import ExploreState, record_photo_state, commit_node_state, bump_x
     state = ExploreState()
     record_photo_state(state, anchors=["a"], objects=[], description="first",
                        open_path=True, forward_steps=3)
