@@ -170,11 +170,12 @@ def _read_key() -> str:
     return ch
 
 
-def run_launcher() -> None:
-    """Interactive pre-launch config screen. Mutates os.environ in place.
-    No-op when stdin is not a TTY or PALIV_NO_LAUNCHER=1."""
+def run_launcher() -> "LauncherState":
+    """Interactive pre-launch config screen. Mutates os.environ in place and
+    returns the resolved LauncherState. No-op (returns a state seeded from the
+    current env, without mutating it) when stdin is not a TTY or PALIV_NO_LAUNCHER=1."""
     if os.getenv("PALIV_NO_LAUNCHER") == "1" or not sys.stdin.isatty():
-        return
+        return LauncherState.seed_from_env(dict(os.environ))
 
     import termios
     import tty
@@ -206,3 +207,4 @@ def run_launcher() -> None:
 
     for var, val in state.to_env().items():
         os.environ[var] = val
+    return state

@@ -194,13 +194,15 @@ def test_render_shows_new_rows():
 def test_run_launcher_noop_when_disabled(monkeypatch):
     monkeypatch.setenv("PALIV_NO_LAUNCHER", "1")
     monkeypatch.setenv("PALIV_BRAIN_MODEL", "sentinel-unchanged")
-    launcher.run_launcher()
+    state = launcher.run_launcher()
     assert os.environ["PALIV_BRAIN_MODEL"] == "sentinel-unchanged"
+    assert isinstance(state, LauncherState)
 
 
 def test_run_launcher_noop_when_not_tty(monkeypatch):
     monkeypatch.delenv("PALIV_NO_LAUNCHER", raising=False)
     monkeypatch.setattr(launcher.sys.stdin, "isatty", lambda: False)
     monkeypatch.setenv("PALIV_BRAIN_MODEL", "sentinel-unchanged")
-    launcher.run_launcher()
+    state = launcher.run_launcher()
     assert os.environ["PALIV_BRAIN_MODEL"] == "sentinel-unchanged"
+    assert isinstance(state, LauncherState)
