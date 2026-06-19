@@ -8,14 +8,30 @@ import core.launcher as launcher
 
 def test_presets_order_and_content():
     labels = [p["label"] for p in PRESETS]
-    assert labels == ["Gemma", "Qwen", "Claude"]
-    gemma, qwen, claude = PRESETS
-    assert gemma["provider"] == "local"
+    assert labels == ["Gemma", "Qwen", "Qwen cloud", "Claude"]
+    gemma, qwen, qcloud, claude = PRESETS
+    assert gemma["provider"] == "local" and gemma["spawn_llama"] is True
     assert gemma["model"] == "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
-    assert qwen["provider"] == "local"
-    assert qwen["model"] == "Qwen3.5-4B-Q4_K_M.gguf"
-    assert claude["provider"] == "claude"
-    assert claude["model"] == "claude-sonnet-4-6"
+    assert qwen["spawn_llama"] is True and qwen["model"] == "Qwen3.5-4B-Q4_K_M.gguf"
+    assert qcloud["provider"] == "local" and qcloud["spawn_llama"] is False
+    assert qcloud["model"] == "qwen3.5-flash"
+    assert claude["provider"] == "claude" and claude["spawn_llama"] is False
+
+
+def test_llama_args_gemma_has_swa_full():
+    from pathlib import Path
+    args = launcher.llama_args(PRESETS[0], Path("/m"))
+    assert args[0] == "llama-server"
+    assert "/m/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf" in args
+    assert "/m/gemma_mmproj-BF16.gguf" in args
+    assert "--swa-full" in args
+
+
+def test_llama_args_qwen_no_swa_full():
+    from pathlib import Path
+    args = launcher.llama_args(PRESETS[1], Path("/m"))
+    assert "/m/mmproj-BF16.gguf" in args
+    assert "--swa-full" not in args
 
 
 def test_to_env_defaults_qwen_base_all_off():

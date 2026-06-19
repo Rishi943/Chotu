@@ -8,12 +8,31 @@ selections win over .env (which loads with override=False)."""
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 PRESETS = [
-    {"label": "Gemma",  "provider": "local",  "model": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf", "tag": "local"},
-    {"label": "Qwen",   "provider": "local",  "model": "Qwen3.5-4B-Q4_K_M.gguf",             "tag": "local"},
-    {"label": "Claude", "provider": "claude", "model": "claude-sonnet-4-6",                  "tag": "cloud — spends tokens"},
+    {"label": "Gemma", "provider": "local", "model": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+     "tag": "local", "spawn_llama": True, "mmproj": "gemma_mmproj-BF16.gguf",
+     "extra": ["--swa-full", "--reasoning-budget", "-1"]},
+    {"label": "Qwen", "provider": "local", "model": "Qwen3.5-4B-Q4_K_M.gguf",
+     "tag": "local", "spawn_llama": True, "mmproj": "mmproj-BF16.gguf", "extra": []},
+    {"label": "Qwen cloud", "provider": "local", "model": "qwen3.5-flash",
+     "tag": "cloud — DashScope, spends tokens", "spawn_llama": False, "mmproj": None, "extra": None},
+    {"label": "Claude", "provider": "claude", "model": "claude-sonnet-4-6",
+     "tag": "cloud — spends tokens", "spawn_llama": False, "mmproj": None, "extra": None},
 ]
+
+
+def llama_args(preset: dict, models_dir: Path) -> list[str]:
+    """Build the llama-server argv for a local preset. Mirrors the repo's Launch flags."""
+    return [
+        "llama-server",
+        "-m", str(models_dir / preset["model"]),
+        "--mmproj", str(models_dir / preset["mmproj"]),
+        "--port", "8080", "-ngl", "99", "-c", "16384", "--parallel", "1",
+        "--image-max-tokens", "140", "--temp", "0.7", "--top-p", "0.95", "--top-k", "64",
+        *preset["extra"],
+    ]
 
 # Toggle field name -> env var.
 TOGGLES = {"mute": "PALIV_MUTE", "debug": "PALIV_DEBUG", "voice": "PALIV_VOICE", "ptt": "PALIV_PTT"}
