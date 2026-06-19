@@ -25,7 +25,8 @@ gitignored `out/`. Animations live in `assets/Animations/` (name is hardcoded).
 | `spells.py` | Spell implementations (wand pose + soundbite + Tuya/HA call). |
 | `voice.py` | Wake word (openWakeWord) + Whisper STT; `record_push_to_talk()` one-shot PTT. |
 | `gui_server.py` | Browser GUI (FastAPI + SSE): `/events`, `/ptt`, `/handsfree`, `/chat`, `/api/config`. |
-| `launcher.py` | Pre-launch config screen (TTY) that runs before env-reading imports. |
+| `launcher.py` | Pre-launch TTY config screen: presets + persona/input/mute/debug/stats/Pi-bridge; returns a `LauncherState`. |
+| `run.py` | Launcher orchestrator (`./launch.sh` → `python -m core.run`): config screen → spawn llama-server/Pi bridge → health-gate → run brain foreground → teardown llama on exit. |
 | `world.py` | World-map model (nodes/anchors) persisted to `data/world.json`. |
 
 ### core/explore/ — exploration subagent (deferred; kept, not wired into brain)
@@ -94,4 +95,5 @@ gitignored `out/`. Animations live in `assets/Animations/` (name is hardcoded).
 - `tests/` — pytest suite (`testpaths=tests`); the only auto-collected tests.
 - `docs/superpowers/specs|plans/` — design specs + implementation plans (force-added; `docs/` is otherwise gitignored).
 - `assets/` — gitignored: `Animations/` (load-bearing JSON), `faces/`, `spells/`, photos, CAD reference.
-- `out/` — gitignored run-outputs (session logs, benchmarks, renders).
+- `out/` — gitignored run-outputs (session logs, benchmarks, renders, `llama.log`/`bridge.log`).
+- `launch.sh` — repo-root entrypoint: activates the venv and runs `python -m core.run`.
