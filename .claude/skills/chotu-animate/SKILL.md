@@ -30,8 +30,26 @@ Leg order is **[FR, FL, RL, RR]** (front-right, front-left, rear-left, rear-righ
   tick — a handful of poses per cycle is enough; the studio fills the in-betweens.
 - **Gaits (crab/forward/turn):** repeat a **lift → shift → plant** cycle per leg. Move one leg at a
   time; keep **≥3 feet planted** (z≈stand) so the support polygon holds and the body won't tip. E.g.
-  sideways crab step: lift FR (z→-30), shift it laterally (change y/x), plant (z→-50), then the
+  sideways crab step: lift FR (z→-30), shift it laterally (change x), plant (z→-50), then the
   diagonal leg, etc. `assets/Animations/builtin/forward.json` is the canonical worked gait — read it.
+- **Axis mapping (verified):** local **x = world-lateral** (sideways), **y = world fore-aft**,
+  **z = height**. So a sideways crab modulates **x** (right legs FR/RR step world-right by *decreasing*
+  x; left legs FL/RL by *increasing* x). Forward/back gaits modulate y. Probe with
+  `scripts.render_animation.joints(i,legs)` if unsure.
+- **Static-stability findings (learned the hard way — don't repeat):**
+  - The default `STAND` is fore-aft asymmetric (right legs y=45), so lifting the world-left feet
+    (robot's **FR/RR**) from stand already tips — `support_ok` False. Stand only safely single-lifts
+    FL/RL.
+  - A **perfectly symmetric stance has ZERO static margin**: lifting any one leg puts the CoM exactly
+    on the support-triangle diagonal (tipping line). Symmetry alone does NOT make a stable gait.
+  - **Statically-stable crawl ⇒ lean every step:** before lifting leg i, shift ALL four feet a few mm
+    (a world lean) to move the CoM into the triangle of the other three, then lift/step/plant/un-lean.
+    Brute-force the lean against `support_ok` as the oracle (see how `crab_right_static` was built).
+  - **Dynamic trot** (move diagonal pairs together, big fast steps) is faster but only 2 feet are
+    down — it CANNOT pass the static overlay (swing frames flag "tip!"); that's expected, confirm on
+    hardware. `crab_right_trot` is the worked example.
+  - The previewer keeps the body fixed at origin (no body translation) — true sideways travel only
+    shows on the real robot. CoM check is therefore static/pessimistic for dynamic gaits.
 - **Gestures (wave/nod/stretch):** mostly one limb moving from stand and back; the rest hold stand.
   Few keyframes, larger per-step deltas are fine.
 - **Idle/ambient (sway/breathe/look):** small periodic z/x offsets on all legs; subtle, loopable.
