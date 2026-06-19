@@ -34,14 +34,18 @@ def llama_args(preset: dict, models_dir: Path) -> list[str]:
         *preset["extra"],
     ]
 
-# Toggle field name -> env var.
-TOGGLES = {"mute": "PALIV_MUTE", "debug": "PALIV_DEBUG", "voice": "PALIV_VOICE", "ptt": "PALIV_PTT"}
+# Toggle field name -> env var (checkbox toggles only).
+TOGGLES = {"mute": "PALIV_MUTE", "debug": "PALIV_DEBUG", "stats": "PALIV_SHOW_STATS"}
 
-N_ROWS = 9          # 3 presets + mute/debug/voice/ptt + persona + Start
-START_ROW = 8
-PERSONA_ROW = 7
-PRESET_ROWS = (0, 1, 2)
-TOGGLE_BY_ROW = {3: "mute", 4: "debug", 5: "voice", 6: "ptt"}
+N_ROWS = 11         # 4 presets + persona + input + mute/debug/stats + pi-bridge + Start
+START_ROW = 10
+PIBRIDGE_ROW = 9
+PERSONA_ROW = 4
+INPUT_ROW = 5
+PRESET_ROWS = (0, 1, 2, 3)
+TOGGLE_BY_ROW = {6: "mute", 7: "debug", 8: "stats"}
+_INPUT_CYCLE = ["text", "voice", "ptt"]
+_PI_CYCLE = ["running", "start", "offline"]
 
 
 @dataclass
@@ -49,8 +53,9 @@ class LauncherState:
     preset_idx: int = 1            # default highlight: Qwen
     mute: bool = False
     debug: bool = False
-    voice: bool = False
-    ptt: bool = False
+    stats: bool = False
+    input_mode: str = "text"       # text | voice | ptt
+    pi_mode: str = "running"       # running | start | offline
     persona: str = "base"          # "base" or "reel"
     focus: int = 0                 # index into the focusable row list
 
@@ -59,17 +64,26 @@ class LauncherState:
         provider = env.get("PALIV_LLM_PROVIDER", "local")
         model = env.get("PALIV_BRAIN_MODEL", "")
         if provider == "claude":
+            preset_idx = 3
+        elif model == "qwen3.5-flash":
             preset_idx = 2
         elif "gemma" in model.lower():
             preset_idx = 0
         else:
             preset_idx = 1  # default: Qwen
+        if env.get("PALIV_PTT") == "1":
+            input_mode = "ptt"
+        elif env.get("PALIV_VOICE") == "1":
+            input_mode = "voice"
+        else:
+            input_mode = "text"
         return cls(
             preset_idx=preset_idx,
             mute=env.get("PALIV_MUTE") == "1",
             debug=env.get("PALIV_DEBUG") == "1",
-            voice=env.get("PALIV_VOICE") == "1",
-            ptt=env.get("PALIV_PTT") == "1",
+            stats=env.get("PALIV_SHOW_STATS") == "1",
+            input_mode=input_mode,
+            pi_mode="running",
             persona="reel" if env.get("PALIV_PERSONA") == "reel" else "base",
         )
 
@@ -90,6 +104,10 @@ class LauncherState:
             elif self.focus in TOGGLE_BY_ROW:
                 name = TOGGLE_BY_ROW[self.focus]
                 setattr(self, name, not getattr(self, name))
+            elif self.focus == INPUT_ROW:
+                self.input_mode = _INPUT_CYCLE[(_INPUT_CYCLE.index(self.input_mode) + 1) % 3]
+            elif self.focus == PIBRIDGE_ROW:
+                self.pi_mode = _PI_CYCLE[(_PI_CYCLE.index(self.pi_mode) + 1) % 3]
             elif self.focus == PERSONA_ROW:
                 self.persona = "reel" if self.persona == "base" else "base"
             return ("continue", self)
@@ -101,27 +119,31 @@ class LauncherState:
             "PALIV_LLM_PROVIDER": preset["provider"],
             "PALIV_BRAIN_MODEL": preset["model"],
             "PALIV_PERSONA": "reel" if self.persona == "reel" else "",
+            "PALIV_VOICE": "1" if self.input_mode == "voice" else "0",
+            "PALIV_PTT": "1" if self.input_mode == "ptt" else "0",
         }
         for field_name, var in TOGGLES.items():
             env[var] = "1" if getattr(self, field_name) else "0"
+        if preset["spawn_llama"]:
+            env["PALIV_BRAIN_URL"] = "http://127.0.0.1:8080/v1"
+            env["PALIV_BRAIN_KEY"] = ""
         return env
 
     def render(self) -> str:
         def cur(row): return "›" if self.focus == row else " "
-        lines = ["  Chotu brain — launch config        (↑/↓ move · space toggle · enter start · q quit)", ""]
-        lines.append("  Model:")
+        lines = ["  Chotu brain — launch config        (↑/↓ move · space toggle · enter start · q quit)",
+                 "", "  Model:"]
         for i, p in enumerate(PRESETS):
             mark = "•" if self.preset_idx == i else " "
-            tag = f"  ({p['tag']})" if p["tag"] != "local" else "  (local)"
-            lines.append(f"  {cur(i)} ({mark}) {p['label']}{tag}")
-            if self.preset_idx == i and p["provider"] == "local":
-                lines.append("        ↳ launch llama-server with this gguf")
+            lines.append(f"  {cur(i)} ({mark}) {p['label']}  ({p['tag']})")
         lines.append("")
-        for row, name, label in [(3, "mute", "Mute"), (4, "debug", "Debug"),
-                                 (5, "voice", "Voice"), (6, "ptt", "PTT")]:
+        lines.append(f"  {cur(PERSONA_ROW)} Persona: {self.persona} ▸")
+        lines.append(f"  {cur(INPUT_ROW)} Input: {self.input_mode} ▸")
+        lines.append("")
+        for row, name, label in [(6, "mute", "Mute"), (7, "debug", "Debug"), (8, "stats", "Stats")]:
             box = "✓" if getattr(self, name) else " "
             lines.append(f"  {cur(row)} [{box}] {label}")
-        lines.append(f"  {cur(PERSONA_ROW)} Persona: {self.persona} ▸")
+        lines.append(f"  {cur(PIBRIDGE_ROW)} Pi bridge: {self.pi_mode} ▸")
         lines.append("")
         lines.append(f"  {cur(START_ROW)} Start ▶")
         return "\n".join(lines)
