@@ -29,7 +29,6 @@ import base64
 import json
 import os
 import sys
-from dataclasses import asdict
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -102,7 +101,7 @@ async def _run(tool: str, args: dict) -> dict:
         scoped_move, scoped_capture_vision, scoped_record_photo,
         scoped_commit_node_and_advance, scoped_return_to_origin, scoped_conclude,
     )
-    from core.tools import local_wait, _do_speak
+    from core.tools import _do_speak
 
     pi_host = os.getenv("PI_HOST", "http://chotu.local:7000")
     pi = PiClient(pi_host)

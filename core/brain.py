@@ -25,7 +25,7 @@ from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
 from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
 from core.loop_helpers import (
-    describe_motion, motion_from_calls, push_frame, render_frames,
+    motion_from_calls, push_frame, render_frames,
     maybe_compact, cap_result, pace_remainder, split_tool_calls,
     PendingInput, paced_sleep,
 )
@@ -50,7 +50,7 @@ COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "6000"))  # est
 
 listen_and_transcribe = None
 if VOICE_ENABLED:
-    from core.voice import listen_and_transcribe
+    pass
 
 
 def strip_internal_fields(messages: list[dict]) -> list[dict]:
@@ -256,10 +256,6 @@ async def _run_one(tc):
     args_json = tc.function.arguments
     dbg(f"dispatching {name}({args_json})")
     result = await dispatch_tool(dispatch_map, name, args_json)
-    try:
-        args = json.loads(args_json) if args_json else {}
-    except json.JSONDecodeError:
-        args = {}
     return tc, name, args_json, result
 
 

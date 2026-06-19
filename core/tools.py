@@ -354,7 +354,6 @@ async def local_speak(text: str, face_pi=None) -> dict:
 
     if speak_output == "pi" and face_pi is not None:
         # Wrap raw PCM in a WAV header and POST to Pi's /play_wav
-        num_samples = len(pcm) // 2
         sample_rate = 22050
         wav_header = struct.pack(
             "<4sI4s4sIHHIIHH4sI",
@@ -366,7 +365,7 @@ async def local_speak(text: str, face_pi=None) -> dict:
         wav_bytes = wav_header + pcm
 
         async with _get_tts_lock():
-            result = await face_pi.play_wav(wav_bytes)
+            await face_pi.play_wav(wav_bytes)
 
         backend = "piper-pi"
     else:

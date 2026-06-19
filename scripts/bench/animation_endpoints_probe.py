@@ -1,4 +1,3 @@
-import json
 from starlette.testclient import TestClient
 from scripts.animation.animation_studio import app, _ANIM_DIR
 

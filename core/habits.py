@@ -5,7 +5,6 @@ Each habit is an async function `habit(pi: PiClient) -> dict`, returning a stand
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from pathlib import Path

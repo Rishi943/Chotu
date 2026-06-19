@@ -55,7 +55,6 @@ async def scoped_move(pi: PiClient, scope: Scope, *, direction: str, steps: int 
 
 
 async def scoped_capture_vision(pi: PiClient, scope: Scope) -> dict:
-    started = time.time()
     env = await capture_vision_tool(pi)
     if env.get("ok"):
         env["result"] = {**env.get("result", {}), "current_x": scope.state.current_x}
