@@ -27,3 +27,54 @@ def test_plan_offline_skips_pi_check():
 def test_plan_pi_start_sets_start_bridge():
     plan = plan_services(LauncherState(preset_idx=1, pi_mode="start"), Path("/repo"), "http://pi:7000")
     assert plan.start_bridge is True
+
+
+import subprocess
+
+import pytest
+
+from core import run as runmod
+
+
+def test_wait_healthy_returns_when_all_ok():
+    seen = {"n": 0}
+
+    def probe(url):
+        seen["n"] += 1
+        return seen["n"] >= 2          # first poll False, then True
+
+    runmod.wait_healthy([("llama", "u")], probe=probe, timeout=5, interval=0, sleep=lambda s: None)
+    assert seen["n"] >= 2
+
+
+def test_wait_healthy_times_out():
+    with pytest.raises(TimeoutError):
+        runmod.wait_healthy([("pi", "u")], probe=lambda u: False,
+                            timeout=0.0, interval=0, sleep=lambda s: None)
+
+
+class _FakeProc:
+    def __init__(self):
+        self.terminated = self.killed = False
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        self.killed = True
+
+
+def test_teardown_terminates_gracefully():
+    p = _FakeProc()
+    runmod.teardown([p])
+    assert p.terminated and not p.killed
+
+
+def test_teardown_kills_when_wait_times_out():
+    p = _FakeProc()
+    p.wait = lambda timeout=None: (_ for _ in ()).throw(subprocess.TimeoutExpired("p", timeout))
+    runmod.teardown([p])
+    assert p.killed
