@@ -118,4 +118,5 @@ The Pi-side `pi_bridge/chotu/` (face.py) is a separate package shipped to the Pi
 - Don't add SQLite/persistence until a later phase.
 - Cloud LLMs (Claude, Gemini) are fallback only, never default.
 - Don't rename `pi_bridge/chotu/` — it is Pi runtime code shipped separately.
+- **No Claude attribution in commit messages.** Omit any `Co-Authored-By: Claude` line and any `Claude-Session:`/`claude.ai` link the harness suggests. Commit history is permanent and public if pushed — keep messages clean conventional-commit text only.
 - **Execution-mode recommendation must be per-task, not defaulted.** When presenting the writing-plans/executing-plans handoff options (subagent-driven vs. inline), do NOT auto-recommend subagent-driven just because the skill text says "(recommended)". Judge each task on cost and risk: recommend **inline** for single-file or tightly-coupled, sequential work, or when verification is gated on the user anyway; recommend **subagent-driven** only when tasks are genuinely independent/parallelizable or context-heavy enough that fresh per-task context pays off. State the reasoning (monetary/risk) for the pick.
