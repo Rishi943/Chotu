@@ -75,8 +75,6 @@ Venvs (`.venv/` laptop, `~/chotu-bridge/.venv` Pi), Pi access (SSH `chotu.local`
 |---|---|---|
 | `core/brain.py` | laptop | Live loop, memory, terminal/voice input, tool dispatch |
 | `core/prompts.py` | laptop | Composes PALIV.md + CHOTU_BASE.md as `SYSTEM_PROMPT` |
-| `core/heartbeat.py` | laptop | Heartbeat scheduler + tool-chain guard |
-| `core/events.py` | laptop | Event injectors (wake_word, battery_low, stop_word) |
 | `core/habits.py` | laptop | Habit-tool bodies (placeholder; will hold investigate/explore once workflow sub-agent lands) |
 | `core/pi_client.py` | laptop | Async httpx wrapper for every Pi bridge endpoint |
 | `core/tools.py` | laptop | OpenAI tool schemas + dispatch map + `capture_vision_tool` |
@@ -87,6 +85,8 @@ Venvs (`.venv/` laptop, `~/chotu-bridge/.venv` Pi), Pi access (SSH `chotu.local`
 | `pi_bridge/server.py` | Pi | FastAPI bridge — `/move`, `/pose`, `/set_legs`, `/trick`, `/distance`, `/capture`, `/battery`, `/perception`, `/face`, `/health`, `/speak` |
 
 The Pi-side `pi_bridge/chotu/` (face.py) is a separate package shipped to the Pi alongside `server.py` — do not rename it; it has nothing to do with the laptop `chotu`→`core` rename.
+
+For the full per-file index (every module in `core/`, `core/explore/`, `core/chat/`, `scripts/`, `pi_bridge/` with a one-line purpose), see **`docs/REPO_MAP.md`** — read it to orient instead of grepping the tree, and keep it in sync when files move.
 
 ## Conventions
 
