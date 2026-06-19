@@ -1,5 +1,5 @@
 import json, pathlib, pytest
-from scripts.validate_animation import validate, install, STAND
+from scripts.animation.validate_animation import validate, install, STAND
 
 def _anim(frames, tool="t"): return {"tool":tool,"description":"d","default_speed":60,"frames":frames}
 def F(legs): return {"legs":legs,"speed":60,"hold_s":0}

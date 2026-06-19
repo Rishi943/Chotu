@@ -1,6 +1,6 @@
 """Pins the picrawler IK port. The JS in studio.html must reproduce these."""
 
-from scripts.kinematics_ref import coord2polar, is_reachable, A, B, C
+from scripts.animation.kinematics_ref import coord2polar, is_reachable, A, B, C
 
 
 def test_constants_match_picrawler():

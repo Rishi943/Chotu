@@ -5,12 +5,12 @@ import subprocess
 import sys
 
 SNAKE = re.compile(r"^[a-z][a-z0-9_]*$")
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 BUILTIN = ROOT / "assets" / "Animations" / "builtin"
 
 
 def test_generate_and_validate():
-    subprocess.run([sys.executable, "-m", "scripts.gen_builtin_animations"],
+    subprocess.run([sys.executable, "-m", "scripts.animation.gen_builtin_animations"],
                    cwd=ROOT, check=True)
     files = list(BUILTIN.glob("*.json"))
     expected = {"forward", "backward", "turn_left", "turn_right", "wave", "sit", "stand",

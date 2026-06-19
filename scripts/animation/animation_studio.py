@@ -2,7 +2,7 @@
 
 Serves studio.html and forwards the few motion endpoints the browser needs to
 the Pi bridge (the browser can't POST cross-origin to the Pi). Independent of
-core.brain. Run: python -m scripts.animation_studio  (then open :8899).
+core.brain. Run: python -m scripts.animation.animation_studio  (then open :8899).
 """
 
 import json
@@ -20,7 +20,7 @@ load_dotenv()
 PI_HOST = os.getenv("PI_HOST", "http://chotu.local:7000")
 _STUDIO_HTML = pathlib.Path(__file__).parent / "studio.html"
 
-_REPO = pathlib.Path(__file__).resolve().parent.parent
+_REPO = pathlib.Path(__file__).resolve().parents[2]
 _ANIM_DIR = _REPO / "assets" / "Animations"
 _BUILTIN_DIR = _ANIM_DIR / "builtin"
 _SNAKE = re.compile(r"^[a-z][a-z0-9_]*$")

@@ -1,13 +1,13 @@
 """Validate (and optionally install) a Chotu frames-JSON animation. Laptop-only, no hardware.
-Reachability gate uses scripts.kinematics_ref. Run: python -m scripts.validate_animation <f.json> [--install]"""
+Reachability gate uses scripts.animation.kinematics_ref. Run: python -m scripts.animation.validate_animation <f.json> [--install]"""
 import argparse, json, math, pathlib, re, sys
 from collections import namedtuple
-from scripts.kinematics_ref import A, B, C, is_reachable, coord2polar
+from scripts.animation.kinematics_ref import A, B, C, is_reachable, coord2polar
 
 LEG_NAMES = ["FR", "FL", "RL", "RR"]
 STAND = [[45, 45, -50], [45, 0, -50], [45, 0, -50], [45, 45, -50]]
 _SNAKE = re.compile(r"^[a-z][a-z0-9_]*$")
-_ANIM_DIR = pathlib.Path(__file__).resolve().parent.parent / "assets" / "Animations"
+_ANIM_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "Animations"
 Issue = namedtuple("Issue", "severity msg")
 def E(m): return Issue("ERROR", m)
 def W(m): return Issue("WARN", m)

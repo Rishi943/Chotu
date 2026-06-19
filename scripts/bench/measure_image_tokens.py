@@ -12,9 +12,9 @@ The result is specific to PALIV_LLM_PROVIDER + PALIV_BRAIN_MODEL. Run it once
 per model you care about (swap the env vars between runs).
 
 Usage:
-    python -m scripts.measure_image_tokens                  # uses live Pi /capture
-    python -m scripts.measure_image_tokens --image foo.jpg  # use a local JPEG instead
-    python -m scripts.measure_image_tokens --repeat 3       # confirm determinism
+    python -m scripts.bench.measure_image_tokens                  # uses live Pi /capture
+    python -m scripts.bench.measure_image_tokens --image foo.jpg  # use a local JPEG instead
+    python -m scripts.bench.measure_image_tokens --repeat 3       # confirm determinism
 """
 
 import argparse

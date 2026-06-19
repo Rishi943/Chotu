@@ -1,7 +1,7 @@
 """Standalone capture viewer for the CC Chotu skill — port 8889.
 
 Proxies the Pi's MJPEG live stream and serves the latest /tmp/chotu_capture.jpg.
-Run with: python -m scripts.cc_viewer
+Run with: python -m scripts.robot.cc_viewer
 """
 
 import os

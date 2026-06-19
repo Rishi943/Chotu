@@ -4,7 +4,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from scripts import animation_studio as studio
+from scripts.animation import animation_studio as studio
 
 
 class _FakeResp:

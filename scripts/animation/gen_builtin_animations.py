@@ -3,13 +3,13 @@
 One-time, reproducible, NO hardware imports. Gait/pose step lists are ported verbatim
 from the picrawler MoveList (read off the Pi); trick keyframes are sampled from the
 procedural routines in pi_bridge/server.py. Each step (4x[x,y,z]) becomes one frame.
-Run: python -m scripts.gen_builtin_animations
+Run: python -m scripts.animation.gen_builtin_animations
 """
 import json
 import math
 import pathlib
 
-OUT = pathlib.Path(__file__).resolve().parent.parent / "assets" / "Animations" / "builtin"
+OUT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "Animations" / "builtin"
 
 # --- picrawler MoveList constants (verbatim) ---
 XD, XT, XS = 45, 70, 0          # X_DEFAULT, X_TURN, X_START

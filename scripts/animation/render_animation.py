@@ -1,10 +1,10 @@
 """Render a Chotu frames-JSON to a contact-sheet PNG (top + side per frame) for visual review.
 Kinematic (geometry) only — Chotu is quasi-static; --stability draws the support polygon + CoM.
-Run: python -m scripts.render_animation <f.json> [--stability] [--out PATH]"""
+Run: python -m scripts.animation.render_animation <f.json> [--stability] [--out PATH]"""
 import argparse, json, math, pathlib, sys
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from scripts.kinematics_ref import A, B, C, LENGTH_SIDE
+from scripts.animation.kinematics_ref import A, B, C, LENGTH_SIDE
 
 HALF = LENGTH_SIDE / 2
 # (px, pz, sgn_x, sgn_y) per leg — mirror of studio CORNERS3D (FR,FL,RL,RR).

@@ -1,6 +1,6 @@
 import pathlib
-from scripts.render_animation import render, support_ok
-from scripts.validate_animation import STAND
+from scripts.animation.render_animation import render, support_ok
+from scripts.animation.validate_animation import STAND
 
 def _anim(frames): return {"tool":"t","description":"d","default_speed":60,"frames":frames}
 

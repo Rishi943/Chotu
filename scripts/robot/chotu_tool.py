@@ -1,7 +1,7 @@
 """
 Chotu tool bridge for the CC Chotu skill.
 
-Usage: python -m scripts.chotu_tool <command> ['<json_args>']
+Usage: python -m scripts.robot.chotu_tool <command> ['<json_args>']
 
 Commands:
   state                   — live battery + distance + memory summary

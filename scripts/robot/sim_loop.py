@@ -7,8 +7,8 @@ and every tool returns a fake envelope (get_distance is unreliable on purpose, s
 state block should mark distance DEAD after 3 reads).
 
 Local llama-server only (free, no cloud). Usage:
-    python -m scripts.sim_loop            # 12 iterations
-    python -m scripts.sim_loop 20         # N iterations
+    python -m scripts.robot.sim_loop            # 12 iterations
+    python -m scripts.robot.sim_loop 20         # N iterations
 """
 
 import asyncio
@@ -36,7 +36,7 @@ import core.brain as brain
 from core.loop_helpers import estimate_memory_tokens
 from core.scratchpad import Scratchpad
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 _FRAME_DIR = os.getenv("SIM_FRAME_DIR")
 if _FRAME_DIR:
     ASSETS = sorted(Path(_FRAME_DIR).glob("*.jpg"))[:3]

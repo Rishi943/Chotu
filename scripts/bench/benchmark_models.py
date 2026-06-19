@@ -6,11 +6,11 @@ tools), collects per-call llama.cpp timings, and writes a markdown comparison
 table to 'out/'.
 
 Usage:
-    python -m scripts.benchmark_models                   # all models, 8 iters each
-    python -m scripts.benchmark_models --iters 12
-    python -m scripts.benchmark_models --model Qwen3.5-4B-Q4_K_M.gguf
-    python -m scripts.benchmark_models --llama-server /path/to/llama-server
-    python -m scripts.benchmark_models --warmup 2       # discard first 2 calls (default: 1)
+    python -m scripts.bench.benchmark_models                   # all models, 8 iters each
+    python -m scripts.bench.benchmark_models --iters 12
+    python -m scripts.bench.benchmark_models --model Qwen3.5-4B-Q4_K_M.gguf
+    python -m scripts.bench.benchmark_models --llama-server /path/to/llama-server
+    python -m scripts.bench.benchmark_models --warmup 2       # discard first 2 calls (default: 1)
 
 NOTE: this script kills any process on port 8080 to take over llama-server.
 """
@@ -38,7 +38,7 @@ os.environ.setdefault("PALIV_MUTE", "1")
 os.environ.setdefault("PALIV_VOICE", "0")
 os.environ.setdefault("PALIV_PTT", "0")
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 MODELS_DIR = REPO / "models"
 OUTPUT_DIR = REPO / "out"
 PORT = 8080

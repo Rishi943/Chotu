@@ -14,8 +14,8 @@ Reports, using the model's own reported prompt_tokens (exact, not char/4):
 Local only — text tokenizes within a few % across these models, fine for an estimate.
 
 Usage:
-    python -m scripts.measure_fps_budget            # 4 turns, live Pi frame
-    python -m scripts.measure_fps_budget --turns 6
+    python -m scripts.bench.measure_fps_budget            # 4 turns, live Pi frame
+    python -m scripts.bench.measure_fps_budget --turns 6
 """
 
 import argparse

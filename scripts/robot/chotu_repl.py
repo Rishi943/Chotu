@@ -2,9 +2,9 @@
 Chotu interactive REPL for Claude-as-the-model testing.
 
 Claude drives the explore workflow turn-by-turn:
-  python -m scripts.chotu_repl <tool> [json_args]
-  python -m scripts.chotu_repl --reset        # wipe state and start fresh
-  python -m scripts.chotu_repl --state        # print current state
+  python -m scripts.robot.chotu_repl <tool> [json_args]
+  python -m scripts.robot.chotu_repl --reset        # wipe state and start fresh
+  python -m scripts.robot.chotu_repl --state        # print current state
 
 Available tools in explore scope:
   move            {"direction": "turn left"|"turn right"}

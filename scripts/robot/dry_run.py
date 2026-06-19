@@ -13,11 +13,11 @@ Measures, per scenario:
   - instruction-following   (per-tick `expect`, per-scenario `forbid` checks)
 
 Usage:
-    python -m scripts.dry_run                          # list scenarios
-    python -m scripts.dry_run --scenario reel          # run reel.json (placeholder frames)
-    python -m scripts.dry_run --scenario reel --images scripts/test_frames/reel
-    python -m scripts.dry_run "walk forward 2 steps"   # ad-hoc single-tick prompt
-    PALIV_MUTE=1 PALIV_BRAIN_MODEL=gemma-4-E4B.Q4_K_M.gguf python -m scripts.dry_run --scenario reel
+    python -m scripts.robot.dry_run                          # list scenarios
+    python -m scripts.robot.dry_run --scenario reel          # run reel.json (placeholder frames)
+    python -m scripts.robot.dry_run --scenario reel --images scripts/test_frames/reel
+    python -m scripts.robot.dry_run "walk forward 2 steps"   # ad-hoc single-tick prompt
+    PALIV_MUTE=1 PALIV_BRAIN_MODEL=gemma-4-E4B.Q4_K_M.gguf python -m scripts.robot.dry_run --scenario reel
 """
 
 import argparse
@@ -47,8 +47,8 @@ MUTE = os.getenv("PALIV_MUTE", "0") == "1"
 COMPACT_AT_TOKENS = int(os.getenv("PALIV_COMPACT_AT_TOKENS", "10000"))
 COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "6000"))
 
-SCENARIO_DIR = Path(__file__).parent / "scenarios"
-TESTOUT_DIR = Path(__file__).parent.parent / "out"
+SCENARIO_DIR = Path(__file__).resolve().parents[1] / "scenarios"
+TESTOUT_DIR = Path(__file__).resolve().parents[2] / "out"
 
 # ANSI
 DIM, BOLD, CYAN, YEL, GRN, RED, MAG = (
@@ -479,7 +479,7 @@ async def main():
                 print(f"  {p.stem:12} — {d.get('description','')}")
             except Exception:
                 print(f"  {p.stem:12} — (unreadable)")
-        print(f"\nrun:  python -m scripts.dry_run --scenario <name> [--images <dir>]")
+        print(f"\nrun:  python -m scripts.robot.dry_run --scenario <name> [--images <dir>]")
 
     await llm.close()
 
