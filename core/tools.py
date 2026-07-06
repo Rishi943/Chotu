@@ -512,21 +512,39 @@ def _gated(motion_lock: MotionLock | None, tool: str, fn):
     return _run
 
 
+def _gated_async(runner, tool: str, fn):
+    """Non-blocking motion dispatch: launch fn as a background task via the
+    AsyncMotionRunner and return a `started` ack (or rejection) immediately."""
+    async def _run(**kw):
+        eta = _motion_eta_ms(tool, kw)
+        return runner.start(tool, kw, eta_ms=eta, coro_factory=lambda: fn(**kw))
+    return _run
+
+
 def build_dispatch(
     pi: PiClient,
     estop: asyncio.Event,
     *,
     mute: bool = False,
     motion_lock: MotionLock | None = None,
+    motion_runner=None,
 ) -> dict:
     """Build tool name -> async callable dispatch map.
 
     motion_lock: enforces single-motion-at-a-time. When passed, move/pose/
         reject overlapping calls with an envelope.
+    motion_runner: when passed, takes precedence over motion_lock for the
+        motion tools — dispatch returns a `started` ack immediately instead
+        of blocking on the motion.
     """
+    def _motion(tool, fn):
+        if motion_runner is not None:
+            return _gated_async(motion_runner, tool, fn)
+        return _gated(motion_lock, tool, fn)
+
     dispatch = {
-        "move":           lambda **kw: _gated(motion_lock, "move", lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
-        "pose":           lambda **kw: _gated(motion_lock, "pose", lambda **k: pi.pose(**k))(**kw),
+        "move":           lambda **kw: _motion("move", lambda **k: pi.move(**k))(**kw) if not estop.is_set() else _blocked_coro("move"),
+        "pose":           lambda **kw: _motion("pose", lambda **k: pi.pose(**k))(**kw),
         "get_distance":   lambda **kw: pi.get_distance(),
         "get_battery":    lambda **kw: pi.get_battery(),
         "set_face":       lambda **kw: pi.set_face(**kw),
@@ -535,7 +553,7 @@ def build_dispatch(
         "speak":          lambda **kw: _do_speak(face_pi=pi, muted=mute, **kw),
     }
     if peek_over_enabled():
-        dispatch["peek_over"] = lambda **kw: _gated(motion_lock, "peek_over", lambda **k: pi.peek_over(**k))(**kw)
+        dispatch["peek_over"] = lambda **kw: _motion("peek_over", lambda **k: pi.peek_over(**k))(**kw)
     return dispatch
 
 
