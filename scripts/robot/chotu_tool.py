@@ -7,6 +7,7 @@ Commands:
   state                   — live battery + distance + memory summary
   memory_read             — recent turns formatted for skill injection
   memory_append '<json>'  — append a turn {"content":"...","tools":[...],"speak":"..."}
+  think '<json>'          — record one reasoning line {"text":"..."} to the trace (the T in O/T/A)
 
   move '{"direction":"forward","steps":1}'
   pose '{"name":"sit"}'
@@ -281,6 +282,16 @@ def main() -> None:
     if command == "memory_append":
         raw = args[1] if len(args) > 1 else "{}"
         cmd_memory_append(raw)
+        return
+
+    if command == "think":
+        raw = args[1] if len(args) > 1 else "{}"
+        try:
+            text = json.loads(raw).get("text", "")
+        except json.JSONDecodeError:
+            text = raw
+        trace.record("thought", "think", {}, {}, thought=text)
+        print("ok — thought recorded")
         return
 
     tool_args = {}

@@ -68,7 +68,7 @@ def _get_oww():
             from openwakeword.model import Model as _OWW
             OWWModel = _OWW
         if _oww_model is None:
-            _oww_model = OWWModel(wakeword_models=[WAKE_WORD_MODEL_PATH], inference_framework="onnx")
+            _oww_model = OWWModel(wakeword_model_paths=[WAKE_WORD_MODEL_PATH])
     return _oww_model
 
 
