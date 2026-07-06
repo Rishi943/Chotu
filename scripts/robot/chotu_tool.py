@@ -253,12 +253,27 @@ async def _cmd_wait_for_event(timeout: float) -> dict:
     )
     for t in pending:
         t.cancel()
+    # The voice listener runs in a non-cancellable thread (asyncio.to_thread → blocking mic loop).
+    # Only bound-wait the cancellable losers; never block on the voice thread, or asyncio.run's
+    # default-executor shutdown will hang forever joining it.
     if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.wait(pending, timeout=0.5)
     if not done:
-        return {"event": "timeout", "text": None, "waited_s": round(time.time() - t0, 1)}
-    kind, text = next(iter(done)).result()
-    return {"event": kind, "text": text, "waited_s": round(time.time() - t0, 1)}
+        result = {"event": "timeout", "text": None, "waited_s": round(time.time() - t0, 1)}
+    else:
+        try:
+            kind, text = next(iter(done)).result()
+        except Exception as e:  # voice task raised (e.g. OWW/mic failure)
+            kind, text = "error", str(e)
+        result = {"event": kind, "text": text, "waited_s": round(time.time() - t0, 1)}
+    if voice_on:
+        # A mic-listening thread may still be alive and un-joinable. Print and hard-exit so the
+        # process doesn't hang in asyncio.run's executor teardown. wait_for_event is a throwaway
+        # one-shot, so bypassing normal cleanup is safe.
+        sys.stdout.write(json.dumps(result) + "\n")
+        sys.stdout.flush()
+        os._exit(0)
+    return result
 
 
 # --- Entry point ---
