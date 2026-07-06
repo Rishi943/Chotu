@@ -278,7 +278,7 @@ def main() -> None:
 
     if command != "wait_for_event":
         kind = trace.classify(command)
-        frame = result.get("result", {}).get("trace_frame") if isinstance(result, dict) else None
+        frame = (result.get("result") or {}).get("trace_frame") if isinstance(result, dict) else None
         trace.record(kind, command, tool_args, result if isinstance(result, dict) else {"text": result}, frame=frame)
 
     if isinstance(result, str):
