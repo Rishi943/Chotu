@@ -34,6 +34,12 @@ class PiClient:
             "lead": lead, "reach": reach, "pause_s": pause_s, "speed": speed,
         })
 
+    async def play_sequence(self, frames: list, speed: int | None = None) -> dict:
+        body: dict = {"frames": frames}
+        if speed is not None:
+            body["speed"] = speed
+        return await self._post_slow("/play_sequence", "play_sequence", body)
+
     async def do_trick(self, name: str, speed: int = 80) -> dict:
         return await self._post_slow("/trick", "trick", {"name": name, "speed": speed})
 

@@ -16,6 +16,10 @@ Commands:
   get_distance
   get_battery
   get_perception '{"color":"red","face":true,"human":true}'
+  set_legs '{"legs":[[..],[..],[..],[..]],"speed":70}'
+  peek_over '{"lead":"left","reach":"shallow","pause_s":1.5,"speed":60}'
+  health
+  play_sequence '{"frames":[...],"speed":100}'
   wait '{"seconds":2}'
   log '{"message":"..."}'
 """
@@ -145,6 +149,19 @@ async def _run(command: str, args: dict) -> dict | str:
                     "duration_ms": 0, "timestamp": time.time(), "error": None}
         elif command == "wait_for_event":
             return await _cmd_wait_for_event(float(args.get("timeout", 300)))
+        elif command == "set_legs":
+            return await pi.set_legs(legs=args.get("legs", []), speed=int(args.get("speed", 70)))
+        elif command == "peek_over":
+            return await pi.peek_over(
+                lead=args.get("lead", "left"),
+                reach=args.get("reach", "shallow"),
+                pause_s=float(args.get("pause_s", 1.5)),
+                speed=int(args.get("speed", 60)),
+            )
+        elif command == "health":
+            return await pi.health()
+        elif command == "play_sequence":
+            return await pi.play_sequence(frames=args.get("frames", []), speed=args.get("speed"))
         else:
             return {"ok": False, "tool": command, "result": {}, "duration_ms": 0,
                     "timestamp": time.time(), "error": f"unknown command: {command}"}
