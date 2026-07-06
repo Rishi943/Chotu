@@ -78,6 +78,45 @@ async def test_run_iteration_text_only_pushes_frame(monkeypatch):
     assert assistants[-1]["content"] == "just standing here"
 
 
+@pytest.mark.asyncio
+async def test_run_iteration_event_input_no_human_prefix(monkeypatch):
+    import core.brain as brain
+
+    text_resp = LLMResponse(choices=[NormalizedChoice(
+        message=NormalizedMessage(content="noted", tool_calls=None))])
+    monkeypatch.setattr(brain, "llm_client", _FakeLLM(text_resp))
+    monkeypatch.setattr(brain, "pi", _FakePi())
+    brain.memory.clear()
+    brain.frame_stack.clear()
+    brain.pending_input.push("[event] motion_done: pose done")
+
+    await brain.run_iteration()
+
+    drained = [m for m in brain.memory if m["role"] == "user"]
+    assert drained[0]["_origin"] == "event"
+    assert not drained[0]["content"].startswith("[human] ")
+    assert drained[0]["content"] == "[event] motion_done: pose done"
+
+
+@pytest.mark.asyncio
+async def test_run_iteration_user_input_gets_human_prefix(monkeypatch):
+    import core.brain as brain
+
+    text_resp = LLMResponse(choices=[NormalizedChoice(
+        message=NormalizedMessage(content="hi there", tool_calls=None))])
+    monkeypatch.setattr(brain, "llm_client", _FakeLLM(text_resp))
+    monkeypatch.setattr(brain, "pi", _FakePi())
+    brain.memory.clear()
+    brain.frame_stack.clear()
+    brain.pending_input.push("hello chotu")
+
+    await brain.run_iteration()
+
+    drained = [m for m in brain.memory if m["role"] == "user"]
+    assert drained[0]["_origin"] == "user"
+    assert drained[0]["content"] == "[human] hello chotu"
+
+
 def test_build_loop_messages_tags_last_memory_when_cache_boundary():
     from core.brain import build_loop_messages
     from core.scratchpad import Scratchpad
