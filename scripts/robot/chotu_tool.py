@@ -84,6 +84,8 @@ def cmd_memory_append(raw: str) -> None:
     turns = _load_memory()
     turns.append(entry)
     _save_memory(turns)
+    from core import trace
+    trace.record("thought", "monologue", {}, {}, thought=entry.get("content", ""))
     print(f"ok — {len(turns)} turns in memory")
 
 
@@ -189,11 +191,15 @@ async def _cmd_capture(pi) -> dict:
     r = result.get("result", {})
     b64 = r.get("image_base64") or r.get("image_b64") or r.get("jpeg_b64") or ""
     if b64:
-        CAPTURE_PATH.write_bytes(base64.b64decode(b64))
+        jpeg_bytes = base64.b64decode(b64)
+        CAPTURE_PATH.write_bytes(jpeg_bytes)
+        from core import trace
+        frame_rel = trace.save_frame(jpeg_bytes)
         result = dict(result)
         result["result"] = {k: v for k, v in r.items()
                             if k not in ("image_base64", "image_b64", "jpeg_b64")}
         result["result"]["image_saved"] = str(CAPTURE_PATH)
+        result["result"]["trace_frame"] = frame_rel
     return result
 
 
@@ -247,6 +253,10 @@ def main() -> None:
 
     command = args[0]
 
+    from core import trace
+    if not os.getenv("PALIV_TRACE_DIR"):
+        os.environ["PALIV_TRACE_DIR"] = str(trace.session_dir(os.getenv("PALIV_RUNNER", "fable")))
+
     if command == "memory_read":
         cmd_memory_read()
         return
@@ -265,6 +275,12 @@ def main() -> None:
             sys.exit(1)
 
     result = asyncio.run(_run(command, tool_args))
+
+    if command != "wait_for_event":
+        kind = trace.classify(command)
+        frame = result.get("result", {}).get("trace_frame") if isinstance(result, dict) else None
+        trace.record(kind, command, tool_args, result if isinstance(result, dict) else {"text": result}, frame=frame)
+
     if isinstance(result, str):
         print(result)
     elif command == "wait_for_event":
