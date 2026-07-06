@@ -203,3 +203,9 @@ def _blocking_record_once() -> str:
 async def record_push_to_talk() -> str:
     """Async wrapper: run the blocking one-shot capture in a thread. Returns text or ''."""
     return await asyncio.to_thread(_blocking_record_once)
+
+
+async def wait_for_wake_or_speech():
+    """Block on the wake word, then transcribe the utterance. Returns (kind, text)."""
+    text = await listen_and_transcribe()
+    return ("wake_word", text)

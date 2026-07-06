@@ -141,6 +141,8 @@ async def _run(command: str, args: dict) -> dict | str:
             print(f"[log] {msg}")
             return {"ok": True, "tool": "log", "result": {"message": msg},
                     "duration_ms": 0, "timestamp": time.time(), "error": None}
+        elif command == "wait_for_event":
+            return await _cmd_wait_for_event(float(args.get("timeout", 300)))
         else:
             return {"ok": False, "tool": command, "result": {}, "duration_ms": 0,
                     "timestamp": time.time(), "error": f"unknown command: {command}"}
@@ -195,6 +197,46 @@ async def _cmd_capture(pi) -> dict:
     return result
 
 
+async def _cmd_wait_for_event(timeout: float) -> dict:
+    """Block until text / wake-word / speech / timeout, whichever fires first.
+    Text channel: a line written to $PALIV_WAIT_INPUT (default /tmp/chotu_wait_input).
+    Voice channel is gated by PALIV_VOICE=1."""
+    t0 = time.time()
+    text_path = Path(os.getenv("PALIV_WAIT_INPUT", "/tmp/chotu_wait_input"))
+    voice_on = os.getenv("PALIV_VOICE", "0") == "1"
+
+    async def watch_text():
+        if text_path.exists():        # clear stale content so we only react to new lines
+            text_path.unlink()
+        while True:
+            if text_path.exists():
+                line = text_path.read_text().strip()
+                try:
+                    text_path.unlink()
+                except FileNotFoundError:
+                    pass
+                if line:
+                    return ("text", line)
+            await asyncio.sleep(0.2)
+
+    tasks = [asyncio.create_task(watch_text())]
+    if voice_on:
+        from core.voice import wait_for_wake_or_speech  # returns (kind, transcript)
+        tasks.append(asyncio.create_task(wait_for_wake_or_speech()))
+
+    done, pending = await asyncio.wait(
+        tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+    )
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    if not done:
+        return {"event": "timeout", "text": None, "waited_s": round(time.time() - t0, 1)}
+    kind, text = next(iter(done)).result()
+    return {"event": kind, "text": text, "waited_s": round(time.time() - t0, 1)}
+
+
 # --- Entry point ---
 
 def main() -> None:
@@ -225,6 +267,8 @@ def main() -> None:
     result = asyncio.run(_run(command, tool_args))
     if isinstance(result, str):
         print(result)
+    elif command == "wait_for_event":
+        print(json.dumps(result))
     else:
         print(json.dumps(result, indent=2))
 
