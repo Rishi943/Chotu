@@ -91,11 +91,13 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # motion_lock: enforces single-motion-at-a-time across move/pose.
 # Lives at module scope so events.py can observe its state.
 from core.motion_lock import MotionLock
+from core.async_motion import AsyncMotionRunner
 
 motion_lock = MotionLock()
+motion_runner = AsyncMotionRunner(motion_lock, pending_input)
 
 dispatch_map = build_dispatch(
-    pi, estop, mute=MUTE, motion_lock=motion_lock,
+    pi, estop, mute=MUTE, motion_lock=motion_lock, motion_runner=motion_runner,
 )
 
 
@@ -271,8 +273,10 @@ async def run_iteration() -> float:
     fresh labeled frame -> trim context. Returns tool_duration seconds (for pacing)."""
     text = pending_input.drain()
     if text:
-        memory.append({"role": "user", "content": f"[human] {text}", "_origin": "user"})
-        _emit({"type": "user", "text": text})
+        origin = "event" if text.lstrip().startswith("[event]") or text.lstrip().startswith("[battery]") else "user"
+        label = "" if origin == "event" else "[human] "
+        memory.append({"role": "user", "content": f"{label}{text}", "_origin": origin})
+        _emit({"type": origin, "text": text})
 
     _fire_face("thinking")
     messages = build_loop_messages(
