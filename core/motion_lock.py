@@ -8,7 +8,6 @@ sees the rejection in its tool-result stream and can replan in-context.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -21,7 +20,6 @@ REJECTED_ENVELOPE_KEYS = ("ok", "tool", "result", "duration_ms", "timestamp", "e
 
 class MotionLock:
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
         self._active: Optional[dict] = None
 
     @property
@@ -36,35 +34,52 @@ class MotionLock:
         elapsed = (time.monotonic() - self._active["started_at"]) * 1000.0
         return max(0, int(self._active["eta_ms"] - elapsed))
 
-    def try_acquire(self, tool: str, args: dict, eta_ms: int) -> Optional[dict]:
-        """Non-blocking probe. Returns None if caller may proceed, or a rejection
-        envelope dict to return to the model. Does NOT actually acquire the lock —
-        use `acquire()` for that."""
-        if self._lock.locked():
-            return self._rejection_envelope(tool)
-        return None
-
-    @asynccontextmanager
-    async def acquire(self, tool: str, args: dict, eta_ms: int):
-        """Async context manager. Yields True on acquire, False if already held
-        (the caller should fall back to the rejection envelope from try_acquire)."""
-        if self._lock.locked():
-            yield False
-            return
-        await self._lock.acquire()
+    def _record(self, tool: str, args: dict, eta_ms: int) -> None:
         self._active = {
             "tool": tool,
             "args": dict(args),
             "started_at": time.monotonic(),
             "eta_ms": int(eta_ms),
         }
+
+    # --- Cross-turn hold (async motion) ---
+
+    def acquire_now(self, tool: str, args: dict, eta_ms: int) -> bool:
+        """Non-blocking. Acquire + record if free; return False if busy.
+        Does NOT auto-release — caller releases via release() when motion ends."""
+        if self._active is not None:
+            return False
+        self._record(tool, args, eta_ms)
+        return True
+
+    def release(self) -> None:
+        """Clear the active state. Safe to call when already free (no-op)."""
+        self._active = None
+
+    # --- Legacy probe + context manager (kept for back-compat) ---
+
+    def try_acquire(self, tool: str, args: dict, eta_ms: int) -> Optional[dict]:
+        """Non-blocking probe. Returns None if caller may proceed, or a rejection
+        envelope dict to return to the model. Does NOT actually acquire the lock —
+        use `acquire()` for that."""
+        if self._active is not None:
+            return self.rejection_envelope(tool)
+        return None
+
+    @asynccontextmanager
+    async def acquire(self, tool: str, args: dict, eta_ms: int):
+        """Async context manager. Yields True on acquire, False if already held
+        (the caller should fall back to the rejection envelope from try_acquire)."""
+        if self._active is not None:
+            yield False
+            return
+        self._record(tool, args, eta_ms)
         try:
             yield True
         finally:
             self._active = None
-            self._lock.release()
 
-    def _rejection_envelope(self, attempted_tool: str) -> dict:
+    def rejection_envelope(self, attempted_tool: str) -> dict:
         a = self._active or {}
         remaining_s = self.remaining_ms() / 1000.0
         active_tool = a.get("tool", "?")
