@@ -25,6 +25,10 @@ body {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
+.dim {
+  color: var(--dim);
+}
+
 #app {
   display: grid;
   grid-template-columns: 1.35fr 1fr;
