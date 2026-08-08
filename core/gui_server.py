@@ -97,6 +97,9 @@ async def audio(audio: UploadFile = File(...), source: str = Form("mr")):
     if not raw:
         return JSONResponse({"ok": False, "error": "empty recording"},
                              status_code=400)
+    # `raw` is the console's raw little-endian float32 PCM (16 kHz mono);
+    # hearing.pcm_to_wav wraps it into a real WAV before the model call, so the
+    # payload the model sees is always a verified wav, never a guessed format.
     try:
         out = await hear(raw, audio.content_type or "audio/wav", source=source)
     except Exception as e:

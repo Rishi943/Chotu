@@ -17,9 +17,13 @@ translate.
 
 from __future__ import annotations
 
+import array as _array
 import base64
+import io
 import os
+import struct
 import time
+import wave
 
 import httpx
 
@@ -79,22 +83,52 @@ def parse_hearing(reply, src_name="Marathi", dst_name="English"):
     return {"text": reply, "language": src_name}
 
 
+def pcm_to_wav(pcm_bytes, rate=16000):
+    """Wrap raw little-endian float32 PCM from the browser in a 16-bit WAV.
+
+    The frontend posts a bare Float32Array buffer (already resampled to `rate`
+    Hz mono); the model wants a real file. Converted to 16-bit signed PCM (1
+    channel, 2 bytes wide, `rate` Hz) -- what every speech model expects and
+    what halves the payload. Stdlib `wave` only: no numpy, no ffmpeg.
+    """
+    n = len(pcm_bytes) // 4
+    samples = struct.unpack("<%df" % n, pcm_bytes[: n * 4])
+    pcm16 = _array.array("h")
+    for s in samples:
+        # Clip before scaling: a float32 buffer can exceed +-1.0 and would wrap
+        # around into loud noise when cast to int16.
+        if s > 1.0:
+            s = 1.0
+        elif s < -1.0:
+            s = -1.0
+        pcm16.append(int(s * 32767.0))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm16.tobytes())
+    return buf.getvalue()
+
+
 async def hear(audio_bytes, mime, source=DEFAULT_SOURCE):
     """POST audio to llama-server (E2B, :8099) and return {"text","language","ms"}.
 
-    Request shape copied from gemma_stt.py's `_chat`: a chat-completion with an
-    `input_audio` content block carrying base64 WAV bytes. `mime` is accepted
-    for the route's own bookkeeping but the audio is always sent as `wav`.
+    `audio_bytes` is the browser's raw little-endian float32 PCM (16 kHz mono).
+    It is wrapped into a *real* WAV here via pcm_to_wav, so the model always
+    gets a verified `wav` blob -- never a guessed format. `mime` is kept for
+    the route's bookkeeping but is no longer trusted to label the payload.
 
     The source language is the user's explicit choice (default Marathi); the
     prompt names it, so the model never has to guess.
     """
+    wav_bytes = pcm_to_wav(audio_bytes, 16000)
     body = {
         "model": MODEL,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": build_prompt(source)},
             {"type": "input_audio", "input_audio": {
-                "data": base64.b64encode(audio_bytes).decode(),
+                "data": base64.b64encode(wav_bytes).decode(),
                 "format": "wav",
             }},
         ]}],

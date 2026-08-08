@@ -58,16 +58,25 @@ const talkState = {
   recording: false,
   uploading: false,
   stream: null,
-  recorder: null,
-  chunks: [],
+  audioContext: null,
+  scriptProcessor: null,
+  source: null,
+  sampleChunks: [],
 };
 
-// The one thing that actually closes the mic: MediaRecorder.stop() releases the
-// recorder but leaves every MediaStream track live, so the browser keeps the
-// recording indicator lit. Ported from the Gemma Translator's capture wiring —
-// every stream track must be stopped on every exit path (release, error, empty
-// take, page hide/unload). A stream is single-use: once torn down it is nulled
-// so the next take requests a fresh getUserMedia stream.
+// Mic-capture wiring ported from the Gemma Translator's useAudioRecorder: a
+// ScriptProcessorNode grabs raw Float32 PCM and we resample it to 16 kHz mono
+// on release — no MediaRecorder/webm/opus, so the backend always receives bare
+// PCM it can wrap in a real WAV. ScriptProcessorNode is deprecated but needs no
+// separately-served AudioWorklet module, so it is the right call for short
+// push-to-talk clips on the console's Chromium.
+
+// The one thing that actually closes the mic: stopping only the recording graph
+// leaves every MediaStream track live, so the browser keeps the recording
+// indicator lit. Ported from the Gemma Translator's capture wiring — every
+// stream track must be stopped on every exit path (release, error, empty take,
+// page hide/unload). A stream is single-use: once torn down it is nulled so the
+// next take requests a fresh getUserMedia stream.
 function stopStreamTracks() {
   if (talkState.stream) {
     talkState.stream.getTracks().forEach((t) => t.stop());
@@ -75,16 +84,34 @@ function stopStreamTracks() {
   }
 }
 
-// Full teardown: stop the recorder (if any) and every stream track. Safe to call
-// repeatedly — idempotent. Used on error and on page hide/unload, where the
-// escape hatch is "indicator must go out, whatever is in flight".
-function teardownCapture() {
-  const recorder = talkState.recorder;
-  talkState.recorder = null;
-  if (recorder) {
-    try { recorder.stop(); } catch { /* already stopped or failed */ }
+// Stop and disconnect the Web Audio processing chain, then close the context.
+function stopAudioGraph() {
+  const sp = talkState.scriptProcessor;
+  talkState.scriptProcessor = null;
+  if (sp) {
+    try { sp.disconnect(); } catch { /* already gone */ }
+    sp.onaudioprocess = null;
   }
+  const src = talkState.source;
+  talkState.source = null;
+  if (src) {
+    try { src.disconnect(); } catch { /* already gone */ }
+  }
+  const ctx = talkState.audioContext;
+  talkState.audioContext = null;
+  if (ctx && ctx.state !== "closed") {
+    try { ctx.close().catch(() => {}); } catch { /* already closed */ }
+  }
+}
+
+// Full teardown: stop the audio graph, every stream track, and drop any buffered
+// samples. Safe to call repeatedly — idempotent. Used on error and on page
+// hide/unload, where the escape hatch is "indicator must go out, whatever is in
+// flight".
+function teardownCapture() {
+  stopAudioGraph();
   stopStreamTracks();
+  talkState.sampleChunks = [];
   talkState.recording = false;
   talk.classList.remove("recording");
 }
@@ -100,63 +127,91 @@ async function startRecording() {
     return;
   }
 
-  const mime = pickMime();
-  let recorder;
   try {
-    recorder = mime
-      ? new MediaRecorder(talkState.stream, { mimeType: mime })
-      : new MediaRecorder(talkState.stream);
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    talkState.audioContext = ctx;
+    if (ctx.state === "suspended") await ctx.resume();
+
+    const source = ctx.createMediaStreamSource(talkState.stream);
+    talkState.source = source;
+
+    const sp = ctx.createScriptProcessor(4096, 1, 1);
+    talkState.scriptProcessor = sp;
+    talkState.sampleChunks = [];
+    sp.onaudioprocess = (e) => {
+      talkState.sampleChunks.push(
+        new Float32Array(e.inputBuffer.getChannelData(0)),
+      );
+    };
+
+    source.connect(sp);
+    sp.connect(ctx.destination);
   } catch (err) {
-    // mimeType rejected even though isTypeSupported said yes — retry without it
-    try {
-      recorder = new MediaRecorder(talkState.stream);
-    } catch (err2) {
-      stopStreamTracks(); // never hold a stream we cannot record with
-      appendEntry("err", "recording not supported on this browser");
-      return;
-    }
+    // never hold a stream we cannot record with
+    teardownCapture();
+    appendEntry("err", "recording not supported on this browser — " + plainError(err));
+    return;
   }
 
-  talkState.chunks = [];
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size) talkState.chunks.push(e.data);
-  };
-  recorder.onerror = () => {
-    // mid-take failure: tear the stream down so the mic indicator goes out
-    teardownCapture();
-  };
-  recorder.onstop = () => {
-    const hasTake = talkState.chunks.length > 0;
-    const blob = new Blob(talkState.chunks, { type: recorder.mimeType || "audio/webm" });
-    // Always stop the tracks when the take ends — empty or too-short takes
-    // still hold the mic open if we skip this.
-    stopStreamTracks();
-    if (hasTake) upload(blob);
-  };
-  recorder.start();
-  talkState.recorder = recorder;
   talkState.recording = true;
   talk.classList.add("recording");
 }
 
-function stopRecording() {
+async function stopRecording() {
   if (!talkState.recording) return;
+  const actualSampleRate =
+    (talkState.audioContext && talkState.audioContext.sampleRate) || 16000;
+  const chunks = talkState.sampleChunks;
+  talkState.sampleChunks = [];
   talkState.recording = false;
   talk.classList.remove("recording");
-  const recorder = talkState.recorder;
-  talkState.recorder = null;
-  if (recorder) {
-    try { recorder.stop(); } catch { /* recorder already dead — fall through */ }
-  }
-  // recorder.onstop assembles and uploads the take; we kill the stream tracks
-  // here in the normal-release path so the indicator goes out immediately.
+  // Kill the audio graph and the stream tracks in the normal-release path so
+  // the mic indicator goes out immediately, before any upload work.
+  stopAudioGraph();
   stopStreamTracks();
+
+  if (chunks.length === 0) {
+    console.warn("No audio samples recorded");
+    return;
+  }
+
+  // Ported from the Gemma Translator: merge the per-callback chunks and
+  // resample to 16 kHz mono, the shape the backend expects for a WAV.
+  const merged = getMergedSamples(chunks);
+  const pcm = resample(merged, actualSampleRate, 16000);
+  const blob = new Blob([pcm.buffer], { type: "application/octet-stream" });
+  upload(blob);
 }
 
-function pickMime() {
-  if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
-  if (MediaRecorder.isTypeSupported("audio/mp4")) return "audio/mp4"; // Safari
-  return "";
+// Concatenate the per-callback Float32Array chunks into one buffer.
+function getMergedSamples(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const merged = new Float32Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.length;
+  }
+  return merged;
+}
+
+// Naive linear-interpolation resampler — quality is fine for speech STT.
+function resample(audio, fromRate, toRate) {
+  if (fromRate === toRate) return audio;
+  const ratio = fromRate / toRate;
+  const newLength = Math.round(audio.length / ratio);
+  const result = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const pos = i * ratio;
+    const index = Math.floor(pos);
+    const frac = pos - index;
+    const cur = audio[index];
+    const next = index + 1 < audio.length ? audio[index + 1] : cur;
+    result[i] = cur + frac * (next - cur);
+  }
+  return result;
 }
 
 function plainError(err) {
@@ -170,7 +225,7 @@ async function upload(blob) {
 
   try {
     const fd = new FormData();
-    fd.append("audio", blob, "capture.webm");
+    fd.append("audio", blob, "capture.pcm");
     fd.append("source", sourceLangEl.value);
     const resp = await fetch("/audio", { method: "POST", body: fd });
     const data = await resp.json();
