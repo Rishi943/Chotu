@@ -20,6 +20,7 @@ class AsyncMotionRunner:
         self._pending = pending_input
         self._task: Optional[asyncio.Task] = None
         self._current: Optional[tuple[str, dict]] = None
+        self._staged = None
 
     @property
     def busy(self) -> bool:
@@ -46,6 +47,20 @@ class AsyncMotionRunner:
             "error": None,
         }
 
+    def stage(self, tool, args, eta_ms, coro_factory) -> bool:
+        """Hold ONE follow-up move to fire when the current one ends.
+
+        One slot, never a queue: staging again replaces what was there. Returns
+        False if nothing is running, because there is then nothing to follow.
+        """
+        if not self.busy:
+            return False
+        self._staged = (tool, dict(args), int(eta_ms), coro_factory)
+        return True
+
+    def clear_stage(self) -> None:
+        self._staged = None
+
     def _on_done(self, task: asyncio.Task) -> None:
         tool = (self._current or ("?", {}))[0]
         self._lock.release()
@@ -60,3 +75,7 @@ class AsyncMotionRunner:
         else:
             detail = f"failed: {env.get('error')}"
         self._pending.push(f"[event] motion_done: {tool} {detail}")
+
+        staged, self._staged = self._staged, None
+        if staged is not None:
+            self.start(*staged)
