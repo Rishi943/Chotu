@@ -3,6 +3,10 @@
 
 Run with: sudo ~/chotu-bridge/.venv/bin/python3 server.py
 Requires sudo for GPIO / robot_hat access.
+
+--no-camera (or CHOTU_NO_CAMERA=1) skips vilib's camera init, which is most of a
+cold start. The camera can be turned on later without restarting: POST /camera
+{"on": true}, or just call /capture, /perception or /stream and it starts itself.
 """
 
 import asyncio
@@ -10,6 +14,7 @@ import base64
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -65,6 +70,23 @@ _latest_frame_lock = asyncio.Lock()
 _FRAME_GRAB_HZ = 10.0
 _FRAME_GRAB_QUALITY = 80
 
+# Camera is the slow half of startup (~40 s of a cold boot). It can be left off
+# with --no-camera / CHOTU_NO_CAMERA=1 and started later — on demand by any
+# endpoint that needs a frame, or explicitly via POST /camera {"on": true}.
+_camera_running = False
+_camera_lock = asyncio.Lock()
+_grab_task: asyncio.Task | None = None
+_CAMERA_SETTLE_S = 2.0
+_START_WITH_CAMERA = not (
+    os.environ.get("CHOTU_NO_CAMERA") == "1" or "--no-camera" in sys.argv
+)
+
+_LOWLIGHT_MEAN_THRESHOLD = 60     # 0-255 gray mean; below this, boost
+_BOOST_EXPOSURE_US = 100_000      # 100 ms shutter — bright in a very dark room
+_BOOST_ANALOGUE_GAIN = 8.0        # IMX708 max analogue gain ~= 8-12; 8 is safe
+_BOOST_SETTLE_S = 0.8             # manual controls take ~3-5 frames to apply;
+                                  # at 100ms exposure that's ~0.5s + margin
+
 _bat_adc = ADC("A4")
 pygame.mixer.init()  # must run before speak uses pygame.mixer.Sound
 
@@ -86,21 +108,67 @@ def _voltage_to_percent(v: float) -> int:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
+async def _grab_loop():
+    """Re-encode the newest Vilib frame for /stream consumers."""
+    global _latest_frame_jpeg
+    grab_period = 1.0 / _FRAME_GRAB_HZ
+    while True:
+        try:
+            frame = Vilib.img
+            if frame is not None:
+                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _FRAME_GRAB_QUALITY])
+                if ok:
+                    async with _latest_frame_lock:
+                        _latest_frame_jpeg = buf.tobytes()
+        except Exception as e:
+            logging.warning(f"frame grab error: {e}")
+        await asyncio.sleep(grab_period)
+
+
+async def camera_on() -> bool:
+    """Start the camera if it isn't already. ~3 s (vilib init + AE/AWB settle).
+    Returns True if this call started it. Safe to call from any endpoint."""
+    global _camera_running, _grab_task
+    async with _camera_lock:
+        if _camera_running:
+            return False
+        t0 = time.time()
+        Vilib.camera_start(vflip=False, hflip=False)
+        await asyncio.sleep(_CAMERA_SETTLE_S)  # AE/AWB initial convergence
+        _grab_task = asyncio.create_task(_grab_loop(), name="frame-grab")
+        _camera_running = True
+        logging.info(f"camera on ({int((time.time()-t0)*1000)}ms)")
+        return True
+
+
+async def camera_off() -> bool:
+    """Stop the camera and the frame-grab loop. Returns True if it was running."""
+    global _camera_running, _grab_task, _latest_frame_jpeg
+    async with _camera_lock:
+        if not _camera_running:
+            return False
+        if _grab_task is not None:
+            _grab_task.cancel()
+            try:
+                await _grab_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            _grab_task = None
+        Vilib.camera_close()
+        async with _latest_frame_lock:
+            _latest_frame_jpeg = None
+        _camera_running = False
+        logging.info("camera off")
+        return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Vilib.camera_start(vflip=False, hflip=False)
-    await asyncio.sleep(4)  # AWB/AE convergence
-    # Lock AWB at settled gains to prevent drift/oscillation
-    try:
-        meta = Vilib.get_controls()
-        gains = meta.get("ColourGains")
-        if gains:
-            Vilib.set_controls({"AwbEnable": False, "ColourGains": gains})
-            logging.info(f"AWB locked: red={gains[0]:.2f} blue={gains[1]:.2f}")
-        else:
-            logging.warning("AWB lock skipped: no ColourGains in metadata")
-    except Exception as e:
-        logging.warning(f"AWB lock failed: {e}")
+    if _START_WITH_CAMERA:
+        await camera_on()
+    else:
+        logging.info("camera left off at startup (--no-camera); "
+                     "it starts on demand or via POST /camera")
     _face.set_face("greeting")
     try:
         crawler.do_step("stand", 40)
@@ -109,33 +177,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.warning(f"Startup stand failed: {e}")
 
-    grab_period = 1.0 / _FRAME_GRAB_HZ
-
-    async def _grab_loop():
-        global _latest_frame_jpeg
-        while True:
-            try:
-                frame = Vilib.img
-                if frame is not None:
-                    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _FRAME_GRAB_QUALITY])
-                    if ok:
-                        async with _latest_frame_lock:
-                            _latest_frame_jpeg = buf.tobytes()
-            except Exception as e:
-                logging.warning(f"frame grab error: {e}")
-            await asyncio.sleep(grab_period)
-
-    grab_task = asyncio.create_task(_grab_loop(), name="frame-grab")
     try:
         yield
     finally:
-        grab_task.cancel()
-        try:
-            await grab_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await camera_off()
         _face.set_face("sleeping")
-        Vilib.camera_close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -160,6 +206,15 @@ class MoveRequest(BaseModel):
     direction: str   # "forward" | "backward" | "turn left" | "turn right"
     steps: int = 1
     speed: int = 70
+
+
+# The exact strings picrawler's do_action accepts for locomotion. "left"/"right"
+# are NOT among them — see /move.
+MOVE_DIRECTIONS = {"forward", "backward", "turn left", "turn right"}
+
+
+class CameraRequest(BaseModel):
+    on: bool
 
 
 class PoseRequest(BaseModel):
@@ -261,7 +316,20 @@ async def set_face_endpoint(req: FaceRequest):
 @app.get("/health")
 async def health():
     start = time.time()
-    return _envelope("health", {"status": "ok"}, start)
+    return _envelope("health", {"status": "ok", "camera": _camera_running}, start)
+
+
+@app.post("/camera")
+async def camera(req: CameraRequest):
+    """Turn the camera on or off without restarting the bridge."""
+    start = time.time()
+    logging.info(f"POST /camera  on={req.on}")
+    try:
+        changed = await (camera_on() if req.on else camera_off())
+        return _envelope("camera", {"on": _camera_running, "changed": changed}, start)
+    except Exception as e:
+        logging.error(f"  camera error: {e}")
+        return _envelope("camera", {"on": _camera_running}, start, str(e))
 
 
 @app.post("/move")
@@ -269,6 +337,17 @@ async def move(req: MoveRequest):
     start = time.time()
     speed = min(req.speed, MAX_MOTION_SPEED)
     logging.info(f"POST /move  direction={req.direction} steps={req.steps} speed={speed}")
+    if req.direction not in MOVE_DIRECTIONS:
+        # picrawler's do_action prints "No such action" and returns silently, so
+        # an unknown direction used to come back ok:true after doing nothing.
+        msg = f"unknown direction: {req.direction!r} (expected one of {sorted(MOVE_DIRECTIONS)})"
+        logging.error(f"  move error: {msg}")
+        return _envelope("move", {
+            "direction": req.direction,
+            "steps_requested": req.steps,
+            "steps_completed": 0,
+            "halted_early": True,
+        }, start, msg)
     try:
         async with _motion_section():
             loop = asyncio.get_event_loop()
@@ -502,20 +581,52 @@ async def distance():
         return _envelope("get_distance", {"cm": 0, "reliable": False}, start, str(e))
 
 
+def _boost_and_grab() -> "np.ndarray | None":
+    """One-shot long exposure. Always restores auto AE."""
+    try:
+        Vilib.set_controls({
+            "AeEnable": False,
+            "ExposureTime": _BOOST_EXPOSURE_US,
+            "AnalogueGain": _BOOST_ANALOGUE_GAIN,
+        })
+        time.sleep(_BOOST_SETTLE_S)   # let boosted frames reach Vilib.img
+        return Vilib.img
+    finally:
+        Vilib.set_controls({"AeEnable": True})
+
+
+class CaptureRequest(BaseModel):
+    full: bool = False
+
+
 @app.post("/capture")
-async def capture():
+async def capture(req: CaptureRequest = CaptureRequest()):
     start = time.time()
     try:
+        await camera_on()   # no-op if already running; ~3 s if the bridge started --no-camera
         frame = Vilib.img
         if frame is None:
             logging.warning("  capture: no frame available")
             return _envelope("capture", {}, start, "no frame available from camera")
-        small = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_LINEAR)
-        _, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 40])
+        boosted = False
+        mean = float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
+        if mean < _LOWLIGHT_MEAN_THRESHOLD:
+            logging.info(f"  capture: low light (mean={mean:.0f}), boosting")
+            loop = asyncio.get_running_loop()
+            bframe = await loop.run_in_executor(None, _boost_and_grab)
+            if bframe is not None:
+                frame, boosted = bframe, True
+        if req.full:
+            out, label = frame, f"{frame.shape[1]}x{frame.shape[0]}q90"
+            quality = 90
+        else:
+            out, label = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_LINEAR), "320x240q40"
+            quality = 40
+        _, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, quality])
         image_b64 = base64.b64encode(buf).decode()
         kb = len(image_b64) * 3 // 4 // 1024
-        logging.info(f"  capture ok (~{kb}KB 320x240q40, {int((time.time()-start)*1000)}ms)")
-        return _envelope("capture", {"image_base64": image_b64}, start)
+        logging.info(f"  capture ok (~{kb}KB {label}, {int((time.time()-start)*1000)}ms)")
+        return _envelope("capture", {"image_base64": image_b64, "boosted": boosted}, start)
     except Exception as e:
         logging.error(f"  capture error: {e}")
         return _envelope("capture", {}, start, str(e))
@@ -537,6 +648,7 @@ async def battery():
 async def perception(req: PerceptionRequest):
     start = time.time()
     try:
+        await camera_on()   # perception is meaningless without frames
         result = {}
 
         if req.color:
@@ -776,6 +888,7 @@ async def _mjpeg_frames():
 
 @app.get("/stream")
 async def stream():
+    await camera_on()   # first viewer starts the camera
     return StreamingResponse(
         _mjpeg_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame",

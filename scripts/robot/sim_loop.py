@@ -85,7 +85,7 @@ class FakePi:
 
 
 def _fake_dispatch_map() -> dict:
-    names = ["move", "pose", "speak", "get_distance", "get_battery", "set_face", "wait"]
+    names = ["move", "pose", "speak", "get_distance", "get_battery", "set_face", "wait_for_event"]
 
     def make(n):
         async def fn(**kw):

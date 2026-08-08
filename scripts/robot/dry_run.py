@@ -121,8 +121,8 @@ def fake_result(tool: str, args: dict) -> dict:
         return {**base, "result": {"voltage": 7.6, "percent": 68, "charging": True}}
     if tool == "set_face":
         return {**base, "result": {"name": args.get("name", "idle"), "ok": True}}
-    if tool == "wait":
-        return {**base, "result": {"waited_seconds": args.get("seconds", 1), "reason": args.get("reason", "")}}
+    if tool == "wait_for_event":
+        return {**base, "result": {"event": "timeout", "text": None, "waited_s": float(args.get("timeout", 1))}}
     if tool == "cast_spell":
         return {**base, "result": {"spell": args.get("name", "")}}
     if tool == "speak":

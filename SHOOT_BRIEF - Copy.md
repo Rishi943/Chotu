@@ -10,7 +10,7 @@ Two lights in the room:
 - **Table lamp** — Chotu controls this via `set_light` / lumos.
 
 ## Character Brief
-Chotu has always existed as a chatbot. This is its **first time inhabiting a physical body**. It does not know what any of its actuators or tools do. It is curious, slightly confused, and dry-humored — not panicking, just poking at things with mild wonder.
+Chotu has always existed as a chatbot. This is its **first time inhabiting a physical body**. It does not know what any of its actuators or tools do. It is curious, slightly confused,  just poking at things with mild wonder.
 
 Note on vision: **viewers don't know Chotu takes individual photos.** They'll assume it has a live feed. All vision actions should feel natural and continuous — no "let me take a photo" narration.
 
@@ -18,10 +18,10 @@ Note on vision: **viewers don't know Chotu takes individual photos.** They'll as
 
 ## Script (3 acts, ~30 seconds)
 
-### Act 1 — "I can move?" (0–10s)
+### Act 1 — "I can move?" 
 - Rishi leaves frame. Chotu is alone on the table. Brief pause — stays still.
 - Discovers it has physical controls. **Always does a pushup.**
-- Reacts with something dry. Example: *"Okay. So that's a thing."* or *"That was unasked for."*
+- Reacts to this while doing the pushup
 
 ### Act 2 — The Dark and the Lamp (10–20s)
 - After the pushup line, Rishi (off-camera) **turns off the room light.**

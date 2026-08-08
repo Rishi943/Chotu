@@ -136,25 +136,22 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "wait",
+            "name": "wait_for_event",
             "description": (
-                "Explicitly do nothing for a period. Creates a memory entry so you "
-                "remember you chose to wait. Use instead of producing no tool calls."
+                "Suspend until something happens: user text/speech, or timeout. "
+                "Zero-cost idle — use when there is genuinely nothing to do. "
+                "Short timeout when things are happening, long when quiet."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "seconds": {
+                    "timeout": {
                         "type": "integer",
-                        "description": "How long to wait (1-30).",
-                        "default": 5,
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Why you are waiting.",
+                        "description": "Max seconds to wait (1-600).",
+                        "default": 120,
                     },
                 },
-                "required": ["reason"],
+                "required": ["timeout"],
             },
         },
     },
@@ -286,39 +283,40 @@ async def capture_vision_tool(pi: PiClient) -> dict:
             "duration_ms": ms, "timestamp": time.time(),
             "error": "capture returned no image data",
         }
+    result = {"image_base64": image_b64, "format": "jpeg"}
+    if capture.get("result", {}).get("boosted"):
+        result["boosted"] = True
     return {
         "ok": True, "tool": "capture_vision",
-        "result": {"image_base64": image_b64, "format": "jpeg"},
+        "result": result,
         "duration_ms": ms, "timestamp": time.time(), "error": None,
     }
 
 
 # --- Local tools (no Pi call) ---
 
-async def local_wait(seconds: int = 5, reason: str = "") -> dict:
-    """Wait locally. Bails early if user input arrives. No Pi call."""
-    seconds = max(1, min(30, seconds))
+async def local_wait_for_event(timeout: int = 120) -> dict:
+    """Suspend until user input arrives or timeout. Mirrors the skill path's
+    wait_for_event result shape. Does NOT drain pending input — the loop turns
+    it into the next [human] message."""
+    timeout = max(1, min(600, int(timeout)))
     start = time.time()
-    deadline = start + seconds
-
+    event = "timeout"
     try:
         from core.brain import pending_input
-        while time.time() < deadline:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                break
-            await asyncio.sleep(min(0.25, remaining))
-            if pending_input.arrived.is_set():
-                break
+        try:
+            await asyncio.wait_for(pending_input.arrived.wait(), timeout=timeout)
+            event = "text"
+        except asyncio.TimeoutError:
+            pass
     except ImportError:
-        await asyncio.sleep(seconds)
-
-    actual = time.time() - start
+        await asyncio.sleep(timeout)
+    waited = time.time() - start
     return {
         "ok": True,
-        "tool": "wait",
-        "result": {"waited_seconds": round(actual, 1), "reason": reason},
-        "duration_ms": int(actual * 1000),
+        "tool": "wait_for_event",
+        "result": {"event": event, "text": None, "waited_s": round(waited, 1)},
+        "duration_ms": int(waited * 1000),
         "timestamp": time.time(),
         "error": None,
     }
@@ -340,15 +338,33 @@ async def local_speak(text: str, face_pi=None) -> dict:
 
     model = os.environ.get("LOCALIS_PIPER_MODEL", "")
     speak_output = os.environ.get("PALIV_SPEAK_OUTPUT", "laptop")
-    text_tts = re.sub(r"\bChotu\b", "Chaw-too", text, flags=re.IGNORECASE)
+    text_tts = re.sub(r"\bChotu\b", "Cho two", text, flags=re.IGNORECASE)
+    text_tts = re.sub(r"\bRushi\b", "Roo-shi", text_tts, flags=re.IGNORECASE)
+    # Em/en dashes garble on Windows (piper decodes stdin as cp1252 → mojibake
+    # spoken aloud); decoded correctly they act as a sentence break — map to one.
+    text_tts = re.sub(r"\s*[—–]\s*", ". ", text_tts)
     start = time.time()
 
     # Synthesize outside the lock so piper runs in parallel with any current playback
+    # PALIV_PIPER_ARGS: extra CLI flags for pacing, e.g. "--length-scale 1.2 --sentence-silence 0.6"
+    extra_args = os.environ.get("PALIV_PIPER_ARGS", "").split()
+    # piper 1.4 (python CLI) writes int(rate*silence*2) zero BYTES per sentence gap;
+    # an odd count byte-shifts the rest of the stream (screech). Nudge the value up
+    # (~23us steps) until piper's own expression lands even.
+    if "--sentence-silence" in extra_args:
+        i = extra_args.index("--sentence-silence") + 1
+        s = float(extra_args[i])
+        while int(22050 * s * 2) % 2:
+            s += 1 / 44100
+        extra_args[i] = f"{s:.10f}"
     proc = await asyncio.create_subprocess_exec(
-        "piper", "--model", model, "--output-raw",
+        "piper", "--model", model, "--output-raw", *extra_args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
+        # piper's CLI decodes stdin with the locale codec (cp1252 on Windows);
+        # force UTF-8 so remaining non-ASCII (curly quotes etc.) can't garble.
+        env={**os.environ, "PYTHONUTF8": "1"},
     )
     pcm, _ = await proc.communicate(input=text_tts.encode())
 
@@ -548,7 +564,7 @@ def build_dispatch(
         "get_distance":   lambda **kw: pi.get_distance(),
         "get_battery":    lambda **kw: pi.get_battery(),
         "set_face":       lambda **kw: pi.set_face(**kw),
-        "wait":           lambda **kw: local_wait(**kw),
+        "wait_for_event": lambda **kw: local_wait_for_event(**kw),
         "cast_spell":     lambda **kw: _do_cast_spell(pi, **kw),
         "speak":          lambda **kw: _do_speak(face_pi=pi, muted=mute, **kw),
     }

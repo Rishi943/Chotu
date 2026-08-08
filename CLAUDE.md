@@ -52,6 +52,7 @@ PALIV is an open agent framework for always-on embodied robot pets. Chotu (SunFo
 
 - **`PALIV.md`** — framework contract: loop model, tool budgets, hard interrupts, speech contract, tool definitions. Loaded into every system prompt.
 - **`CHOTU_BASE.md`** — Chotu's persona (voice, personality table, examples, physical constraints) plus the heartbeat-rhythm rules.
+- **`NAVIGATION.md`** — loop-agnostic movement/perception doctrine (turn≈30° nominal+drift, landmark servoing, dead ultrasonic). Skill loads it whole; PALIV.md carries a condensed block. Keep the two in sync.
 - **`docs/superpowers/specs/`** — design specs for in-flight refactors (gitignored except when force-added).
 
 The system prompt at runtime is `PALIV.md + CHOTU_BASE.md`, composed by `core/prompts.py`. The brain is stateless turn-based only (the live/realtime backends were removed — see git history / the `live-brain` branch).
@@ -118,5 +119,6 @@ For the full per-file index (every module in `core/`, `core/explore/`, `core/cha
 - Don't add SQLite/persistence until a later phase.
 - Cloud LLMs (Claude, Gemini) are fallback only, never default.
 - Don't rename `pi_bridge/chotu/` — it is Pi runtime code shipped separately.
+- **No em dashes in any TTS/speak text** (spoken lines, line pools, driver scripts; docs prose is fine). Piper's CLI decodes stdin with the locale codec — cp1252 on the Windows boot — so `—` is spoken aloud as mojibake babble (~1.8s, measured 2026-07-13). `local_speak` guards (maps `—`/`–` → `.`, forces `PYTHONUTF8=1`), but write spoken lines with ASCII punctuation only.
 - **No Claude attribution in commit messages.** Omit any `Co-Authored-By: Claude` line and any `Claude-Session:`/`claude.ai` link the harness suggests. Commit history is permanent and public if pushed — keep messages clean conventional-commit text only.
 - **Execution-mode recommendation must be per-task, not defaulted.** When presenting the writing-plans/executing-plans handoff options (subagent-driven vs. inline), do NOT auto-recommend subagent-driven just because the skill text says "(recommended)". Judge each task on cost and risk: recommend **inline** for single-file or tightly-coupled, sequential work, or when verification is gated on the user anyway; recommend **subagent-driven** only when tasks are genuinely independent/parallelizable or context-heavy enough that fresh per-task context pays off. State the reasoning (monetary/risk) for the pick.

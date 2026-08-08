@@ -8,6 +8,7 @@ Commands:
   memory_read             — recent turns formatted for skill injection
   memory_append '<json>'  — append a turn {"content":"...","tools":[...],"speak":"..."}
   think '<json>'          — record one reasoning line {"text":"..."} to the trace (the T in O/T/A)
+  marker '<json>'         — label the trace {"text":"ACT 1 BEGIN"} (act/scene boundaries for shoots)
 
   move '{"direction":"forward","steps":1}'
   pose '{"name":"sit"}'
@@ -195,6 +196,13 @@ async def _cmd_speak(text: str, pi=None) -> dict:
         return {"ok": False, "tool": "speak", "result": {}, "duration_ms": 0,
                 "timestamp": time.time(), "error": "speak: text is empty"}
     print(f'[speaks] "{text}"')
+    if os.environ.get("PALIV_MUTE") == "1":
+        return {"ok": True, "tool": "speak", "result": {"text": text, "played": False, "muted": True},
+                "duration_ms": 0, "timestamp": time.time(), "error": None}
+    if os.environ.get("PALIV_SPEAK_OUTPUT") == "pi" and pi is not None:
+        # Piper TTS on the laptop, WAV played on the Pi speaker via /play_wav
+        from core.tools import local_speak
+        return await local_speak(text, face_pi=pi)
     if pi is not None:
         # Use Pi's onboard speaker via /speak (espeak)
         return await pi.speak(text)
@@ -203,7 +211,8 @@ async def _cmd_speak(text: str, pi=None) -> dict:
 
 
 async def _cmd_capture(pi) -> dict:
-    result = await pi.capture()
+    # Fable/skill path always wants max detail; local-brain path keeps 320x240q40.
+    result = await pi.capture(full=True)
     if not result.get("ok"):
         return result
     r = result.get("result", {})
@@ -317,9 +326,22 @@ def main() -> None:
             print(f"error: invalid JSON: {args[1]!r}", file=sys.stderr)
             sys.exit(1)
 
+    if command == "marker":
+        text = (tool_args.get("text") or "").strip()
+        if not text:
+            print("error: marker: text is empty", file=sys.stderr)
+            sys.exit(1)
+        trace.record("observation", "marker", {"text": text}, {})
+        print("ok — marker recorded")
+        return
+
     result = asyncio.run(_run(command, tool_args))
 
-    if command != "wait_for_event":
+    if command == "wait_for_event":
+        # The event that ends a wait (user text/speech or timeout) is the observation
+        # that triggers the next behaviour — it must land in the training trace.
+        trace.record("observation", command, tool_args, result if isinstance(result, dict) else {"text": result})
+    else:
         kind = trace.classify(command)
         frame = (result.get("result") or {}).get("trace_frame") if isinstance(result, dict) else None
         trace.record(kind, command, tool_args, result if isinstance(result, dict) else {"text": result}, frame=frame)

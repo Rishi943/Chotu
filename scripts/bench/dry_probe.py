@@ -81,8 +81,8 @@ def fake_result(tool: str, args: dict, world: FakeWorld | None = None) -> dict:
         return {**base, "result": {"voltage": 7.6, "percent": 68, "charging": False}}
     if tool == "capture_vision":
         return {**base, "result": {"image_base64": "", "format": "jpeg"}}
-    if tool == "wait":
-        return {**base, "result": {"waited_seconds": args.get("seconds", 1), "reason": args.get("reason", "")}}
+    if tool == "wait_for_event":
+        return {**base, "result": {"event": "timeout", "text": None, "waited_s": float(args.get("timeout", 1))}}
     if tool == "get_perception":
         color_arg = args.get("color")
         if world and world.color_detected and color_arg == world.color_detected:

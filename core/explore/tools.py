@@ -295,7 +295,7 @@ async def scoped_conclude(scope: Scope, *, status: str, notes: str = "") -> dict
 
 def build_scope_dispatch(pi: PiClient, scope: Scope) -> dict:
     """Build the name -> async callable map active while a scope is open."""
-    from core.tools import local_wait, _do_speak
+    from core.tools import local_wait_for_event, _do_speak
 
     return {
         "move":                     lambda **kw: scoped_move(pi, scope, **kw),
@@ -309,7 +309,7 @@ def build_scope_dispatch(pi: PiClient, scope: Scope) -> dict:
         "get_battery":              lambda **kw: pi.get_battery(),
         "set_face":                 lambda **kw: pi.set_face(**kw),
         "speak":                    lambda **kw: _do_speak(face_pi=pi, muted=False, **kw),
-        "wait":                     lambda **kw: local_wait(**kw),
+        "wait_for_event":           lambda **kw: local_wait_for_event(**kw),
     }
 
 

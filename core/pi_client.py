@@ -60,8 +60,8 @@ class PiClient:
     async def get_distance(self) -> dict:
         return await self._get("/distance", "get_distance")
 
-    async def capture(self) -> dict:
-        return await self._post("/capture", "capture", {})
+    async def capture(self, full: bool = False) -> dict:
+        return await self._post("/capture", "capture", {"full": full})
 
     async def get_battery(self) -> dict:
         return await self._get("/battery", "battery")

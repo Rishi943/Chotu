@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-_OBS = {"capture_vision", "get_distance", "get_battery", "get_perception", "health", "state"}
+_OBS = {"capture_vision", "get_distance", "get_battery", "get_perception", "health", "state", "marker"}
 _ACT = {"move", "pose", "set_legs", "peek_over", "speak", "set_face", "set_light", "play_sequence"}
 
 

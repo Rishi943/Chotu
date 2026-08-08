@@ -134,7 +134,7 @@ def _fake_dispatch() -> dict:
             r["result"] = {"text": kw.get("text", ""), "played": True}
         return r
 
-    names = ["move", "pose", "speak", "get_distance", "get_battery", "set_face", "wait"]
+    names = ["move", "pose", "speak", "get_distance", "get_battery", "set_face", "wait_for_event"]
 
     def _make(n):
         async def fn(**kw): return _env(n, **kw)
