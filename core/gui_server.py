@@ -77,6 +77,7 @@ async def chat(request: Request):
     body = await request.json()
     text = body.get("text", "")
     if text:
+        brain.motion_runner.clear_stage()
         brain.pending_input.push(text)
     return JSONResponse({"ok": True})
 
@@ -101,6 +102,7 @@ async def audio(audio: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
     if out["text"]:
+        brain.motion_runner.clear_stage()
         brain.pending_input.push(out["text"])
     return JSONResponse({"ok": True, **out})
 
