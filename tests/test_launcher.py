@@ -43,7 +43,8 @@ def test_to_env_defaults_qwen_local_overrides_url():
     assert env["PALIV_BRAIN_KEY"] == ""
     assert env["PALIV_VOICE"] == "0" and env["PALIV_PTT"] == "0"
     assert env["PALIV_MUTE"] == "0" and env["PALIV_DEBUG"] == "0"
-    assert env["PALIV_SHOW_STATS"] == "0" and env["PALIV_PERSONA"] == ""
+    assert env["PALIV_SHOW_STATS"] == "0"
+    assert "PALIV_PERSONA" not in env
 
 
 def test_to_env_dashscope_leaves_url_unset():
@@ -72,7 +73,6 @@ def test_to_env_input_modes_map_to_voice_ptt():
 def test_seed_empty_env_is_qwen_base_off():
     s = LauncherState.seed_from_env({})
     assert s.preset_idx == 1        # Qwen
-    assert s.persona == "base"
     assert s.input_mode == "text"
     assert not (s.mute or s.debug or s.stats)
 
@@ -99,11 +99,6 @@ def test_seed_gemma_model_selects_gemma():
     assert s.preset_idx == 0        # Gemma
 
 
-def test_seed_reel_persona():
-    s = LauncherState.seed_from_env({"PALIV_PERSONA": "reel"})
-    assert s.persona == "reel"
-
-
 def test_seed_input_and_stats_and_pi_default():
     s = LauncherState.seed_from_env({"PALIV_PTT": "1", "PALIV_SHOW_STATS": "1"})
     assert s.input_mode == "ptt" and s.stats is True
@@ -115,7 +110,7 @@ def test_down_moves_focus_and_wraps():
     s = LauncherState(focus=0)
     action, s = s.apply_key("DOWN")
     assert action == "continue" and s.focus == 1
-    s = LauncherState(focus=10)
+    s = LauncherState(focus=9)
     _, s = s.apply_key("DOWN")
     assert s.focus == 0
 
@@ -123,7 +118,7 @@ def test_down_moves_focus_and_wraps():
 def test_up_wraps_to_last():
     s = LauncherState(focus=0)
     _, s = s.apply_key("UP")
-    assert s.focus == 10
+    assert s.focus == 9
 
 
 def test_select_on_preset_row_is_radio():
@@ -133,42 +128,34 @@ def test_select_on_preset_row_is_radio():
 
 
 def test_select_input_row_cycles():
-    s = LauncherState(focus=5, input_mode="text")
+    s = LauncherState(focus=4, input_mode="text")
     _, s = s.apply_key("SELECT"); assert s.input_mode == "voice"
     _, s = s.apply_key("SELECT"); assert s.input_mode == "ptt"
     _, s = s.apply_key("SELECT"); assert s.input_mode == "text"
 
 
 def test_select_pi_bridge_row_cycles():
-    s = LauncherState(focus=9, pi_mode="running")
+    s = LauncherState(focus=8, pi_mode="running")
     _, s = s.apply_key("SELECT"); assert s.pi_mode == "start"
     _, s = s.apply_key("SELECT"); assert s.pi_mode == "offline"
     _, s = s.apply_key("SELECT"); assert s.pi_mode == "running"
 
 
 def test_select_stats_toggle():
-    s = LauncherState(focus=8)
+    s = LauncherState(focus=7)
     _, s = s.apply_key("SELECT"); assert s.stats is True
 
 
 def test_select_on_toggle_flips_only_that_toggle():
-    s = LauncherState(focus=6)                  # mute row
+    s = LauncherState(focus=5)                  # mute row
     _, s = s.apply_key("SELECT")
     assert s.mute is True and s.debug is False
     _, s = s.apply_key("SELECT")
     assert s.mute is False
 
 
-def test_select_on_persona_cycles():
-    s = LauncherState(focus=4, persona="base")
-    _, s = s.apply_key("SELECT")
-    assert s.persona == "reel"
-    _, s = s.apply_key("SELECT")
-    assert s.persona == "base"
-
-
 def test_select_on_start_returns_start():
-    s = LauncherState(focus=10)
+    s = LauncherState(focus=9)
     action, _ = s.apply_key("SELECT")
     assert action == "start"
 
@@ -185,10 +172,11 @@ def test_unknown_key_is_noop():
 
 
 def test_render_shows_new_rows():
-    text = LauncherState(preset_idx=0, mute=True, stats=True, persona="reel").render()
+    text = LauncherState(preset_idx=0, mute=True, stats=True).render()
     assert "Gemma" in text and "Qwen cloud" in text and "Claude" in text
     assert "Input:" in text and "Pi bridge:" in text
     assert "[✓] Mute" in text and "[✓] Stats" in text
+    assert "Persona" not in text
 
 
 def test_run_launcher_noop_when_disabled(monkeypatch):

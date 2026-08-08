@@ -1,7 +1,7 @@
 """Pre-launch interactive config screen for `python -m core.brain`.
 
 Renders an arrow-key terminal screen (stdlib termios/tty only) letting the user
-pick a model/provider preset and toggle mute/debug/voice/PTT/persona, then writes
+pick a model/provider preset and toggle mute/debug/voice/PTT, then writes
 the choices into os.environ. Must run BEFORE any env-reading core.* import so the
 selections win over .env (which loads with override=False)."""
 
@@ -37,13 +37,12 @@ def llama_args(preset: dict, models_dir: Path) -> list[str]:
 # Toggle field name -> env var (checkbox toggles only).
 TOGGLES = {"mute": "PALIV_MUTE", "debug": "PALIV_DEBUG", "stats": "PALIV_SHOW_STATS"}
 
-N_ROWS = 11         # 4 presets + persona + input + mute/debug/stats + pi-bridge + Start
-START_ROW = 10
-PIBRIDGE_ROW = 9
-PERSONA_ROW = 4
-INPUT_ROW = 5
+N_ROWS = 10         # 4 presets + input + mute/debug/stats + pi-bridge + Start
+START_ROW = 9
+PIBRIDGE_ROW = 8
+INPUT_ROW = 4
 PRESET_ROWS = (0, 1, 2, 3)
-TOGGLE_BY_ROW = {6: "mute", 7: "debug", 8: "stats"}
+TOGGLE_BY_ROW = {5: "mute", 6: "debug", 7: "stats"}
 _INPUT_CYCLE = ["text", "voice", "ptt"]
 _PI_CYCLE = ["running", "start", "offline"]
 
@@ -56,7 +55,6 @@ class LauncherState:
     stats: bool = False
     input_mode: str = "text"       # text | voice | ptt
     pi_mode: str = "running"       # running | start | offline
-    persona: str = "base"          # "base" or "reel"
     focus: int = 0                 # index into the focusable row list
 
     @classmethod
@@ -84,7 +82,6 @@ class LauncherState:
             stats=env.get("PALIV_SHOW_STATS") == "1",
             input_mode=input_mode,
             pi_mode="running",
-            persona="reel" if env.get("PALIV_PERSONA") == "reel" else "base",
         )
 
     def apply_key(self, key: str) -> tuple[str, "LauncherState"]:
@@ -108,8 +105,6 @@ class LauncherState:
                 self.input_mode = _INPUT_CYCLE[(_INPUT_CYCLE.index(self.input_mode) + 1) % 3]
             elif self.focus == PIBRIDGE_ROW:
                 self.pi_mode = _PI_CYCLE[(_PI_CYCLE.index(self.pi_mode) + 1) % 3]
-            elif self.focus == PERSONA_ROW:
-                self.persona = "reel" if self.persona == "base" else "base"
             return ("continue", self)
         return ("continue", self)   # unknown key: no-op
 
@@ -118,7 +113,6 @@ class LauncherState:
         env = {
             "PALIV_LLM_PROVIDER": preset["provider"],
             "PALIV_BRAIN_MODEL": preset["model"],
-            "PALIV_PERSONA": "reel" if self.persona == "reel" else "",
             "PALIV_VOICE": "1" if self.input_mode == "voice" else "0",
             "PALIV_PTT": "1" if self.input_mode == "ptt" else "0",
         }
@@ -137,10 +131,9 @@ class LauncherState:
             mark = "•" if self.preset_idx == i else " "
             lines.append(f"  {cur(i)} ({mark}) {p['label']}  ({p['tag']})")
         lines.append("")
-        lines.append(f"  {cur(PERSONA_ROW)} Persona: {self.persona} ▸")
         lines.append(f"  {cur(INPUT_ROW)} Input: {self.input_mode} ▸")
         lines.append("")
-        for row, name, label in [(6, "mute", "Mute"), (7, "debug", "Debug"), (8, "stats", "Stats")]:
+        for row, name, label in [(5, "mute", "Mute"), (6, "debug", "Debug"), (7, "stats", "Stats")]:
             box = "✓" if getattr(self, name) else " "
             lines.append(f"  {cur(row)} [{box}] {label}")
         lines.append(f"  {cur(PIBRIDGE_ROW)} Pi bridge: {self.pi_mode} ▸")

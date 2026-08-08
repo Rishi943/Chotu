@@ -209,7 +209,10 @@ TOOL_SCHEMAS = [
 
 
 def peek_over_enabled(env=None) -> bool:
-    """True when the reel persona is active (PALIV_PERSONA=reel)."""
+    """True when the reel persona is active (PALIV_PERSONA=reel).
+
+    `peek_over` is not one of the five tools; it and this PALIV_PERSONA read
+    are scheduled to die together with the five-tool rewrite (Task 3)."""
     env = os.environ if env is None else env
     return env.get("PALIV_PERSONA") == "reel"
 
