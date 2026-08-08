@@ -194,10 +194,7 @@ function handleEvent(e) {
     }
 
     case "battery":
-      if (typeof e.percent === "number") {
-        batteryFill.style.width = Math.max(0, Math.min(100, e.percent)) + "%";
-        batteryPct.textContent = Math.round(e.percent) + "%";
-      }
+      if (typeof e.percent === "number") setBattery(e.percent, e.voltage);
       break;
 
     case "ping":
@@ -227,3 +224,77 @@ es.onmessage = (msg) => {
     /* bad frame — drop it */
   }
 };
+
+// --- camera, battery, and the stop control ---
+
+const stage = $("stage");
+const cam = $("cam");
+const stopBtn = $("stop");
+const SAG_DELTA = 0.4; // volts
+const SAG_WINDOW_MS = 30000;
+
+// 30 s ring buffer of voltages so a brown-out (which has already taken the Pi
+// down mid-move) is caught early.
+const sagRing = [];
+function setBattery(percent, voltage) {
+  batteryFill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+  batteryPct.textContent = Math.round(percent) + "%";
+
+  if (typeof voltage === "number") {
+    const now = Date.now();
+    sagRing.push({ t: now, v: voltage });
+    while (sagRing.length && sagRing[0].t < now - SAG_WINDOW_MS) sagRing.shift();
+    const maxV = Math.max(...sagRing.map((r) => r.v));
+    batteryPct.classList.toggle("sag", maxV - voltage >= SAG_DELTA);
+  }
+}
+
+// Bootstrap the meter once, before the first pushed battery event.
+async function bootstrapBattery() {
+  try {
+    const resp = await fetch("/api/battery");
+    const data = await resp.json();
+    let pct, volt;
+    if (data && data.ok && data.result) {
+      pct = data.result.percent;
+      volt = data.result.voltage;
+    } else if (data && typeof data.percent === "number") {
+      pct = data.percent;
+      volt = data.voltage;
+    }
+    if (typeof pct === "number") setBattery(pct, volt);
+  } catch {
+    /* leave the placeholder -- the first SSE event fills it */
+  }
+}
+
+// Camera: when the Pi's camera is off or the robot is down the stream fails
+// and the image goes blank. Show a placeholder and retry every 5 s so the
+// console never looks broken because Chotu is charging.
+let camRetry = null;
+cam.addEventListener("error", () => {
+  stage.classList.add("offline");
+  if (!camRetry) {
+    camRetry = setInterval(() => {
+      cam.src = "/stream?" + Date.now();
+    }, 5000);
+  }
+});
+cam.addEventListener("load", () => {
+  stage.classList.remove("offline");
+  if (camRetry) {
+    clearInterval(camRetry);
+    camRetry = null;
+  }
+});
+
+// E-stop: freeze the robot and clear any staged follow-up move.
+stopBtn.addEventListener("click", async () => {
+  try {
+    await fetch("/stop", { method: "POST" });
+  } catch {
+    appendEntry("err", "could not reach Chotu to stop");
+  }
+});
+
+bootstrapBattery();

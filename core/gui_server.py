@@ -81,6 +81,14 @@ async def chat(request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/stop")
+async def stop():
+    brain.estop.set()
+    brain.motion_runner.clear_stage()
+    brain.pending_input.push("[stop] freeze -- stop what you are doing")
+    return JSONResponse({"ok": True})
+
+
 
 @app.post("/audio")
 async def audio(audio: UploadFile = File(...)):
