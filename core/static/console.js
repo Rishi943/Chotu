@@ -62,17 +62,42 @@ const talkState = {
   chunks: [],
 };
 
+// The one thing that actually closes the mic: MediaRecorder.stop() releases the
+// recorder but leaves every MediaStream track live, so the browser keeps the
+// recording indicator lit. Ported from the Gemma Translator's capture wiring —
+// every stream track must be stopped on every exit path (release, error, empty
+// take, page hide/unload). A stream is single-use: once torn down it is nulled
+// so the next take requests a fresh getUserMedia stream.
+function stopStreamTracks() {
+  if (talkState.stream) {
+    talkState.stream.getTracks().forEach((t) => t.stop());
+    talkState.stream = null;
+  }
+}
+
+// Full teardown: stop the recorder (if any) and every stream track. Safe to call
+// repeatedly — idempotent. Used on error and on page hide/unload, where the
+// escape hatch is "indicator must go out, whatever is in flight".
+function teardownCapture() {
+  const recorder = talkState.recorder;
+  talkState.recorder = null;
+  if (recorder) {
+    try { recorder.stop(); } catch { /* already stopped or failed */ }
+  }
+  stopStreamTracks();
+  talkState.recording = false;
+  talk.classList.remove("recording");
+}
+
 async function startRecording() {
   if (talkState.uploading) return; // ignore a second press while one is uploading
   if (talkState.recording) return;
 
-  if (!talkState.stream) {
-    try {
-      talkState.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      appendEntry("err", "microphone unavailable — " + plainError(err));
-      return;
-    }
+  try {
+    talkState.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    appendEntry("err", "microphone unavailable — " + plainError(err));
+    return;
   }
 
   const mime = pickMime();
@@ -86,6 +111,7 @@ async function startRecording() {
     try {
       recorder = new MediaRecorder(talkState.stream);
     } catch (err2) {
+      stopStreamTracks(); // never hold a stream we cannot record with
       appendEntry("err", "recording not supported on this browser");
       return;
     }
@@ -96,12 +122,16 @@ async function startRecording() {
     if (e.data && e.data.size) talkState.chunks.push(e.data);
   };
   recorder.onerror = () => {
-    talkState.recording = false;
-    talk.classList.remove("recording");
+    // mid-take failure: tear the stream down so the mic indicator goes out
+    teardownCapture();
   };
   recorder.onstop = () => {
+    const hasTake = talkState.chunks.length > 0;
     const blob = new Blob(talkState.chunks, { type: recorder.mimeType || "audio/webm" });
-    upload(blob);
+    // Always stop the tracks when the take ends — empty or too-short takes
+    // still hold the mic open if we skip this.
+    stopStreamTracks();
+    if (hasTake) upload(blob);
   };
   recorder.start();
   talkState.recorder = recorder;
@@ -113,12 +143,14 @@ function stopRecording() {
   if (!talkState.recording) return;
   talkState.recording = false;
   talk.classList.remove("recording");
-  try {
-    talkState.recorder.stop();
-    talkState.recorder = null;
-  } catch {
-    talkState.recorder = null;
+  const recorder = talkState.recorder;
+  talkState.recorder = null;
+  if (recorder) {
+    try { recorder.stop(); } catch { /* recorder already dead — fall through */ }
   }
+  // recorder.onstop assembles and uploads the take; we kill the stream tracks
+  // here in the normal-release path so the indicator goes out immediately.
+  stopStreamTracks();
 }
 
 function pickMime() {
@@ -212,6 +244,15 @@ document.addEventListener("keyup", (e) => {
   if (e.key === "z" || e.key === "Z") talkKeyUp("z");
   else if (e.code === "Space") talkKeyUp("space");
 });
+
+// Page-hidden/unload teardown: if the user switches away or closes the tab while
+// holding Z, the browser would otherwise keep the mic on and the recording
+// indicator lit. Tearing down on pagehide and on becoming hidden guarantees the
+// indicator goes out on these exit paths too.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) teardownCapture();
+});
+window.addEventListener("pagehide", teardownCapture);
 
 // --- live transcript from the SSE stream ---
 
