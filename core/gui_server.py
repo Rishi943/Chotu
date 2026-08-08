@@ -6,7 +6,7 @@ import pathlib
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -92,13 +92,13 @@ async def stop():
 
 
 @app.post("/audio")
-async def audio(audio: UploadFile = File(...)):
+async def audio(audio: UploadFile = File(...), source: str = Form("mr")):
     raw = await audio.read()
     if not raw:
         return JSONResponse({"ok": False, "error": "empty recording"},
                              status_code=400)
     try:
-        out = await hear(raw, audio.content_type or "audio/wav")
+        out = await hear(raw, audio.content_type or "audio/wav", source=source)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
     if out["text"]:

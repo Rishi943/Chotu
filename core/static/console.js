@@ -7,6 +7,39 @@ const talk = $("talk");
 const hint = $("hint");
 const transcript = $("transcript");
 const langEl = $("lang");
+const sourceLangEl = $("source-lang");
+
+// The source language is an explicit user choice -- the backend never asks the
+// model to detect it. Adding a language is a one-line addition here.
+const SOURCE_LANGS = [
+  { code: "mr", name: "Marathi" },
+  { code: "hi", name: "Hindi" },
+  { code: "ja", name: "Japanese" },
+  { code: "en", name: "English" },
+];
+const SOURCE_KEY = "chotu.sourceLang";
+
+function initSourceLang() {
+  for (const lang of SOURCE_LANGS) {
+    const opt = document.createElement("option");
+    opt.value = lang.code;
+    opt.textContent = lang.name;
+    sourceLangEl.appendChild(opt);
+  }
+  let saved = null;
+  try {
+    saved = localStorage.getItem(SOURCE_KEY);
+  } catch { /* localStorage unavailable -- use the default */ }
+  const chosen =
+    SOURCE_LANGS.find((l) => l.code === saved) || SOURCE_LANGS[0];
+  sourceLangEl.value = chosen.code;
+  sourceLangEl.addEventListener("change", () => {
+    try {
+      localStorage.setItem(SOURCE_KEY, sourceLangEl.value);
+    } catch { /* non-fatal */ }
+  });
+}
+initSourceLang();
 
 // --- transcript helpers (shared by the capture and the SSE stream) ---
 
@@ -106,6 +139,7 @@ async function upload(blob) {
   try {
     const fd = new FormData();
     fd.append("audio", blob, "capture.webm");
+    fd.append("source", sourceLangEl.value);
     const resp = await fetch("/audio", { method: "POST", body: fd });
     const data = await resp.json();
     if (data.ok) {

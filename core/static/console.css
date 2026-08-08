@@ -148,6 +148,22 @@ body {
   font-size: 0.8em;
 }
 
+#source-lang {
+  background: var(--pane);
+  color: var(--txt);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.75em;
+  padding: 3px 6px;
+  color-scheme: dark;
+}
+
+#source-lang:focus-visible {
+  outline: 2px solid var(--cy);
+  outline-offset: 2px;
+}
+
 #gear {
   margin-left: auto;
   background: none;

@@ -38,7 +38,7 @@ def test_audio_clears_staged_move_before_pushing(monkeypatch):
     monkeypatch.setattr(brain, "motion_runner", runner)
     monkeypatch.setattr(brain, "pending_input", pending)
 
-    async def fake_hear(raw, mime):
+    async def fake_hear(raw, mime, source="mr"):
         return {"text": "walk forward", "language": "Marathi", "ms": 230}
 
     with patch("core.gui_server.hear", side_effect=fake_hear):
