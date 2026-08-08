@@ -62,25 +62,38 @@ def build_prompt(source, dst="en"):
 
 
 def parse_hearing(reply, src_name="Marathi", dst_name="English"):
-    """Split the model's reply into {"text", "language"}. Never raises.
+    """Split the model's reply into {"text", "source", "language"}. Never raises.
 
-    text is the English translation (what the brain consumes). language is the
-    source-language name we already knew going in -- the model no longer names
-    it, so we label the reply with the user's explicit choice.
+    text is the English translation (what the brain consumes). source is the
+    verbatim transcription in the source language (the Devanagari, for
+    Marathi/Hindi) -- the model emits it on the same line as the `English:`
+    marker, and the Gemma Translator renders it, so it must not be thrown away.
+    language is the source-language name we already knew going in -- the model
+    no longer names it, so we label the reply with the user's explicit choice.
     """
     reply = (reply or "").strip()
     if not reply:
-        return {"text": "", "language": src_name}
+        return {"text": "", "source": "", "language": src_name}
 
     marker = dst_name + ":"
     if marker in reply:
-        _, _, translation = reply.partition(marker)
-        return {"text": translation.strip(), "language": src_name}
+        source, _, translation = reply.partition(marker)
+        return {
+            "text": translation.strip(),
+            "source": source.strip(),
+            "language": src_name,
+        }
 
     lines = [l.strip() for l in reply.splitlines() if l.strip()]
     if len(lines) >= 2:
-        return {"text": " ".join(lines[1:]), "language": src_name}
-    return {"text": reply, "language": src_name}
+        # No `English:` marker but a multi-line reply: the first line is almost
+        # always the source transcription, the rest the translation.
+        return {
+            "text": " ".join(lines[1:]),
+            "source": lines[0],
+            "language": src_name,
+        }
+    return {"text": reply, "source": reply, "language": src_name}
 
 
 def pcm_to_wav(pcm_bytes, rate=16000):
@@ -145,5 +158,10 @@ async def hear(audio_bytes, mime, source=DEFAULT_SOURCE):
     raw = (out["choices"][0]["message"].get("content") or "").strip()
     src_name = LANG_NAME.get(source, LANG_NAME[DEFAULT_SOURCE])
     parsed = parse_hearing(raw, src_name=src_name, dst_name="English")
-    return {"text": parsed["text"], "language": parsed["language"], "ms": ms}
+    return {
+        "text": parsed["text"],
+        "source": parsed["source"],
+        "language": parsed["language"],
+        "ms": ms,
+    }
 

@@ -1,56 +1,58 @@
-// Chotu console — page entry module. Holds the talk capture; later tasks add
-// the SSE transcript, camera/battery/stop, and the settings panel.
+﻿// Chotu console -- translator panel (left) + camera with one telemetry overlay
+// (right). Numbered lanes 1/2 select the SOURCE language; Z / Space (or the talk
+// disc) is push-to-talk. The mic capture and teardown paths are ported from the
+// Gemma Translator: every stream track is stopped on every exit path so the
+// browser recording indicator always goes out.
 
 const $ = (id) => document.getElementById(id);
 
 const talk = $("talk");
-const hint = $("hint");
-const transcript = $("transcript");
-const langEl = $("lang");
-const sourceLangEl = $("source-lang");
+const resting = $("resting");
+const active = $("active");
+const srcText = $("src-text");
+const dstText = $("dst-text");
+const srcLabel = $("src-label");
+const dstLabel = $("dst-label");
+const timing = $("timing");
 
-// The source language is an explicit user choice -- the backend never asks the
-// model to detect it. Adding a language is a one-line addition here.
-const SOURCE_LANGS = [
-  { code: "mr", name: "Marathi" },
-  { code: "hi", name: "Hindi" },
-  { code: "ja", name: "Japanese" },
-  { code: "en", name: "English" },
+// --- numbered language lanes: select the SOURCE language ---
+
+// The two numbered lanes from the approved mockup. Pressing 1 or 2 picks a lane,
+// exactly like the Gemma Translator's active-person selection. The chosen lane's
+// code is what gets POSTed as the existing `source` field (unchanged contract).
+const LANES = [
+  { num: "1", code: "mr", name: "MARATHI" },
+  { num: "2", code: "en", name: "ENGLISH" },
 ];
 const SOURCE_KEY = "chotu.sourceLang";
 
-function initSourceLang() {
-  for (const lang of SOURCE_LANGS) {
-    const opt = document.createElement("option");
-    opt.value = lang.code;
-    opt.textContent = lang.name;
-    sourceLangEl.appendChild(opt);
-  }
+let currentSource = "mr";
+
+function selectLane(lane) {
+  currentSource = lane.code;
+  document.querySelectorAll("#lanes .lane").forEach((el) => {
+    el.classList.toggle("selected", el.dataset.code === lane.code);
+  });
+  try {
+    localStorage.setItem(SOURCE_KEY, lane.code);
+  } catch { /* localStorage unavailable -- selection just does not persist */ }
+}
+
+function initLanes() {
   let saved = null;
   try {
     saved = localStorage.getItem(SOURCE_KEY);
-  } catch { /* localStorage unavailable -- use the default */ }
-  const chosen =
-    SOURCE_LANGS.find((l) => l.code === saved) || SOURCE_LANGS[0];
-  sourceLangEl.value = chosen.code;
-  sourceLangEl.addEventListener("change", () => {
-    try {
-      localStorage.setItem(SOURCE_KEY, sourceLangEl.value);
-    } catch { /* non-fatal */ }
+  } catch { /* use default */ }
+  const chosen = LANES.find((l) => l.code === saved) || LANES[0];
+  selectLane(chosen);
+  document.querySelectorAll("#lanes .lane").forEach((el) => {
+    el.addEventListener("click", () => {
+      const lane = LANES.find((l) => l.code === el.dataset.code);
+      if (lane) selectLane(lane);
+    });
   });
 }
-initSourceLang();
-
-// --- transcript helpers (shared by the capture and the SSE stream) ---
-
-function appendEntry(className, inner) {
-  const el = document.createElement("div");
-  el.className = className;
-  el.innerHTML = inner;
-  transcript.appendChild(el);
-  transcript.scrollTop = transcript.scrollHeight;
-  return el;
-}
+initLanes();
 
 // --- hold-to-talk capture ---
 
@@ -64,19 +66,11 @@ const talkState = {
   sampleChunks: [],
 };
 
-// Mic-capture wiring ported from the Gemma Translator's useAudioRecorder: a
-// ScriptProcessorNode grabs raw Float32 PCM and we resample it to 16 kHz mono
-// on release — no MediaRecorder/webm/opus, so the backend always receives bare
-// PCM it can wrap in a real WAV. ScriptProcessorNode is deprecated but needs no
-// separately-served AudioWorklet module, so it is the right call for short
-// push-to-talk clips on the console's Chromium.
-
 // The one thing that actually closes the mic: stopping only the recording graph
 // leaves every MediaStream track live, so the browser keeps the recording
-// indicator lit. Ported from the Gemma Translator's capture wiring — every
-// stream track must be stopped on every exit path (release, error, empty take,
-// page hide/unload). A stream is single-use: once torn down it is nulled so the
-// next take requests a fresh getUserMedia stream.
+// indicator lit. Every stream track must be stopped on every exit path (release,
+// error, empty take, page hide/unload). A stream is single-use: once torn down
+// it is nulled so the next take requests a fresh getUserMedia stream.
 function stopStreamTracks() {
   if (talkState.stream) {
     talkState.stream.getTracks().forEach((t) => t.stop());
@@ -105,7 +99,7 @@ function stopAudioGraph() {
 }
 
 // Full teardown: stop the audio graph, every stream track, and drop any buffered
-// samples. Safe to call repeatedly — idempotent. Used on error and on page
+// samples. Safe to call repeatedly -- idempotent. Used on error and on page
 // hide/unload, where the escape hatch is "indicator must go out, whatever is in
 // flight".
 function teardownCapture() {
@@ -123,7 +117,7 @@ async function startRecording() {
   try {
     talkState.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
-    appendEntry("err", "microphone unavailable — " + plainError(err));
+    showError("microphone unavailable -- " + plainError(err));
     return;
   }
 
@@ -150,7 +144,7 @@ async function startRecording() {
   } catch (err) {
     // never hold a stream we cannot record with
     teardownCapture();
-    appendEntry("err", "recording not supported on this browser — " + plainError(err));
+    showError("recording not supported on this browser -- " + plainError(err));
     return;
   }
 
@@ -176,8 +170,6 @@ async function stopRecording() {
     return;
   }
 
-  // Ported from the Gemma Translator: merge the per-callback chunks and
-  // resample to 16 kHz mono, the shape the backend expects for a WAV.
   const merged = getMergedSamples(chunks);
   const pcm = resample(merged, actualSampleRate, 16000);
   const blob = new Blob([pcm.buffer], { type: "application/octet-stream" });
@@ -197,7 +189,7 @@ function getMergedSamples(chunks) {
   return merged;
 }
 
-// Naive linear-interpolation resampler — quality is fine for speech STT.
+// Naive linear-interpolation resampler -- quality is fine for speech STT.
 function resample(audio, fromRate, toRate) {
   if (fromRate === toRate) return audio;
   const ratio = fromRate / toRate;
@@ -219,31 +211,46 @@ function plainError(err) {
   return (err && err.message) || "unknown error";
 }
 
+function fmt(ms) {
+  return ms < 1000 ? (ms / 1000).toFixed(2) + "s" : (ms / 1000).toFixed(1) + "s";
+}
+
+// Render the result of a take in the orange translator panel: source card,
+// translation card, timing line.
+function showTake(data) {
+  const lane = LANES.find((l) => l.code === currentSource) || LANES[0];
+  resting.hidden = true;
+  active.hidden = false;
+  srcLabel.textContent = lane.name + " (SOURCE)";
+  srcText.textContent = data.source || "";
+  dstLabel.textContent = "ENGLISH (TRANSLATION)";
+  dstText.textContent = data.text || "";
+  timing.textContent = data.ms ? "heard \u00b7 translated \u00b7 total " + fmt(data.ms) : "";
+}
+
+function showError(message) {
+  resting.hidden = false;
+  active.hidden = true;
+  dstText.textContent = message;
+  dstLabel.textContent = "ERROR";
+  timing.textContent = "";
+}
+
 async function upload(blob) {
   talkState.uploading = true;
-  const pending = appendEntry("you pending", '<span class="mono dim">…</span>');
-
   try {
     const fd = new FormData();
     fd.append("audio", blob, "capture.pcm");
-    fd.append("source", sourceLangEl.value);
+    fd.append("source", currentSource);
     const resp = await fetch("/audio", { method: "POST", body: fd });
     const data = await resp.json();
     if (data.ok) {
-      pending.className = "you";
-      pending.innerHTML =
-        "<span class='txt'></span><span class='mono meta'></span>";
-      pending.querySelector(".txt").textContent = data.text || "";
-      const meta = pending.querySelector(".meta");
-      meta.textContent = data.language ? data.language + (data.ms ? " · " + data.ms + "ms" : "") : "";
-      if (data.language) langEl.textContent = data.language;
+      showTake(data);
     } else {
-      pending.remove();
-      appendEntry("err", (data.error || "something went wrong").replace(/^.*?: /, ""));
+      showError((data.error || "something went wrong").replace(/^.*?: /, ""));
     }
   } catch (err) {
-    pending.remove();
-    appendEntry("err", "could not reach Chotu — " + plainError(err));
+    showError("could not reach Chotu -- " + plainError(err));
   } finally {
     talkState.uploading = false;
   }
@@ -260,18 +267,17 @@ talk.addEventListener("pointerup", stopRecording);
 talk.addEventListener("pointercancel", stopRecording);
 talk.addEventListener("pointerleave", stopRecording);
 
-// Hold-to-talk on the desktop: Space (existing) and Z (like the Gemma
-// Translator). Auto-repeat is ignored so holding a key only starts a capture
-// once, and neither key fires while the user is typing or inside the new
-// source-language select.
+// Hold-to-talk on the desktop: Space and Z (like the Gemma Translator), plus the
+// numbered lanes. Auto-repeat is ignored so holding a key only starts a capture
+// once, and the talk keys never fire while the user is typing.
 let spaceDown = false;
 let zDown = false;
 
-// Never hijack a keypress aimed at a control that consumes it: a text input,
-// a textarea, or the native language <select> (Space opens that dropdown).
+// Never hijack a keypress aimed at a control that consumes it: a text input or
+// a textarea (the numbered lanes 1/2 and Z/Space must not fire while typing).
 function isTypingTarget(e) {
   const tag = e.target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  return tag === "INPUT" || tag === "TEXTAREA";
 }
 
 function talkKeyDown(e, key) {
@@ -292,7 +298,9 @@ function talkKeyUp(key) {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "z" || e.key === "Z") talkKeyDown(e, "z");
+  if (e.key === "1") { if (!isTypingTarget(e)) { const l = LANES.find((x) => x.num === "1"); if (l) selectLane(l); } }
+  else if (e.key === "2") { if (!isTypingTarget(e)) { const l = LANES.find((x) => x.num === "2"); if (l) selectLane(l); } }
+  else if (e.key === "z" || e.key === "Z") talkKeyDown(e, "z");
   else if (e.code === "Space") talkKeyDown(e, "space");
 });
 document.addEventListener("keyup", (e) => {
@@ -301,7 +309,7 @@ document.addEventListener("keyup", (e) => {
 });
 
 // Page-hidden/unload teardown: if the user switches away or closes the tab while
-// holding Z, the browser would otherwise keep the mic on and the recording
+// holding Z/Space, the browser would otherwise keep the mic on and the recording
 // indicator lit. Tearing down on pagehide and on becoming hidden guarantees the
 // indicator goes out on these exit paths too.
 document.addEventListener("visibilitychange", () => {
@@ -309,94 +317,22 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", teardownCapture);
 
-// --- live transcript from the SSE stream ---
+// --- telemetry + camera (right pane) ---
 
-const batteryFill = $("battery-fill");
-const batteryPct = $("battery-pct");
-const MAX_ENTRIES = 200;
-
-function trimTranscript() {
-  while (transcript.children.length > MAX_ENTRIES) {
-    transcript.removeChild(transcript.firstElementChild);
-  }
-}
-
-function scrollToNewestIfAtBottom() {
-  const nearBottom =
-    transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
-  if (nearBottom) transcript.scrollTop = transcript.scrollHeight;
-}
-
-// The brain's GUI stream emits these types. Everything else is ignored so an
-// event from elsewhere in the brain never renders as garbage.
-function handleEvent(e) {
-  switch (e.type) {
-    case "user": // a live human utterance
-      if (!e.text) return;
-      appendEntry("you", '<span class="txt"></span>');
-      transcript.lastElementChild.querySelector(".txt").textContent = e.text;
-      break;
-
-    case "speak": // Chotu's reply
-      if (!e.text) return;
-      appendEntry("bot", "");
-      transcript.lastElementChild.textContent = e.text;
-      break;
-
-    case "tool_call": {
-      const arg = toolArg(e.tool, e.args);
-      appendEntry("act", "▸ " + e.tool + (arg ? " " + arg : ""));
-      break;
-    }
-
-    case "battery":
-      if (typeof e.percent === "number") setBattery(e.percent, e.voltage);
-      break;
-
-    case "ping":
-      break;
-
-    default: // monologue, think, image, face, ptt, event, ... — ignore
-      break;
-  }
-  trimTranscript();
-  scrollToNewestIfAtBottom();
-}
-
-function toolArg(tool, args) {
-  args = args || {};
-  if (tool === "move") return args.direction;
-  if (tool === "act") return args.name;
-  if (tool === "sense") return args.what;
-  return ""; // say, read, and anything else
-}
-
-// EventSource reconnects automatically (default ~3 s), matching the old page.
-const es = new EventSource("/events");
-es.onmessage = (msg) => {
-  try {
-    handleEvent(JSON.parse(msg.data));
-  } catch {
-    /* bad frame — drop it */
-  }
-};
-
-// --- camera, battery, and the stop control ---
-
-const stage = $("stage");
+const camPane = $("cam-pane");
 const cam = $("cam");
-const stopBtn = $("stop");
+const batteryPct = $("battery-pct");
+const batteryVolt = $("battery-volt");
 const SAG_DELTA = 0.4; // volts
 const SAG_WINDOW_MS = 30000;
 
 // 30 s ring buffer of voltages so a brown-out (which has already taken the Pi
-// down mid-move) is caught early.
+// down mid-move) is caught early and flagged on the BATTERY row.
 const sagRing = [];
 function setBattery(percent, voltage) {
-  batteryFill.style.width = Math.max(0, Math.min(100, percent)) + "%";
   batteryPct.textContent = Math.round(percent) + "%";
-
   if (typeof voltage === "number") {
+    batteryVolt.textContent = voltage.toFixed(2) + "V";
     const now = Date.now();
     sagRing.push({ t: now, v: voltage });
     while (sagRing.length && sagRing[0].t < now - SAG_WINDOW_MS) sagRing.shift();
@@ -424,12 +360,24 @@ async function bootstrapBattery() {
   }
 }
 
+// Battery lives on the SSE stream, which also carries the live transcript the
+// console no longer renders; only battery is consumed here.
+const es = new EventSource("/events");
+es.onmessage = (msg) => {
+  try {
+    const e = JSON.parse(msg.data);
+    if (e.type === "battery" && typeof e.percent === "number") setBattery(e.percent, e.voltage);
+  } catch {
+    /* bad frame -- drop it */
+  }
+};
+
 // Camera: when the Pi's camera is off or the robot is down the stream fails
 // and the image goes blank. Show a placeholder and retry every 5 s so the
 // console never looks broken because Chotu is charging.
 let camRetry = null;
 cam.addEventListener("error", () => {
-  stage.classList.add("offline");
+  camPane.classList.add("offline");
   if (!camRetry) {
     camRetry = setInterval(() => {
       cam.src = "/stream?" + Date.now();
@@ -437,43 +385,23 @@ cam.addEventListener("error", () => {
   }
 });
 cam.addEventListener("load", () => {
-  stage.classList.remove("offline");
+  camPane.classList.remove("offline");
   if (camRetry) {
     clearInterval(camRetry);
     camRetry = null;
   }
 });
 
-// E-stop: freeze the robot and clear any staged follow-up move.
-stopBtn.addEventListener("click", async () => {
-  try {
-    await fetch("/stop", { method: "POST" });
-  } catch {
-    appendEntry("err", "could not reach Chotu to stop");
-  }
-});
-
 bootstrapBattery();
 
-// --- settings gear -- near-empty, phase 2's tick rate lives here later ---
+// --- settings gear + stop ---
 
 const gear = $("gear");
-
-const panel = document.createElement("div");
-panel.id = "gear-panel";
-panel.hidden = true;
-panel.innerHTML =
-  '<div class="gear-head"><span class="mono">SETTINGS</span>' +
-  '<button id="gear-close" aria-label="Close settings">&#10005;</button></div>' +
-  '<div class="gear-row"><span class="gear-label">model</span>' +
-  '<span id="gear-model" class="mono"></span></div>' +
-  '<div class="gear-row"><span class="gear-label">bridge</span>' +
-  '<span id="gear-bridge" class="mono"></span></div>';
-transcript.prepend(panel);
-
-const gearClose = panel.querySelector("#gear-close");
-const gearModel = panel.querySelector("#gear-model");
-const gearBridge = panel.querySelector("#gear-bridge");
+const panel = $("gear-panel");
+const gearClose = $("gear-close");
+const gearModel = $("gear-model");
+const gearBridge = $("gear-bridge");
+const stopBtn = $("stop");
 let panelOpen = false;
 let settingsFilled = false;
 
@@ -509,6 +437,13 @@ async function fillSettings() {
 
 gear.addEventListener("click", () => (panelOpen ? closePanel() : openPanel()));
 gearClose.addEventListener("click", closePanel);
+stopBtn.addEventListener("click", async () => {
+  try {
+    await fetch("/stop", { method: "POST" });
+  } catch {
+    showError("could not reach Chotu to stop");
+  }
+});
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && panelOpen) closePanel();
 });

@@ -18,6 +18,19 @@ def test_missing_marker_is_not_fatal():
     assert out["language"] == "Marathi"
 
 
+def test_source_transcription_survives_parse():
+    # A realistic two-part model reply: the Devanagari transcription on the
+    # first line, then `English:` and the translation. Both halves must come
+    # back -- the source is what the translator panel's source card shows.
+    out = parse_hearing(
+        "छोटू काका ना डान्स करून दाखव\nEnglish: Chhotu Kaka, show us a dance."
+    )
+    assert out["source"] == "छोटू काका ना डान्स करून दाखव"
+    assert out["text"] == "Chhotu Kaka, show us a dance."
+    assert out["language"] == "Marathi"
+
+
+
 def test_whitespace_is_stripped():
     out = parse_hearing('  Marathi: one line\nEnglish:   do three push ups  ')
     assert out["text"] == "do three push ups"

@@ -1,22 +1,38 @@
-:root {
-  --bg: #0b0d10;
-  --pane: #14181d;
-  --line: #242a31;
-  --cy: #7fe3ff;
-  --txt: #dfe6ec;
-  --dim: #7d8894;
+﻿:root {
+  /* Page shell -- neutral, dark, never transparent */
+  --page-bg: #0e1216;
+  --page-text: #dfe6ec;
+
+  /* Translator pane -- the real orange look from the approved mockup
+     (gemma-translator orange), NOT the console dark palette. */
+  --orange: #ffa500;
+  --ink: #000000;
+  --ink-border: #000000;
+
+  /* Camera overlay -- green mono on a dark translucent panel */
+  --overlay-bg: rgba(8, 12, 9, 0.76);
+  --tel-dim: #7ecb8f;      /* label: dimmer green */
+  --tel-bright: #b2f6c1;   /* value: brighter green */
+
+  --cam-bg: #191f25;
+  --cam-grid: #232b33;
+  --cam-label: #8b98a3;
+  --card-border: #000000;
+
+  --danger: #d98080;
 }
 
 * { box-sizing: border-box; }
 
 html, body {
+  margin: 0;
+  padding: 0;
   overflow-x: hidden;
 }
 
 body {
-  background: var(--bg);
-  color: var(--txt);
-  margin: 0;
+  background: var(--page-bg);
+  color: var(--page-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   height: 100vh;
 }
@@ -25,217 +41,265 @@ body {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
-.dim {
-  color: var(--dim);
-}
-
 #app {
-  display: grid;
-  grid-template-columns: 1.35fr 1fr;
-  grid-template-rows: 1fr;
+  display: flex;
   height: 100vh;
   width: 100%;
+  min-width: 0;
 }
 
-#stage {
-  grid-column: 1;
-  grid-row: 1;
+/* ============ LEFT PANE -- the translator, its own orange ============ */
+.lane-pane {
+  position: relative;
+  flex: 0 0 40%;
+  min-width: 0;
+  background: var(--orange);
+  color: var(--ink);
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  position: relative;
-  background: var(--pane);
-  border-right: 1px solid var(--line);
+  overflow: hidden;
 }
 
-#cam-wrap {
+/* Settings gear -- top right of this pane */
+.gear {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: 1px solid var(--ink-border);
+  border-radius: 4px;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  z-index: 3;
+}
+.gear:active {
+  background: var(--ink);
+  color: var(--orange);
+}
+.gear svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Resting state -- centred */
+.resting {
   flex: 1;
   min-height: 0;
-  position: relative;
   display: flex;
-  background: #000;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 12px;
+  gap: 10px;
+}
+.resting-title {
+  font-size: 15px;
+}
+.resting-sub {
+  font-size: 15px;
 }
 
+/* Talk button -- dark disc inside the orange pane */
+.talk {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--ink-border);
+  cursor: pointer;
+  background: radial-gradient(circle at 35% 30%, #fff3d6, #c87700 70%);
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.35);
+}
+.talk.recording {
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.55);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .talk.recording {
+    animation: talk-pulse 1.1s ease-in-out infinite;
+  }
+}
+@keyframes talk-pulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(0, 0, 0, 0.4); }
+  50% { box-shadow: 0 0 28px rgba(0, 0, 0, 0.7); }
+}
+#hint {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  opacity: 0.85;
+}
+
+/* Numbered language lanes at the bottom */
+.lanes {
+  display: flex;
+  border-top: 2px solid var(--ink-border);
+  flex-shrink: 0;
+}
+.lane {
+  position: relative;
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+.lane + .lane {
+  border-left: 2px solid var(--ink-border);
+}
+.lane-num {
+  font-size: 12px;
+}
+
+/* Selected (source) lane -- corner brackets */
+.lane.selected::before,
+.lane.selected::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: var(--ink);
+  border-style: solid;
+  z-index: 2;
+  pointer-events: none;
+}
+.lane.selected::before {
+  top: 3px;
+  left: 3px;
+  border-width: 2px 0 0 2px;
+}
+.lane.selected::after {
+  bottom: 3px;
+  right: 3px;
+  border-width: 0 2px 2px 0;
+}
+
+/* Active state -- source card + translation card + timing */
+.active-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  overflow-y: auto;
+}
+.active-panel[hidden] {
+  display: none;
+}
+.card {
+  border: 2px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--orange);
+  padding: 10px 12px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+}
+.card-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.card-text {
+  font-size: 18px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.timing {
+  font-size: 12px;
+  opacity: 0.9;
+  padding-top: 2px;
+}
+
+/* ============ RIGHT PANE -- camera, full-bleed ============ */
+.cam-pane {
+  flex: 1 1 60%;
+  min-width: 0;
+  position: relative;
+  background: var(--cam-bg);
+  overflow: hidden;
+}
 #cam {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
-
 #cam-offline {
   display: none;
   position: absolute;
   inset: 0;
   align-items: center;
   justify-content: center;
-  color: var(--dim);
+  color: var(--cam-label);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   letter-spacing: 0.12em;
-  background: var(--bg);
+  background: var(--page-bg);
 }
-
-#stage.offline #cam-offline {
+.cam-pane.offline #cam-offline {
   display: flex;
 }
 
-#status {
+/* EXACTLY ONE telemetry overlay -- top-left, each stat once */
+.telemetry {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  background: var(--overlay-bg);
+  border: 1px solid rgba(178, 246, 193, 0.35);
+  border-radius: 6px;
+  padding: 8px 12px;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--line);
+  flex-direction: column;
+  gap: 4px;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
-
-#battery {
+.tel-row {
   display: flex;
-  align-items: center;
   gap: 8px;
+  white-space: nowrap;
+  font-size: 12px;
 }
-
-#battery-box {
-  display: inline-block;
-  width: 44px;
-  height: 12px;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  overflow: hidden;
-  background: var(--bg);
+.tel-label {
+  color: var(--tel-dim);
+  letter-spacing: 0.06em;
 }
-
-#battery-fill {
-  display: block;
-  height: 100%;
-  width: 0%;
-  background: var(--cy);
+.tel-value {
+  color: var(--tel-bright);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
-
-#battery-pct {
-  color: var(--txt);
-  font-size: 0.85em;
-}
-
-#battery-pct.sag {
-  color: #d98080;
+.tel-value.sag {
   animation: sag-flash 0.6s ease-in-out infinite;
 }
-
 @keyframes sag-flash {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
 
-#stop {
-  background: none;
-  border: 1px solid #d98080;
-  color: #d98080;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.72em;
-  letter-spacing: 0.08em;
-  padding: 3px 8px;
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-#stop:hover {
-  background: rgba(217, 128, 128, 0.12);
-}
-
-#lang {
-  color: var(--dim);
-  font-size: 0.8em;
-}
-
-#source-lang {
-  background: var(--pane);
-  color: var(--txt);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.75em;
-  padding: 3px 6px;
-  color-scheme: dark;
-}
-
-#source-lang:focus-visible {
-  outline: 2px solid var(--cy);
-  outline-offset: 2px;
-}
-
-#gear {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--dim);
-  font-size: 1.1em;
-  cursor: pointer;
-  padding: 4px 6px;
-}
-
-#talkbar {
-  grid-column: 1;
-  grid-row: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 16px;
-  padding-bottom: calc(16px + env(safe-area-inset-bottom));
-  background: var(--pane);
-}
-
-#talk {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  cursor: pointer;
-  background: radial-gradient(circle at 35% 30%, var(--cy), #1c6b80 70%);
-  box-shadow: 0 0 12px rgba(127, 227, 255, 0.35);
-}
-
-#talk.recording {
-  box-shadow: 0 0 24px rgba(127, 227, 255, 0.75);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  #talk.recording {
-    animation: talk-pulse 1.1s ease-in-out infinite;
-  }
-}
-
-@keyframes talk-pulse {
-  0%, 100% { box-shadow: 0 0 16px rgba(127, 227, 255, 0.55); }
-  50% { box-shadow: 0 0 30px rgba(127, 227, 255, 0.9); }
-}
-
-#hint {
-  color: var(--dim);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.75em;
-  letter-spacing: 0.08em;
-}
-
-#transcript {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  overflow-y: auto;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  position: relative;
-}
-
+/* ============ Settings panel ============ */
 #gear-panel {
   position: absolute;
   inset: 0;
   z-index: 5;
-  background: var(--pane);
-  border-left: 1px solid var(--line);
-  padding: 16px;
+  background: var(--orange);
+  border-left: 1px solid var(--ink-border);
+  padding: 40px 16px 16px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -244,122 +308,77 @@ body {
   visibility: hidden;
   transition: transform 0.18s ease, opacity 0.18s ease, visibility 0.18s;
 }
-
 #gear-panel.open {
   transform: translateX(0);
   opacity: 1;
   visibility: visible;
 }
-
+#gear-panel[hidden] {
+  display: none;
+}
 .gear-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-
-.gear-head span {
-  color: var(--cy);
+.gear-title {
   font-size: 0.8em;
   letter-spacing: 0.1em;
+  font-weight: 700;
 }
-
 #gear-close {
   background: none;
-  border: none;
-  color: var(--dim);
-  font-size: 1.1em;
+  border: 1px solid var(--ink-border);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 1em;
   cursor: pointer;
-  padding: 4px;
+  padding: 2px 6px;
 }
-
 .gear-row {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-
 .gear-label {
-  color: var(--dim);
   font-size: 0.7em;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  opacity: 0.9;
 }
-
 #gear-model,
 #gear-bridge {
-  color: var(--txt);
-  font-size: 0.85em;
+  font-size: 0.8em;
   word-break: break-all;
 }
-
-#transcript .you {
-  align-self: flex-end;
-  background: var(--pane);
-  color: var(--txt);
-  padding: 8px 12px;
-  border-radius: 6px;
-  max-width: 85%;
-}
-
-#transcript .bot {
-  align-self: flex-start;
-  border-left: 2px solid var(--cy);
-  padding: 6px 10px;
-  color: var(--txt);
-  max-width: 85%;
-}
-
-#transcript .act {
-  align-self: flex-start;
-  color: var(--cy);
+.gear-stop {
+  margin-top: auto;
+  background: var(--ink);
+  color: var(--orange);
+  border: 1px solid var(--ink-border);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.85em;
-  opacity: 0.85;
-}
-
-#transcript .err {
-  align-self: flex-start;
-  color: #d98080;
+  font-size: 0.75em;
+  letter-spacing: 0.1em;
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
 }
 
 :focus-visible {
-  outline: 2px solid var(--cy);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
 @media (max-width: 760px) {
   #app {
-    display: flex;
     flex-direction: column;
     height: 100vh;
   }
-
-  #stage {
-    order: 1;
-    height: 180px;
-    flex: none;
-    border-right: none;
-    border-bottom: 1px solid var(--line);
+  .lane-pane {
+    flex: 0 0 40%;
+    border-bottom: 2px solid var(--ink-border);
   }
-
-  #cam-wrap {
-    height: 180px;
-    flex: none;
-  }
-
-  #transcript {
-    order: 2;
-    flex: 1;
-    min-height: 0;
-  }
-
-  #talkbar {
-    order: 3;
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-
-  #talk {
-    width: 58px;
-    height: 58px;
+  .cam-pane {
+    flex: 1 1 60%;
   }
 }
