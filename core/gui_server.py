@@ -6,11 +6,12 @@ import pathlib
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from core import brain
+from core.hearing import hear
 
 app = FastAPI()
 
@@ -79,6 +80,21 @@ async def chat(request: Request):
         brain.pending_input.push(text)
     return JSONResponse({"ok": True})
 
+
+
+@app.post("/audio")
+async def audio(audio: UploadFile = File(...)):
+    raw = await audio.read()
+    if not raw:
+        return JSONResponse({"ok": False, "error": "empty recording"},
+                             status_code=400)
+    try:
+        out = await hear(raw, audio.content_type or "audio/wav")
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    if out["text"]:
+        brain.pending_input.push(out["text"])
+    return JSONResponse({"ok": True, **out})
 
 
 @app.post("/thinking")
