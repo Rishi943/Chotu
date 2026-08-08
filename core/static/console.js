@@ -152,3 +152,78 @@ document.addEventListener("keyup", (e) => {
   spaceDown = false;
   stopRecording();
 });
+
+// --- live transcript from the SSE stream ---
+
+const batteryFill = $("battery-fill");
+const batteryPct = $("battery-pct");
+const MAX_ENTRIES = 200;
+
+function trimTranscript() {
+  while (transcript.children.length > MAX_ENTRIES) {
+    transcript.removeChild(transcript.firstElementChild);
+  }
+}
+
+function scrollToNewestIfAtBottom() {
+  const nearBottom =
+    transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
+  if (nearBottom) transcript.scrollTop = transcript.scrollHeight;
+}
+
+// The brain's GUI stream emits these types. Everything else is ignored so an
+// event from elsewhere in the brain never renders as garbage.
+function handleEvent(e) {
+  switch (e.type) {
+    case "user": // a live human utterance
+      if (!e.text) return;
+      appendEntry("you", '<span class="txt"></span>');
+      transcript.lastElementChild.querySelector(".txt").textContent = e.text;
+      break;
+
+    case "speak": // Chotu's reply
+      if (!e.text) return;
+      appendEntry("bot", "");
+      transcript.lastElementChild.textContent = e.text;
+      break;
+
+    case "tool_call": {
+      const arg = toolArg(e.tool, e.args);
+      appendEntry("act", "▸ " + e.tool + (arg ? " " + arg : ""));
+      break;
+    }
+
+    case "battery":
+      if (typeof e.percent === "number") {
+        batteryFill.style.width = Math.max(0, Math.min(100, e.percent)) + "%";
+        batteryPct.textContent = Math.round(e.percent) + "%";
+      }
+      break;
+
+    case "ping":
+      break;
+
+    default: // monologue, think, image, face, ptt, event, ... — ignore
+      break;
+  }
+  trimTranscript();
+  scrollToNewestIfAtBottom();
+}
+
+function toolArg(tool, args) {
+  args = args || {};
+  if (tool === "move") return args.direction;
+  if (tool === "act") return args.name;
+  if (tool === "sense") return args.what;
+  return ""; // say, read, and anything else
+}
+
+// EventSource reconnects automatically (default ~3 s), matching the old page.
+const es = new EventSource("/events");
+es.onmessage = (msg) => {
+  try {
+    handleEvent(JSON.parse(msg.data));
+  } catch {
+    /* bad frame — drop it */
+  }
+};
