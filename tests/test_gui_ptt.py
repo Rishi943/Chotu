@@ -10,9 +10,11 @@ client = TestClient(app)
 
 def test_config_reports_flag(monkeypatch):
     monkeypatch.setattr(brain, "PTT_ENABLED", True)
-    assert client.get("/api/config").json() == {"ptt_enabled": True}
+    data = client.get("/api/config").json()
+    assert data["ptt_enabled"] is True
+    assert {"model", "bridge"} <= set(data)  # added by console Task 6's settings panel
     monkeypatch.setattr(brain, "PTT_ENABLED", False)
-    assert client.get("/api/config").json() == {"ptt_enabled": False}
+    assert client.get("/api/config").json()["ptt_enabled"] is False
 
 
 def test_ptt_endpoint_triggers_capture_when_enabled(monkeypatch):
