@@ -173,18 +173,44 @@ talk.addEventListener("pointerup", stopRecording);
 talk.addEventListener("pointercancel", stopRecording);
 talk.addEventListener("pointerleave", stopRecording);
 
-// space bar on the desktop, ignoring auto-repeat
+// Hold-to-talk on the desktop: Space (existing) and Z (like the Gemma
+// Translator). Auto-repeat is ignored so holding a key only starts a capture
+// once, and neither key fires while the user is typing or inside the new
+// source-language select.
 let spaceDown = false;
-document.addEventListener("keydown", (e) => {
-  if (e.code !== "Space" || e.repeat || spaceDown) return;
-  spaceDown = true;
+let zDown = false;
+
+// Never hijack a keypress aimed at a control that consumes it: a text input,
+// a textarea, or the native language <select> (Space opens that dropdown).
+function isTypingTarget(e) {
+  const tag = e.target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function talkKeyDown(e, key) {
+  const already = key === "z" ? zDown : spaceDown;
+  if (e.repeat || already || isTypingTarget(e)) return;
+  if (key === "z") zDown = true;
+  else spaceDown = true;
   e.preventDefault();
   startRecording();
+}
+
+function talkKeyUp(key) {
+  // Release the latch and stop on key-up, even if focus moved between the
+  // down and up events. stopRecording() is a no-op when nothing is held.
+  if (key === "z") zDown = false;
+  else spaceDown = false;
+  stopRecording();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "z" || e.key === "Z") talkKeyDown(e, "z");
+  else if (e.code === "Space") talkKeyDown(e, "space");
 });
 document.addEventListener("keyup", (e) => {
-  if (e.code !== "Space") return;
-  spaceDown = false;
-  stopRecording();
+  if (e.key === "z" || e.key === "Z") talkKeyUp("z");
+  else if (e.code === "Space") talkKeyUp("space");
 });
 
 // --- live transcript from the SSE stream ---
