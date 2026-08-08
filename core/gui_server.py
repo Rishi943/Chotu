@@ -125,7 +125,18 @@ async def battery():
             return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
 
 
+_CERTS = pathlib.Path(__file__).resolve().parents[1] / "certs"
+
+
 async def run_gui_server():
-    config = uvicorn.Config(app, host="0.0.0.0", port=8888, log_level="warning")
+    cert, key = _CERTS / "chotu.pem", _CERTS / "chotu-key.pem"
+    kwargs = {}
+    if cert.exists() and key.exists():
+        kwargs = {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}
+    else:
+        print("[gui] no cert -- serving plain HTTP. The phone mic will NOT work. "
+              "Run scripts/make_cert.py")
+    config = uvicorn.Config(app, host="0.0.0.0", port=8888,
+                             log_level="warning", **kwargs)
     server = uvicorn.Server(config)
     await server.serve()

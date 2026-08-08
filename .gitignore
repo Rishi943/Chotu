@@ -34,3 +34,6 @@ out/
 *.swp
 *.kate-swp
 *.crdownload
+
+# Self-signed TLS cert/key for the Chotu console -- never commit a private key
+certs/
