@@ -64,9 +64,9 @@ class LLMClient:
         self.provider = os.getenv("PALIV_LLM_PROVIDER", "local")
 
         if self.provider == "local":
-            base_url = os.getenv("PALIV_BRAIN_URL", "http://localhost:8080/v1")
+            base_url = os.getenv("PALIV_BRAIN_URL", "http://127.0.0.1:8099/v1")
             api_key = os.getenv("PALIV_BRAIN_KEY", "not-needed")
-            self.model = os.getenv("PALIV_BRAIN_MODEL", "Qwen3.5-4B-Q4_K_M.gguf")
+            self.model = os.getenv("PALIV_BRAIN_MODEL", "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf")
             self._openai = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=120.0)
             # Explicit context cache (cache_control ephemeral markers) — DashScope only.
             # llama.cpp doesn't understand the marker, so gate on the endpoint.
