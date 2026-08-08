@@ -140,7 +140,11 @@ async def handsfree(request: Request):
 
 @app.get("/api/config")
 async def config():
-    return JSONResponse({"ptt_enabled": brain.PTT_ENABLED})
+    return JSONResponse({
+        "ptt_enabled": brain.PTT_ENABLED,
+        "model": getattr(brain.llm_client, "model", ""),
+        "bridge": brain.PI_HOST,
+    })
 
 
 @app.get("/api/battery")

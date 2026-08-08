@@ -298,3 +298,61 @@ stopBtn.addEventListener("click", async () => {
 });
 
 bootstrapBattery();
+
+// --- settings gear -- near-empty, phase 2's tick rate lives here later ---
+
+const gear = $("gear");
+
+const panel = document.createElement("div");
+panel.id = "gear-panel";
+panel.hidden = true;
+panel.innerHTML =
+  '<div class="gear-head"><span class="mono">SETTINGS</span>' +
+  '<button id="gear-close" aria-label="Close settings">&#10005;</button></div>' +
+  '<div class="gear-row"><span class="gear-label">model</span>' +
+  '<span id="gear-model" class="mono"></span></div>' +
+  '<div class="gear-row"><span class="gear-label">bridge</span>' +
+  '<span id="gear-bridge" class="mono"></span></div>';
+transcript.prepend(panel);
+
+const gearClose = panel.querySelector("#gear-close");
+const gearModel = panel.querySelector("#gear-model");
+const gearBridge = panel.querySelector("#gear-bridge");
+let panelOpen = false;
+let settingsFilled = false;
+
+function openPanel() {
+  panelOpen = true;
+  panel.hidden = false;
+  requestAnimationFrame(() => panel.classList.add("open"));
+  fillSettings();
+  gearClose.focus();
+}
+
+function closePanel() {
+  panelOpen = false;
+  panel.classList.remove("open");
+  gear.focus();
+  setTimeout(() => {
+    if (!panelOpen) panel.hidden = true;
+  }, 200);
+}
+
+async function fillSettings() {
+  if (settingsFilled) return;
+  try {
+    const resp = await fetch("/api/config");
+    const data = await resp.json();
+    if (data.model) gearModel.textContent = data.model;
+    if (data.bridge) gearBridge.textContent = data.bridge;
+    settingsFilled = true;
+  } catch {
+    /* leave the lines empty -- not worth an error entry */
+  }
+}
+
+gear.addEventListener("click", () => (panelOpen ? closePanel() : openPanel()));
+gearClose.addEventListener("click", closePanel);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && panelOpen) closePanel();
+});

@@ -210,6 +210,70 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
+}
+
+#gear-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: var(--pane);
+  border-left: 1px solid var(--line);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transform: translateX(100%);
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 0.18s ease, opacity 0.18s ease, visibility 0.18s;
+}
+
+#gear-panel.open {
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+}
+
+.gear-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.gear-head span {
+  color: var(--cy);
+  font-size: 0.8em;
+  letter-spacing: 0.1em;
+}
+
+#gear-close {
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 1.1em;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.gear-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gear-label {
+  color: var(--dim);
+  font-size: 0.7em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+#gear-model,
+#gear-bridge {
+  color: var(--txt);
+  font-size: 0.85em;
+  word-break: break-all;
 }
 
 #transcript .you {
