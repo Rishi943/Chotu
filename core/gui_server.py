@@ -8,12 +8,16 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from core import brain
 
 app = FastAPI()
 
-_STATIC_INDEX = pathlib.Path(__file__).parent / "static" / "index.html"
+_STATIC = pathlib.Path(__file__).parent / "static"
+_STATIC_INDEX = _STATIC / "console.html"
+
+app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 
 @app.get("/")

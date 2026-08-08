@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Chotu</title>
+  <link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+  <main id="app">
+    <section id="stage">
+      <img id="cam" alt="Chotu's camera" src="/stream">
+      <div id="status">
+        <span id="battery"><span id="battery-box"><span id="battery-fill"></span></span><span id="battery-pct">--</span></span>
+        <span id="lang"></span>
+        <button id="gear" aria-label="Settings">&#9881;</button>
+      </div>
+    </section>
+    <section id="talkbar">
+      <button id="talk" aria-label="Hold to talk"></button>
+      <span id="hint">HOLD TO TALK</span>
+    </section>
+    <section id="transcript" aria-live="polite"></section>
+  </main>
+  <script type="module" src="/static/console.js"></script>
+</body>
+</html>

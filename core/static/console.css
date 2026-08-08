@@ -1,0 +1,233 @@
+:root {
+  --bg: #0b0d10;
+  --pane: #14181d;
+  --line: #242a31;
+  --cy: #7fe3ff;
+  --txt: #dfe6ec;
+  --dim: #7d8894;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  overflow-x: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--txt);
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  height: 100vh;
+}
+
+.mono {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  grid-template-rows: 1fr;
+  height: 100vh;
+  width: 100%;
+}
+
+#stage {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: var(--pane);
+  border-right: 1px solid var(--line);
+}
+
+#cam {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  object-fit: cover;
+  background: #000;
+  display: block;
+}
+
+#status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+#battery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#battery-box {
+  display: inline-block;
+  width: 44px;
+  height: 12px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+#battery-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--cy);
+}
+
+#battery-pct {
+  color: var(--txt);
+  font-size: 0.85em;
+}
+
+#lang {
+  color: var(--dim);
+  font-size: 0.8em;
+}
+
+#gear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 1.1em;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+#talkbar {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  background: var(--pane);
+}
+
+#talk {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: radial-gradient(circle at 35% 30%, var(--cy), #1c6b80 70%);
+  box-shadow: 0 0 12px rgba(127, 227, 255, 0.35);
+}
+
+#talk.recording {
+  box-shadow: 0 0 24px rgba(127, 227, 255, 0.75);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #talk.recording {
+    animation: talk-pulse 1.1s ease-in-out infinite;
+  }
+}
+
+@keyframes talk-pulse {
+  0%, 100% { box-shadow: 0 0 16px rgba(127, 227, 255, 0.55); }
+  50% { box-shadow: 0 0 30px rgba(127, 227, 255, 0.9); }
+}
+
+#hint {
+  color: var(--dim);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.75em;
+  letter-spacing: 0.08em;
+}
+
+#transcript {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#transcript .you {
+  align-self: flex-end;
+  background: var(--pane);
+  color: var(--txt);
+  padding: 8px 12px;
+  border-radius: 6px;
+  max-width: 85%;
+}
+
+#transcript .bot {
+  align-self: flex-start;
+  border-left: 2px solid var(--cy);
+  padding: 6px 10px;
+  color: var(--txt);
+  max-width: 85%;
+}
+
+#transcript .act {
+  align-self: flex-start;
+  color: var(--cy);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+#transcript .err {
+  align-self: flex-start;
+  color: #d98080;
+}
+
+:focus-visible {
+  outline: 2px solid var(--cy);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  #stage {
+    order: 1;
+    height: 180px;
+    flex: none;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  #cam {
+    height: 180px;
+    flex: none;
+  }
+
+  #transcript {
+    order: 2;
+    flex: 1;
+    min-height: 0;
+  }
+
+  #talkbar {
+    order: 3;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  #talk {
+    width: 58px;
+    height: 58px;
+  }
+}
