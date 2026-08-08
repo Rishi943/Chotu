@@ -22,8 +22,11 @@
       <div id="resting" class="resting">
         <div class="resting-title">SELECT LANGUAGES,</div>
         <div class="resting-sub">PUSH TO TALK</div>
+        <!-- The sphere is a first-use affordance only. On the phone the whole
+             pane is the hold target, so this disc is purely visual there. -->
         <button id="talk" class="talk" aria-label="Hold to talk"></button>
-        <span id="hint" class="mono">HOLD [Z] / [SPACE] TO TALK</span>
+        <span id="hint" class="mono hint-desktop">HOLD [Z] / [SPACE] TO TALK</span>
+        <span class="mono hint-mobile">HOLD TO TALK</span>
       </div>
 
       <!-- Active state (after a take) -->
@@ -41,11 +44,11 @@
 
       <!-- Numbered language lanes: select the SOURCE language -->
       <div id="lanes" class="lanes">
-        <div class="lane selected" data-code="mr" data-num="1">
-          <span class="lane-num">1</span><span class="lane-name">MARATHI</span>
+        <div class="lane selected" data-num="1">
+          <span class="lane-num">1</span><span class="lane-name"></span>
         </div>
-        <div class="lane" data-code="en" data-num="2">
-          <span class="lane-num">2</span><span class="lane-name">ENGLISH</span>
+        <div class="lane" data-num="2">
+          <span class="lane-num">2</span><span class="lane-name"></span>
         </div>
       </div>
 

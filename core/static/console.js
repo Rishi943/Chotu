@@ -1,4 +1,4 @@
-﻿// Chotu console -- translator panel (left) + camera with one telemetry overlay
+// Chotu console -- translator panel (left) + camera with one telemetry overlay
 // (right). Numbered lanes 1/2 select the SOURCE language; Z / Space (or the talk
 // disc) is push-to-talk. The mic capture and teardown paths are ported from the
 // Gemma Translator: every stream track is stopped on every exit path so the
@@ -14,43 +14,130 @@ const dstText = $("dst-text");
 const srcLabel = $("src-label");
 const dstLabel = $("dst-label");
 const timing = $("timing");
+const pane = $("lane-pane");
+
+// "Has been used" -- persisted across reloads like the language choice. Used to
+// hide the first-use sphere affordance once a real session has happened.
+const USED_KEY = "chotu.used";
+let used = false;
+try { used = localStorage.getItem(USED_KEY) === "1"; } catch { /* default false */ }
+if (used) pane.classList.add("used");
+function markUsed() {
+  if (used) return;
+  used = true;
+  try { localStorage.setItem(USED_KEY, "1"); } catch { /* non-persistent */ }
+  pane.classList.add("used");
+}
 
 // --- numbered language lanes: select the SOURCE language ---
 
-// The two numbered lanes from the approved mockup. Pressing 1 or 2 picks a lane,
-// exactly like the Gemma Translator's active-person selection. The chosen lane's
-// code is what gets POSTed as the existing `source` field (unchanged contract).
-const LANES = [
-  { num: "1", code: "mr", name: "MARATHI" },
-  { num: "2", code: "en", name: "ENGLISH" },
+// One shared language list; each lane holds an index into it (like the Gemma
+// Translator). Pressing 1 or 2 picks the ACTIVE lane, whose code is what gets
+// POSTed as the existing `source` field (unchanged contract). ArrowLeft /
+// ArrowRight rotate the active lane through the revolver, skipping the slot the
+// other lane holds so the two lanes never show the same language.
+const LANGUAGES = [
+  { code: "ar", name: "Arabic" },
+  { code: "en", name: "English" },
+  { code: "es", name: "Spanish" },
+  { code: "hi", name: "Hindi" },
+  { code: "ja", name: "Japanese" },
+  { code: "mr", name: "Marathi" },
+  { code: "zh", name: "Chinese" },
+  { code: "ko", name: "Korean" },
 ];
-const SOURCE_KEY = "chotu.sourceLang";
+const SOURCE_KEY = "chotu.sourceLang"; // legacy single-language key (migrated on load)
+const LANES_KEY = "chotu.lanes"; // activeLane + lang1Index + lang2Index
 
-let currentSource = "mr";
+let lang1Index = 5; // Marathi (today's startup lane 1)
+let lang2Index = 1; // English (today's startup lane 2)
+let activeLane = 1;
+let currentSource = LANGUAGES[lang1Index].code;
 
-function selectLane(lane) {
-  currentSource = lane.code;
-  document.querySelectorAll("#lanes .lane").forEach((el) => {
-    el.classList.toggle("selected", el.dataset.code === lane.code);
+function laneIndex(lane) {
+  return lane === 1 ? lang1Index : lang2Index;
+}
+
+function setLaneIndex(lane, idx) {
+  if (lane === 1) lang1Index = idx;
+  else lang2Index = idx;
+}
+
+// Repaint both lanes and the POSTed source from the current state.
+function renderLanes() {
+  [1, 2].forEach((num) => {
+    const el = document.querySelector('#lanes .lane[data-num="' + num + '"]');
+    if (!el) return;
+    const lang = LANGUAGES[laneIndex(num)];
+    el.dataset.code = lang.code;
+    const nameEl = el.querySelector(".lane-name");
+    if (nameEl) nameEl.textContent = lang.name.toUpperCase();
+    el.classList.toggle("selected", activeLane === num);
   });
+  currentSource = LANGUAGES[laneIndex(activeLane)].code;
+}
+
+function persistState() {
   try {
-    localStorage.setItem(SOURCE_KEY, lane.code);
+    localStorage.setItem(LANES_KEY, JSON.stringify({ activeLane, lang1Index, lang2Index }));
   } catch { /* localStorage unavailable -- selection just does not persist */ }
 }
 
+// Pick a lane as active (and as the POSTed source language).
+function selectLane(lane) {
+  activeLane = lane;
+  renderLanes();
+  persistState();
+}
+
+// Rotate the active lane's language by direction (-1 / +1), skipping the slot
+// the other lane holds, wrapping around either way.
+function rotateActiveLane(direction) {
+  const other = activeLane === 1 ? 2 : 1;
+  const N = LANGUAGES.length;
+  let ni = (laneIndex(activeLane) + direction + N) % N;
+  if (ni === laneIndex(other)) ni = (ni + direction + N) % N;
+  setLaneIndex(activeLane, ni);
+  renderLanes();
+  persistState();
+}
+
 function initLanes() {
+  // Migrate the legacy single-language key: if it holds a valid code, start
+  // lane 1 on it. The newer LANES_KEY (if present) then overrides fully.
+  let savedSource = null;
+  try {
+    savedSource = localStorage.getItem(SOURCE_KEY);
+  } catch { /* use default */ }
+  const srcIdx = LANGUAGES.findIndex((l) => l.code === savedSource);
+  if (srcIdx >= 0) lang1Index = srcIdx;
+
   let saved = null;
   try {
-    saved = localStorage.getItem(SOURCE_KEY);
+    saved = localStorage.getItem(LANES_KEY);
   } catch { /* use default */ }
-  const chosen = LANES.find((l) => l.code === saved) || LANES[0];
-  selectLane(chosen);
+  if (saved) {
+    try {
+      const st = JSON.parse(saved);
+      if (st && (st.activeLane === 1 || st.activeLane === 2)) activeLane = st.activeLane;
+      if (st && typeof st.lang1Index === "number" && st.lang1Index >= 0 && st.lang1Index < LANGUAGES.length) lang1Index = st.lang1Index;
+      if (st && typeof st.lang2Index === "number" && st.lang2Index >= 0 && st.lang2Index < LANGUAGES.length) lang2Index = st.lang2Index;
+    } catch { /* corrupt state -- keep defaults */ }
+  }
+
+  // The two lanes may never be on the same language; nudge lane 2 forward.
+  if (lang1Index === lang2Index) lang2Index = (lang2Index + 1) % LANGUAGES.length;
+
+  renderLanes();
+
   document.querySelectorAll("#lanes .lane").forEach((el) => {
     el.addEventListener("click", () => {
-      const lane = LANES.find((l) => l.code === el.dataset.code);
-      if (lane) selectLane(lane);
+      const num = parseInt(el.dataset.num, 10);
+      if (num === 1 || num === 2) selectLane(num);
     });
   });
+
+  persistState();
 }
 initLanes();
 
@@ -65,6 +152,26 @@ const talkState = {
   source: null,
   sampleChunks: [],
 };
+
+// Dropping a silent take client-side, before it is ever POSTed. Same threshold
+// and units as gemma_stt.py's SILENCE_DBFS (-50 dBFS), which the server-side
+// gate in core/hearing.py also uses. A silent clip sent to the model makes it
+// echo its own prompt scaffolding instead of transcribing, so never send one.
+const SILENCE_DBFS = -50;
+
+// Mean level of a Float32Array in dBFS. -Infinity for digital silence. Same
+// math as gemma_stt.py's dbfs() (RMS over squared samples, 20*log10).
+function dbfsOf(samples) {
+  if (!samples || samples.length === 0) return -Infinity;
+  let acc = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    acc += s * s;
+  }
+  const rms = Math.sqrt(acc / samples.length);
+  if (rms <= 0) return -Infinity;
+  return 20 * Math.log10(rms);
+}
 
 // The one thing that actually closes the mic: stopping only the recording graph
 // leaves every MediaStream track live, so the browser keeps the recording
@@ -108,6 +215,7 @@ function teardownCapture() {
   talkState.sampleChunks = [];
   talkState.recording = false;
   talk.classList.remove("recording");
+  pane.classList.remove("recording");
 }
 
 async function startRecording() {
@@ -150,6 +258,7 @@ async function startRecording() {
 
   talkState.recording = true;
   talk.classList.add("recording");
+  pane.classList.add("recording");
 }
 
 async function stopRecording() {
@@ -160,6 +269,7 @@ async function stopRecording() {
   talkState.sampleChunks = [];
   talkState.recording = false;
   talk.classList.remove("recording");
+  pane.classList.remove("recording");
   // Kill the audio graph and the stream tracks in the normal-release path so
   // the mic indicator goes out immediately, before any upload work.
   stopAudioGraph();
@@ -172,6 +282,18 @@ async function stopRecording() {
 
   const merged = getMergedSamples(chunks);
   const pcm = resample(merged, actualSampleRate, 16000);
+
+  // Layer 1: measure the take before POSTing. Silent / near-silent audio is not
+  // sent at all -- the model would only echo its own prompt back. Leave the
+  // previous transcript untouched and show nothing (mic is already released).
+  const level = dbfsOf(pcm);
+  if (level < SILENCE_DBFS) {
+    console.warn(
+      "Silent take (" + level.toFixed(1) + " dBFS < " + SILENCE_DBFS + "), not sent"
+    );
+    return;
+  }
+
   const blob = new Blob([pcm.buffer], { type: "application/octet-stream" });
   upload(blob);
 }
@@ -218,10 +340,11 @@ function fmt(ms) {
 // Render the result of a take in the orange translator panel: source card,
 // translation card, timing line.
 function showTake(data) {
-  const lane = LANES.find((l) => l.code === currentSource) || LANES[0];
+  markUsed(); // first successful capture -- the first-use sphere is done
+  const lane = LANGUAGES.find((l) => l.code === currentSource) || LANGUAGES[0];
   resting.hidden = true;
   active.hidden = false;
-  srcLabel.textContent = lane.name + " (SOURCE)";
+  srcLabel.textContent = lane.name.toUpperCase() + " (SOURCE)";
   srcText.textContent = data.source || "";
   dstLabel.textContent = "ENGLISH (TRANSLATION)";
   dstText.textContent = data.text || "";
@@ -267,6 +390,27 @@ talk.addEventListener("pointerup", stopRecording);
 talk.addEventListener("pointercancel", stopRecording);
 talk.addEventListener("pointerleave", stopRecording);
 
+// --- whole-pane hold-to-talk (mobile only) ---
+// On the phone the entire orange pane is the push-to-talk surface: press and
+// hold anywhere to record, release to stop. This reuses the SAME recorder
+// (startRecording / stopRecording) -- it is a second trigger, not a second
+// capture path. The disc's own pointer handlers still cover desktop.
+const mobileMq = window.matchMedia("(max-width: 760px)");
+// Elements that are tap targets for something else must never start a hold.
+function isHoldExcluded(target) {
+  return !!target.closest("#gear, #lanes, #gear-panel");
+}
+pane.addEventListener("pointerdown", (e) => {
+  if (!mobileMq.matches) return; // desktop keeps the disc + Z/Space
+  if (isHoldExcluded(e.target)) return; // gear / lanes / settings are taps
+  e.preventDefault(); // stop iOS long-press selection / text drag
+  pane.setPointerCapture(e.pointerId);
+  startRecording();
+});
+pane.addEventListener("pointerup", stopRecording);
+pane.addEventListener("pointercancel", stopRecording);
+pane.addEventListener("pointerleave", stopRecording);
+
 // Hold-to-talk on the desktop: Space and Z (like the Gemma Translator), plus the
 // numbered lanes. Auto-repeat is ignored so holding a key only starts a capture
 // once, and the talk keys never fire while the user is typing.
@@ -277,7 +421,7 @@ let zDown = false;
 // a textarea (the numbered lanes 1/2 and Z/Space must not fire while typing).
 function isTypingTarget(e) {
   const tag = e.target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA";
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 function talkKeyDown(e, key) {
@@ -298,8 +442,10 @@ function talkKeyUp(key) {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "1") { if (!isTypingTarget(e)) { const l = LANES.find((x) => x.num === "1"); if (l) selectLane(l); } }
-  else if (e.key === "2") { if (!isTypingTarget(e)) { const l = LANES.find((x) => x.num === "2"); if (l) selectLane(l); } }
+  if (e.key === "1") { if (!isTypingTarget(e)) selectLane(1); }
+  else if (e.key === "2") { if (!isTypingTarget(e)) selectLane(2); }
+  else if (e.key === "ArrowLeft") { if (!isTypingTarget(e)) { e.preventDefault(); rotateActiveLane(-1); } }
+  else if (e.key === "ArrowRight") { if (!isTypingTarget(e)) { e.preventDefault(); rotateActiveLane(1); } }
   else if (e.key === "z" || e.key === "Z") talkKeyDown(e, "z");
   else if (e.code === "Space") talkKeyDown(e, "space");
 });

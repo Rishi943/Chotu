@@ -34,7 +34,11 @@ body {
   background: var(--page-bg);
   color: var(--page-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  /* 100vh is taller than the visible viewport on iOS Safari because it ignores
+     the browser chrome; 100dvh is the dynamic viewport height. vh stays as the
+     fallback for older browsers that do not know dvh. */
   height: 100vh;
+  height: 100dvh;
 }
 
 .mono {
@@ -44,6 +48,7 @@ body {
 #app {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100%;
   min-width: 0;
 }
@@ -108,8 +113,15 @@ body {
   font-size: 15px;
 }
 
-/* Talk button -- dark disc inside the orange pane */
+/* Talk button -- dark disc inside the orange pane. Held in one hand, so it
+   must not trigger iOS long-press selection/callout while held. */
 .talk {
+  /* Never shrink: .resting is a flex column, so this button is a flex item and
+     would otherwise be crushed vertically when the pane's height is tight.
+     Lock it to its own size and keep it a perfect circle. */
+  flex: 0 0 auto;
+  aspect-ratio: 1;
+  min-height: 44px;
   width: 44px;
   height: 44px;
   border-radius: 50%;
@@ -117,23 +129,44 @@ body {
   cursor: pointer;
   background: radial-gradient(circle at 35% 30%, #fff3d6, #c87700 70%);
   box-shadow: 0 0 12px rgba(0, 0, 0, 0.35);
+  /* iOS fights long-press: kill text selection, the callout menu and the
+     magnifier so push-to-talk reads as a clean hold. */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  /* Quick, flat press response -- no overshoot, no bounce. */
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
+/* Held state: a small settle-down, not a bounce, plus a calm deeper shadow. */
 .talk.recording {
-  box-shadow: 0 0 24px rgba(0, 0, 0, 0.55);
+  transform: scale(0.96);
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
 }
 @media (prefers-reduced-motion: no-preference) {
   .talk.recording {
     animation: talk-pulse 1.1s ease-in-out infinite;
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  .talk,
+  .talk.recording {
+    transition: none;
+    transform: none;
+  }
+}
 @keyframes talk-pulse {
-  0%, 100% { box-shadow: 0 0 14px rgba(0, 0, 0, 0.4); }
-  50% { box-shadow: 0 0 28px rgba(0, 0, 0, 0.7); }
+  0%, 100% { box-shadow: 0 0 16px rgba(0, 0, 0, 0.4); }
+  50% { box-shadow: 0 0 24px rgba(0, 0, 0, 0.6); }
 }
 #hint {
   font-size: 11px;
   letter-spacing: 0.08em;
   opacity: 0.85;
+}
+/* The Z/Space hint is a desktop keymap; the phone says "hold to talk". */
+.hint-mobile {
+  display: none;
 }
 
 /* Numbered language lanes at the bottom */
@@ -370,15 +403,92 @@ body {
 }
 
 @media (max-width: 760px) {
+  /* One screen -- no page scroll on the phone. */
+  html, body {
+    overflow: hidden;
+  }
   #app {
-    flex-direction: column;
+    /* Translator pane (with the talk control) goes to the bottom of the
+       screen, where a thumb naturally rests; the camera preview sits on top. */
+    flex-direction: column-reverse;
     height: 100vh;
+    height: 100dvh;
   }
   .lane-pane {
     flex: 0 0 40%;
-    border-bottom: 2px solid var(--ink-border);
+    border-top: 2px solid var(--ink-border);
+    /* Keep the talk control clear of the iPhone home indicator. */
+    padding-bottom: env(safe-area-inset-bottom);
   }
   .cam-pane {
     flex: 1 1 60%;
+  }
+  /* iOS long-press guards now cover the whole pane, because the pane is the
+     hold target and dragging across the cards would otherwise select text. */
+  .lane-pane {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* The sphere is a first-use affordance only: modest, flat, never the focus.
+     On the phone the PANE is the hold target, so the disc is just a marker and
+     deliberately never captures the pointer itself. */
+  .talk {
+    flex: 0 0 auto;
+    width: 60px;
+    height: 60px;
+    min-width: 60px;
+    min-height: 60px;
+    border-radius: 50%;
+    border: 2px solid var(--ink-border);
+    background: rgba(0, 0, 0, 0.10);
+    box-shadow: none;
+    pointer-events: none; /* the pane owns the hold on mobile */
+  }
+  /* Quiet instrument panel: the mounting is felt on the pane, not on the
+     affordance -- no pulse, no bounce. */
+  .talk.recording {
+    animation: none;
+    transform: none;
+    box-shadow: none;
+  }
+  /* Once a session has been used, the sphere is gone and the pane alone is the
+     control (persisted across reloads via the `used` class). */
+  .lane-pane.used .talk {
+    display: none;
+  }
+
+  /* Restrained "recording" feel for the whole pane: a subtle background shift
+     and an inset ring. No animation, so prefers-reduced-motion is honoured. */
+  .lane-pane.recording {
+    background: #f0a000;
+    box-shadow: inset 0 0 0 2px var(--ink);
+  }
+
+  /* Mobile: no instructional captions. The whole pane is the hold target, so
+     there is no button left to point at -- strip the SELECT LANGUAGES / PUSH TO
+     TALK heading and the HOLD TO TALK hint. Desktop keeps both (the disc and the
+     Z/Space keymap are its interaction, and the hint is genuinely useful there). */
+  .resting-title,
+  .resting-sub,
+  .hint-desktop,
+  .hint-mobile {
+    display: none;
+  }
+
+  /* Do not let the cards crush to fit -- keep them full size so their labels
+     are never clipped, and let the transcript area scroll internally instead. */
+  .active-panel .card,
+  .active-panel .timing {
+    flex-shrink: 0;
+  }
+
+  /* The phone pane is exactly four things: source card, translation card, and
+     the two numbered lanes. The timing metadata line is furniture, so it drops
+     on mobile; the vertical space it would have claimed goes to the two cards. */
+  #timing {
+    display: none;
   }
 }

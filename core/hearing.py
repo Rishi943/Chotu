@@ -20,6 +20,7 @@ from __future__ import annotations
 import array as _array
 import base64
 import io
+import math
 import os
 import struct
 import time
@@ -48,6 +49,73 @@ LANG_NAME = {
     "mr": "Marathi", "hi": "Hindi", "en": "English", "es": "Spanish",
     "ar": "Arabic", "ja": "Japanese", "zh": "Chinese", "ko": "Korean",
 }
+
+# Below this RMS the audio is treated as silence and the model is never called.
+#
+# Taken VERBATIM from E:/AI/gemma-translator/backend/gemma_stt.py's SILENCE_DBFS
+# (default -50 dBFS, env STT_SILENCE_DBFS). That module measured its clips on
+# 2026-08-07: a good take was -35 dBFS mean, a take where the mic caught almost
+# nothing was -67 dBFS, pure silence is -inf. -50 sits in the gap with room on
+# both sides. Reusing the same number and units keeps the two apps gating on the
+# same notion of "silence".
+#
+# The gate is not an optimisation, it is a correctness fix. Asked to transcribe
+# digital silence the model does not return nothing -- it answers "ठीक आहे" or
+# "और" (gemma_stt.py's measured 2026-08-07 observations), and on the console it
+# echoed its own prompt scaffolding ("', then the translation in English.
+# English:"). A recogniser that returns its own prompt as a result is worse than
+# one that returns nothing, because it looks like a real answer.
+SILENCE_DBFS = float(os.getenv("PALIV_SILENCE_DBFS", "-50"))
+
+
+def _pcm_samples(pcm_bytes):
+    """Unpack a raw little-endian float32 PCM buffer into a plain tuple of floats."""
+    n = len(pcm_bytes) // 4
+    return struct.unpack("<%df" % n, pcm_bytes[: n * 4])
+
+
+def dbfs(samples):
+    """Mean level of float32 samples in dBFS. -inf for digital silence.
+
+    Same math as gemma_stt.py's dbfs() (mean-square root over squared samples,
+    20*log10), done with stdlib so this module stays numpy-free like the rest of
+    core/hearing.py. A -inf here only comes from a zero-length or all-zero
+    buffer.
+    """
+    if not samples:
+        return float("-inf")
+    n = len(samples)
+    acc = 0.0
+    for s in samples:
+        acc += s * s
+    rms = (acc / n) ** 0.5
+    if rms <= 0.0:
+        return float("-inf")
+    return 20.0 * math.log10(rms)
+
+
+def audio_is_silent(pcm_bytes, threshold=SILENCE_DBFS):
+    """True when raw float32 PCM is at/below `threshold` dBFS (default -50)."""
+    return dbfs(_pcm_samples(pcm_bytes)) < threshold
+
+
+# Fragments of this module's own `_PROMPT` scaffolding, used verbatim. When the
+# model echoes the prompt instead of answering (which is what happens on
+# silence), its reply contains this exact English meta-instruction text. Narrow
+# by construction: these are task-format instructions, not generic phrases, so
+# a real transcription of speech never trips this. If you change `_PROMPT`,
+# keep these in sync.
+ECHO_FRAGMENTS = (
+    "Transcribe the following speech segment in",
+    "then output the string",
+    "then the translation in English",
+)
+
+
+def is_prompt_echo(reply):
+    """True if a model reply looks like the prompt scaffolding, not content."""
+    reply = reply or ""
+    return any(frag in reply for frag in ECHO_FRAGMENTS)
 
 
 def build_prompt(source, dst="en"):
@@ -135,6 +203,18 @@ async def hear(audio_bytes, mime, source=DEFAULT_SOURCE):
     The source language is the user's explicit choice (default Marathi); the
     prompt names it, so the model never has to guess.
     """
+    src_name = LANG_NAME.get(source, LANG_NAME[DEFAULT_SOURCE])
+
+    # Gate 1 -- energy. Silent/near-silent audio never reaches the model. This is
+    # the server-side backstop for Layer 1 (the browser should already have
+    # dropped such a take), because layer 1 can be bypassed by a different client
+    # or a truncated upload. Same threshold as gemma_stt.py (SILENCE_DBFS).
+    if audio_is_silent(audio_bytes):
+        return {
+            "text": "", "source": "", "language": src_name,
+            "ms": 0, "silence": True,
+        }
+
     wav_bytes = pcm_to_wav(audio_bytes, 16000)
     body = {
         "model": MODEL,
@@ -156,12 +236,23 @@ async def hear(audio_bytes, mime, source=DEFAULT_SOURCE):
     ms = int((time.monotonic() - started) * 1000)
 
     raw = (out["choices"][0]["message"].get("content") or "").strip()
-    src_name = LANG_NAME.get(source, LANG_NAME[DEFAULT_SOURCE])
+
+    # Gate 2 -- do not trust the model's output either. If the reply is the
+    # prompt scaffolding echoed back rather than a transcription, present
+    # nothing. A recogniser that returns its own prompt as a result is worse
+    # than one that returns nothing.
+    if is_prompt_echo(raw):
+        return {
+            "text": "", "source": "", "language": src_name,
+            "ms": ms, "silence": True,
+        }
+
     parsed = parse_hearing(raw, src_name=src_name, dst_name="English")
     return {
         "text": parsed["text"],
         "source": parsed["source"],
         "language": parsed["language"],
         "ms": ms,
+        "silence": False,
     }
 

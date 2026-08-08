@@ -325,6 +325,83 @@ async def local_wait_for_event(timeout: int = 120) -> dict:
     }
 
 
+# --- Resident Piper service client ----------------------------------------- 
+# local_speak POSTs to the resident piper_server (port 8101) instead of spawning
+# a fresh piper.exe per line. If the service is unreachable it falls back to
+# spawning piper.exe the old (slow) way so Chotu still talks.
+
+_PIPER_SERVER_URL = os.environ.get("PIPER_SERVER_URL", "http://127.0.0.1:8101")
+# Reply cap backstop: keep the reply short enough for a one-line answer and bound
+# synthesis time. Piper's latency barely scales with length, so this is about
+# keeping replies crisp, not about latency.
+_SPEAK_REPLY_CAP = 240
+
+
+def _cap_reply(text: str) -> str:
+    """Hard-truncate the reply to _SPEAK_REPLY_CAP characters as a backstop."""
+    if len(text) > _SPEAK_REPLY_CAP:
+        return text[:_SPEAK_REPLY_CAP]
+    return text
+
+
+async def _post_to_piper_server(text: str, args: list) -> bytes:
+    """POST text to the resident piper service. Returns WAV bytes. Raises on failure."""
+    import httpx
+    payload = {"text": text, "args": args}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.post(_PIPER_SERVER_URL, json=payload)
+        r.raise_for_status()
+        return r.content
+
+
+def _wav_to_pcm(wav: bytes) -> bytes:
+    """Extract the raw 16-bit PCM from the WAV our service returns.
+
+    Walks the RIFF chunks rather than assuming a fixed 44-byte header, so it
+    stays correct if the service ever adds chunks (e.g. a LIST metadata chunk).
+    """
+    import struct as _s
+    i = 12  # past the leading "RIFF" <size> "WAVE"
+    n = len(wav)
+    while i + 8 <= n:
+        cid = wav[i:i + 4]
+        csize = _s.unpack("<I", wav[i + 4:i + 8])[0]
+        if cid == b"data":
+            return wav[i + 8:i + 8 + csize]
+        i += 8 + csize + (csize & 1)
+    raise ValueError("WAV has no data chunk")
+
+
+async def _spawn_piper_pcm(text: str, args: list) -> bytes:
+    """Fallback: spawn piper.exe the old way. Returns raw PCM bytes."""
+    proc = await asyncio.create_subprocess_exec(
+        "piper", "--model", os.environ.get("LOCALIS_PIPER_MODEL", ""),
+        "--output-raw", *args,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        env={**os.environ, "PYTHONUTF8": "1"},
+    )
+    pcm, _ = await proc.communicate(input=text.encode())
+    return pcm
+
+
+async def _synthesize_pcm(text: str, args: list) -> bytes | None:
+    """Resident service first; fall back to spawning piper.exe. Returns raw PCM,
+    or None if both paths fail. Never raises -- a TTS failure must not wedge the
+    brain or propagate into the caller."""
+    try:
+        wav = await _post_to_piper_server(text, args)
+        return _wav_to_pcm(wav)
+    except Exception as e:
+        print(f"[local_speak] piper_server unreachable ({e!r}); falling back to piper.exe", flush=True)
+    try:
+        return await _spawn_piper_pcm(text, args)
+    except Exception as e:
+        print(f"[local_speak] piper.exe fallback failed ({e!r}); no audio for this line", flush=True)
+        return None
+
+
 async def local_speak(text: str, face_pi=None) -> dict:
     """Run piper TTS on laptop, then play locally or send WAV to Pi.
 
@@ -339,13 +416,14 @@ async def local_speak(text: str, face_pi=None) -> dict:
     import struct
     import numpy as np
 
-    model = os.environ.get("LOCALIS_PIPER_MODEL", "")
     speak_output = os.environ.get("PALIV_SPEAK_OUTPUT", "laptop")
     text_tts = re.sub(r"\bChotu\b", "Cho two", text, flags=re.IGNORECASE)
     text_tts = re.sub(r"\bRushi\b", "Roo-shi", text_tts, flags=re.IGNORECASE)
     # Em/en dashes garble on Windows (piper decodes stdin as cp1252 → mojibake
     # spoken aloud); decoded correctly they act as a sentence break — map to one.
     text_tts = re.sub(r"\s*[—–]\s*", ". ", text_tts)
+    # Reply cap backstop (prompt caps first; this is the hard truncate).
+    text_tts = _cap_reply(text_tts)
     start = time.time()
 
     # Synthesize outside the lock so piper runs in parallel with any current playback
@@ -360,16 +438,15 @@ async def local_speak(text: str, face_pi=None) -> dict:
         while int(22050 * s * 2) % 2:
             s += 1 / 44100
         extra_args[i] = f"{s:.10f}"
-    proc = await asyncio.create_subprocess_exec(
-        "piper", "--model", model, "--output-raw", *extra_args,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        # piper's CLI decodes stdin with the locale codec (cp1252 on Windows);
-        # force UTF-8 so remaining non-ASCII (curly quotes etc.) can't garble.
-        env={**os.environ, "PYTHONUTF8": "1"},
-    )
-    pcm, _ = await proc.communicate(input=text_tts.encode())
+    pcm = await _synthesize_pcm(text_tts, extra_args)
+    if pcm is None:
+        return {
+            "ok": False, "tool": "speak",
+            "result": {"text": text, "backend": "none"},
+            "duration_ms": int((time.time() - start) * 1000),
+            "timestamp": time.time(),
+            "error": "TTS synthesis failed (piper service down and piper.exe fallback failed)",
+        }
 
     if speak_output == "pi" and face_pi is not None:
         # Wrap raw PCM in a WAV header and POST to Pi's /play_wav
