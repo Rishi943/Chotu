@@ -23,7 +23,8 @@ if __name__ == "__main__":
 from core.llm_client import LLMClient
 from core.pi_client import PiClient
 from core.prompts import SYSTEM_PROMPT
-from core.tools import TOOL_SCHEMAS, build_dispatch, dispatch_tool
+from core.tool_schemas import TOOL_SCHEMAS
+from core.dispatch import build_dispatch, dispatch_tool
 from core.loop_helpers import (
     motion_from_calls, push_frame, render_frames,
     maybe_compact, cap_result, pace_remainder, split_tool_calls,
@@ -31,6 +32,8 @@ from core.loop_helpers import (
 )
 from core.scratchpad import Scratchpad
 from core.session_profiler import SessionProfiler
+from core.lanes import run_turn
+from core import session_log
 
 
 # --- Config ---
@@ -46,6 +49,17 @@ LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "3"))   # min seconds between c
 PTT_ENABLED = os.getenv("PALIV_PTT", "0") == "1"   # GUI push-to-talk + hands-free button
 COMPACT_AT_TOKENS   = int(os.getenv("PALIV_COMPACT_AT_TOKENS", "10000"))   # est. memory tokens that trigger a trim
 COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "6000"))  # est. memory tokens retained after a trim
+# Per-tick camera capture. Default OFF: the five-tool set sees on demand via
+# `sense {"what":"view"}`, so we no longer flood the event stream with ~50 KB of
+# base64 every iteration. Set PALIV_CAPTURE_EACH_TICK=1 to restore the old view.
+CAPTURE_EACH_TICK = os.getenv("PALIV_CAPTURE_EACH_TICK", "0") == "1"
+
+# Idle nudge: after this many seconds of silence (no input, no activity) Chotu
+# pushes one nudge into pending_input so the normal turn runs and he MAY speak
+# up. 0 disables the behaviour entirely. Seconds.
+IDLE_NUDGE_INTERVAL = float(os.getenv("PALIV_IDLE_NUDGE_INTERVAL", "90"))
+# Phrased as a situation, not an order — the model is free to stay quiet.
+IDLE_NUDGE_TEXT = "[idle] no one has said anything for a while"
 
 
 listen_and_transcribe = None
@@ -79,6 +93,14 @@ _usage = {"calls": 0, "prompt": 0, "completion": 0, "cached": 0, "t0": None}  # 
 _profiler = SessionProfiler()
 _last_battery: dict = {}  # {"percent": N, "voltage": N} — updated by battery_monitor
 
+# Idle-nudge state. `_idle_nudged` latches True after a nudge so it never fires
+# twice in a row; only real (non-nudge) input clears it. `_last_input_time` /
+# `_last_speak_time` are `time.monotonic()` stamps of the last time input
+# arrived / Chotu spoke — together they define "last activity".
+_idle_nudged: bool = False
+_last_input_time: float = time.monotonic()
+_last_speak_time: float = time.monotonic()
+
 continuous_mode: bool = False
 tts_done_event: asyncio.Event = asyncio.Event()
 tts_done_event.set()  # initially ready — no TTS playing at startup
@@ -96,9 +118,25 @@ from core.async_motion import AsyncMotionRunner
 motion_lock = MotionLock()
 motion_runner = AsyncMotionRunner(motion_lock, pending_input)
 
-dispatch_map = build_dispatch(
-    pi, estop, mute=MUTE, motion_lock=motion_lock, motion_runner=motion_runner,
-)
+
+class _PiperSpeaker:
+    """speak() routes through core.tools._do_speak so the exact piper path
+    (resident service on port 8101, PALIV_SPEAK_OUTPUT=pi) still plays out of
+    the robot's own speaker. mute is carried here because the five-tool dispatch
+    has no mute parameter of its own."""
+
+    def __init__(self, pi_client, muted: bool):
+        self._pi = pi_client
+        self._muted = muted
+
+    async def speak(self, text: str):
+        from core.tools import _do_speak
+        return await _do_speak(text, face_pi=self._pi, muted=self._muted)
+
+
+speaker = _PiperSpeaker(pi, MUTE)
+
+dispatch_map = build_dispatch(pi, motion_runner, speaker, estop)
 
 
 # --- Message building ---
@@ -125,6 +163,7 @@ def build_loop_messages(system_prompt: str, memory: list[dict], frame_stack: lis
 # --- GUI event emitter ---
 
 def _emit(event: dict) -> None:
+    session_log.log_event(event)
     try:
         gui_event_queue.put_nowait(event)
     except asyncio.QueueFull:
@@ -239,12 +278,44 @@ async def battery_monitor() -> None:
 
 # --- Paced loop ---
 
+def maybe_push_idle_nudge(now: float | None = None) -> bool:
+    """Push one idle nudge when the silence threshold has passed.
+
+    The nudge is a situation, not an order — the normal turn runs and Chotu MAY
+    speak up, but is free to stay quiet. Returns True if a nudge was pushed.
+
+    Guards: interval 0 disables entirely; never nudge twice in a row (the latch
+    is only cleared by real input); never while the estop is set; never while a
+    motion is running. `now` is injectable for tests — no real sleeping.
+    """
+    global _idle_nudged
+    if IDLE_NUDGE_INTERVAL <= 0:
+        return False
+    if _idle_nudged:
+        return False
+    if estop.is_set():
+        return False
+    if motion_lock.active is not None:
+        return False
+    now = time.monotonic() if now is None else now
+    last_activity = max(_last_input_time, _last_speak_time)
+    if now - last_activity < IDLE_NUDGE_INTERVAL:
+        return False
+    _idle_nudged = True
+    pending_input.push(IDLE_NUDGE_TEXT)
+    print(f"  [idle] no activity for {now - last_activity:.0f}s — nudged")
+    return True
+
+
 async def paced_loop():
     """The brain. Runs forever: one iteration, then a paced sleep (>= LOOP_FLOOR,
     cut short by incoming input)."""
-    memory.append({"role": "user", "content": BOOT_TEXT, "_origin": "boot"})
+    # Pushed, not appended: run_iteration is turn-based now and only calls the
+    # model when there is input, so the boot line has to arrive as one.
+    pending_input.push(BOOT_TEXT)
     while True:
         try:
+            maybe_push_idle_nudge()
             tool_duration = await run_iteration()
         except Exception as e:
             print(f"  [brain error] {e}")
@@ -268,103 +339,177 @@ def _safe_args(args_json: str) -> dict:
         return {"_raw": args_json}
 
 
+def _record_token_usage(response) -> None:
+    """Fold one response's token usage into the cumulative _usage meter + print a
+    [tokens] line. No-op when the response carries no usage (e.g. test stubs)."""
+    if not response.usage:
+        return
+    if _usage["t0"] is None:
+        _usage["t0"] = time.time()
+    _usage["calls"] += 1
+    p = response.usage.get("prompt_tokens", 0)
+    cached = response.usage.get("cached_tokens", 0)
+    _usage["prompt"] += p
+    _usage["completion"] += response.usage.get("completion_tokens", 0)
+    _usage["cached"] += cached
+    total = _usage["prompt"] + _usage["completion"]
+    elapsed = time.time() - _usage["t0"]
+    rate = f"~{total/(elapsed/60.0)/1000:.1f}k/min" if elapsed > 1.0 else "~—"
+    # Effective input @ explicit-cache pricing: cache hits bill at 10%.
+    eff_prompt = _usage["prompt"] - _usage["cached"] * 0.9
+    hit = f" cache {cached}/{p}" if cached else ""
+    print(
+        f"  [tokens] turn={p}p/"
+        f"{response.usage.get('completion_tokens', 0)}c{hit}  "
+        f"cum={total/1000:.1f}k ({_usage['prompt']/1000:.1f}k prompt + "
+        f"{_usage['completion']/1000:.1f}k compl) over {_usage['calls']} calls  "
+        f"eff_in~{eff_prompt/1000:.1f}k  {rate}"
+    )
+
+
+class _BrainLLMWrapper:
+    """Thin shim so run_turn's inner chat_complete calls still receive
+    thinking_enabled (run_turn does not forward it) and still update the _usage
+    token meter (run_turn does not expose per-response usage)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    @property
+    def provider(self):
+        return self._inner.provider
+
+    @property
+    def supports_cache_control(self):
+        return self._inner.supports_cache_control
+
+    async def chat_complete(self, messages, tools, thinking=None,
+                            max_tokens=None, temperature=None,
+                            response_format=None):
+        if thinking is None:
+            thinking = thinking_enabled
+        response = await self._inner.chat_complete(
+            messages, tools, thinking=thinking, max_tokens=max_tokens,
+            temperature=temperature, response_format=response_format)
+        _record_token_usage(response)
+        return response
+
+    def format_assistant_message(self, response):
+        return self._inner.format_assistant_message(response)
+
+    def format_tool_result(self, tool_call_id, content):
+        return self._inner.format_tool_result(tool_call_id, content)
+
+
 async def run_iteration() -> float:
     """One loop turn: drain input -> LLM call -> dispatch deduped tools -> capture a
     fresh labeled frame -> trim context. Returns tool_duration seconds (for pacing)."""
     text = pending_input.drain()
-    if text:
-        origin = "event" if text.lstrip().startswith("[event]") or text.lstrip().startswith("[battery]") else "user"
-        label = "" if origin == "event" else "[human] "
-        memory.append({"role": "user", "content": f"{label}{text}", "_origin": origin})
-        _emit({"type": origin, "text": text})
+
+    # TURN-BASED, 2026-08-09. No input, no model call. The loop used to fire
+    # every LOOP_FLOOR seconds regardless, so one utterance produced a whole
+    # run of turns: each no-input turn re-read memory, produced a variant of its
+    # own last line and appended it, and the next turn copied from that. That is
+    # the entire source of the doubled and tripled lines in the 08-09 session
+    # log -- he was talking to himself, not hallucinating. Everything that
+    # SHOULD make him speak unprompted (the idle nudge, battery thresholds,
+    # motion_done events, reflexes) pushes into pending_input and still works.
+    if not text:
+        return 0.0
+
+    # Real input (not the idle nudge) resets the silence clock and un-latches
+    # the idle-nudge guard so Chotu can be nudged again after a fresh silence.
+    if not text.lstrip().startswith("[idle] "):
+        global _last_input_time, _idle_nudged
+        _last_input_time = time.monotonic()
+        _idle_nudged = False
+    stripped = text.lstrip()
+    is_event = any(stripped.startswith(p) for p in
+                   ("[event]", "[battery]", "[boot]", "[result]", "[idle]"))
+    origin = "event" if is_event else "user"
+    label = "" if origin == "event" else "[human] "
+    memory.append({"role": "user", "content": f"{label}{text}", "_origin": origin})
+    _emit({"type": origin, "text": text})
 
     _fire_face("thinking")
-    messages = build_loop_messages(
-        SYSTEM_PROMPT, memory, frame_stack, scratchpad,
-        cache_boundary=llm_client.supports_cache_control,
-    )
 
     try:
-        response = await llm_client.chat_complete(messages, TOOL_SCHEMAS, thinking=thinking_enabled)
+        res = await run_turn(
+            _BrainLLMWrapper(llm_client),
+            dispatch_map,
+            SYSTEM_PROMPT,
+            memory,
+            text,
+            tools=TOOL_SCHEMAS,
+        )
     except Exception as e:
         print(f"  LLM error: {e}")
         _fire_face("idle")
         return 0.0
-    if not response.choices:
+
+    new_msgs = res["new"]
+    if not new_msgs:
         print("  LLM error: empty choices")
         _fire_face("idle")
         return 0.0
 
-    if response.usage:
-        if _usage["t0"] is None:
-            _usage["t0"] = time.time()
-        _usage["calls"] += 1
-        p = response.usage.get("prompt_tokens", 0)
-        cached = response.usage.get("cached_tokens", 0)
-        _usage["prompt"] += p
-        _usage["completion"] += response.usage.get("completion_tokens", 0)
-        _usage["cached"] += cached
-        total = _usage["prompt"] + _usage["completion"]
-        elapsed = time.time() - _usage["t0"]
-        rate = f"~{total/(elapsed/60.0)/1000:.1f}k/min" if elapsed > 1.0 else "~—"
-        # Effective input @ explicit-cache pricing: cache hits bill at 10%.
-        eff_prompt = _usage["prompt"] - _usage["cached"] * 0.9
-        hit = f" cache {cached}/{p}" if cached else ""
-        print(
-            f"  [tokens] turn={p}p/"
-            f"{response.usage.get('completion_tokens', 0)}c{hit}  "
-            f"cum={total/1000:.1f}k ({_usage['prompt']/1000:.1f}k prompt + "
-            f"{_usage['completion']/1000:.1f}k compl) over {_usage['calls']} calls  "
-            f"eff_in~{eff_prompt/1000:.1f}k  {rate}"
-        )
+    memory.extend(new_msgs)
 
-    msg = response.choices[0].message
-    clean_content, think_blocks = _extract_think_blocks(msg.content)
-    for block in think_blocks:
-        if block.strip():
-            print(f"  [think] {block.strip()[:120]}...")
-            _emit({"type": "think", "text": block.strip()})
-    if clean_content:
-        print_monologue(clean_content)
+    # The `-c 4096` ceiling watch. llama.cpp truncates from the FRONT on
+    # overflow, which eats the system turn first -- Chotu would quietly stop
+    # sounding like Chotu with no error anywhere. History is deliberately not
+    # capped (Rushi's call, following Google's ChatState), so this is how we see
+    # the wall coming instead of discovering it by ear.
+    usage = res.get("usage")
+    if usage and usage.get("prompt_tokens"):
+        dbg(f"prompt {usage['prompt_tokens']} tok, out {usage.get('completion_tokens')}")
+        _emit({"type": "usage", **usage})
 
-    assistant_msg = llm_client.format_assistant_message(response)
-    assistant_msg["content"] = clean_content or ""
-    assistant_msg["_origin"] = "loop"
-    memory.append(assistant_msg)
+    outcomes = res["outcomes"]
+    tool_duration = sum(r["result"].get("duration_ms", 0) for r in outcomes) / 1000.0
+    motion_calls = [(r["name"], r["args"]) for r in outcomes]
+    state_calls = [(r["name"], r["args"], r["result"]) for r in outcomes]
+    for r in outcomes:
+        print_tool_call(r["name"], r["args"], r["result"])
 
-    tool_duration = 0.0
-    motion_desc = "no movement"
-    if msg.tool_calls:
-        keep, suppressed = split_tool_calls(msg.tool_calls)
-        start = time.time()
-        dispatched = await asyncio.gather(
-            *[_run_one(tc) for tc in keep]
-        )
-        tool_duration = time.time() - start
-        motion_calls = []
-        state_calls = []
-        for tc, name, args_json, result in dispatched:
-            args = _safe_args(args_json)
-            print_tool_call(name, args, result)
-            memory.append(llm_client.format_tool_result(tc.id, cap_result(json.dumps(result))))
-            motion_calls.append((name, args))
-            state_calls.append((name, args, result))
-        for tc in suppressed:
-            env = {"ok": True, "tool": tc.function.name, "result": {"suppressed": True},
-                   "duration_ms": 0, "timestamp": time.time(), "error": None}
-            memory.append(llm_client.format_tool_result(tc.id, cap_result(json.dumps(env))))
-        motion_desc = motion_from_calls(motion_calls)
-        scratchpad.update(state_calls)
+    # The voice stage's line is Chotu's spoken reply. Print it for the console +
+    # emit the `speak` event, then play it out of the robot's speaker. Speaking
+    # resets the idle clock so he isn't nudged again right after replying.
+    # The face comes out of the same reply as the action now, so it follows what
+    # he is actually saying instead of only flipping thinking/idle.
+    face = res.get("face")
+    if face:
+        _fire_face(face)
 
-    capture = await pi.capture()
-    if capture.get("ok"):
-        frame_b64 = capture.get("result", {}).get("image_base64", "")
-        if frame_b64:
-            push_frame(frame_stack, frame_b64, motion_desc)
-            _emit({"type": "image", "label": "frame", "image_b64": frame_b64})
+    line = res["line"]
+    if line:
+        print_speak(line, MUTE)
+        global _last_speak_time
+        _last_speak_time = time.monotonic()
+        await speaker.speak(line)
+
+    # A reading he asked for, or a step that failed, comes back as input and
+    # takes its own turn — so he actually says the number instead of stopping at
+    # "Checking." Turn-based throughout: results are just more input.
+    for reply in res.get("replies") or []:
+        pending_input.push(reply)
+
+    motion_desc = motion_from_calls(motion_calls)
+    scratchpad.update(state_calls)
+
+    if CAPTURE_EACH_TICK:
+        capture = await pi.capture()
+        if capture.get("ok"):
+            frame_b64 = capture.get("result", {}).get("image_base64", "")
+            if frame_b64:
+                push_frame(frame_stack, frame_b64, motion_desc)
+                _emit({"type": "image", "label": "frame", "image_b64": frame_b64})
 
     maybe_compact(memory, COMPACT_AT_TOKENS, COMPACT_KEEP_TOKENS)
-    _fire_face("idle")
+    # Only fall back to idle when he did NOT choose an expression -- otherwise
+    # the face he picked would be wiped a fraction of a second after it appeared.
+    if not res.get("face"):
+        _fire_face("idle")
     return tool_duration
 
 
@@ -473,6 +618,32 @@ async def voice_loop():
             await asyncio.sleep(1.0)
 
 
+def add_signal_handler(loop, name, handler):
+    """Register a signal handler, degrading gracefully where unsupported.
+
+    Prefers loop.add_signal_handler (supported on POSIX event loops). The
+    Windows Proactor loop does not implement it and raises NotImplementedError,
+    so fall back to signal.signal for signals that exist there (SIGINT /
+    SIGTERM). Signals with no portable equivalent (e.g. SIGUSR1) are skipped
+    rather than aborting startup — one unsupported signal must never prevent
+    the brain from starting.
+
+    Returns True if a handler was registered, False if it was skipped.
+    """
+    sig = getattr(signal, name, None)
+    if sig is None:
+        return False
+    try:
+        loop.add_signal_handler(sig, handler)
+        return True
+    except (NotImplementedError, RuntimeError):
+        try:
+            signal.signal(sig, lambda *_args: handler())
+            return True
+        except (ValueError, OSError, RuntimeError, NotImplementedError):
+            return False
+
+
 # --- Main ---
 
 async def main():
@@ -505,16 +676,13 @@ async def main():
             print("\n[shutdown] Ctrl+C — stopping...")
             _shutdown.set()
 
-    loop.add_signal_handler(signal.SIGINT, _on_signal)
-    loop.add_signal_handler(signal.SIGTERM, _on_signal)
+    add_signal_handler(loop, "SIGINT", _on_signal)
+    add_signal_handler(loop, "SIGTERM", _on_signal)
 
     def _on_stop_word():
         pending_input.push("[stop] freeze — a human asked you to stop.")
 
-    try:
-        loop.add_signal_handler(signal.SIGUSR1, _on_stop_word)
-    except (NotImplementedError, RuntimeError):
-        pass  # not all platforms support SIGUSR1
+    add_signal_handler(loop, "SIGUSR1", _on_stop_word)
 
     tasks = [
         asyncio.create_task(obstacle_poller(pi, estop)),

@@ -23,6 +23,21 @@ ACT_NAMES: dict[str, tuple[str, str]] = {
 
 SENSE_KINDS: tuple[str, ...] = ("battery", "distance", "view")
 
+# The OLED expressions the Pi's /face endpoint accepts. Chotu picks one per turn
+# in the same reply as the action, so the face follows what he is saying instead
+# of only flipping between thinking and idle.
+FACES: tuple[str, ...] = (
+    "idle", "speak_open", "speak_close", "playful", "judging", "embarrassed",
+    "dissatisfied", "angry", "sad", "indifferent", "confused", "doubt",
+    "surprised", "greeting", "wink", "sleeping", "magic", "cute", "thinking",
+    "dead",
+)
+
+# How many actions one reply may queue. Not a model limit -- a power one: every
+# item is another servo load, and the measured ceiling is +/-12 mm at speed 40
+# on a 64 % pack.
+MAX_SEQUENCE = 6
+
 TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
@@ -52,6 +67,16 @@ TOOL_SCHEMAS: list[dict] = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "enum": sorted(ACT_NAMES)},
+                    "reps": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "default": 1,
+                        "description": (
+                            "How many times to repeat a trick (e.g. push up). "
+                            "Use it whenever a count is asked for. Poses cannot repeat."
+                        ),
+                    },
                 },
                 "required": ["name"],
             },

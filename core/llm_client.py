@@ -104,12 +104,15 @@ class LLMClient:
         thinking: bool = False,
         tool_choice: Optional[dict] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        response_format: Optional[dict] = None,
     ) -> LLMResponse:
         """Send messages + tools to the configured provider. Returns normalised response."""
         if self.provider == "local":
             return await self._local_complete(
                 messages, tools, thinking=thinking,
                 tool_choice=tool_choice, max_tokens=max_tokens,
+                temperature=temperature, response_format=response_format,
             )
         return await self._claude_complete(
             messages, tools, thinking=thinking, max_tokens=max_tokens,
@@ -180,6 +183,8 @@ class LLMClient:
         thinking: bool = False,
         tool_choice: Optional[dict] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        response_format: Optional[dict] = None,
     ) -> LLMResponse:
         if self._cache_system:
             messages = self._mark_cache_breakpoints(messages)
@@ -197,6 +202,17 @@ class LLMClient:
             kwargs["tool_choice"] = tool_choice
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        # llama-server's default is temperature 1.0 with a random seed, which
+        # makes tool-call FORMATTING a coin flip: the same messages return a
+        # proper tool call one moment and `move forward steps 2` as plain text
+        # the next. Measured 2026-08-09. Pass an explicit temperature.
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        # Schema-constrained decoding. llama-server takes it as an extra body
+        # field, not a first-class OpenAI kwarg, so it rides in extra_body --
+        # which the Qwen thinking switch may also be using.
+        if response_format is not None:
+            kwargs.setdefault("extra_body", {})["response_format"] = response_format
         raw = await self._openai.chat.completions.create(**kwargs)
         return self._normalise_openai(raw)
 
