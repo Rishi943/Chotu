@@ -328,3 +328,82 @@ async def test_a_failure_always_comes_back():
                                 "face": "idle", "say": "Going."})])
     res = await run_turn(llm, _dispatch([], failing=("move",)), CHOTU, list(MEMORY), None)
     assert len(res["replies"]) == 1 and "movement stopped" in res["replies"][0]
+
+
+# --- the robot taught us these two -----------------------------------------
+
+class _SlowMotionDispatch:
+    """A motion tool the way the real one behaves: returns a `started` ack in
+    milliseconds while the servos run for seconds, and REFUSES a second motion
+    until the first finishes. A dispatch that returns instantly cannot catch
+    what this catches."""
+
+    def __init__(self, order):
+        self.order, self.busy = order, False
+
+    async def __call__(self, **kwargs):
+        if self.busy:
+            return {"ok": False, "tool": "move", "result": None, "duration_ms": 0,
+                    "timestamp": 0.0, "error": "motion in progress: ~1.6s remaining"}
+        self.busy = True
+        self.order.append(kwargs.get("direction") or kwargs.get("name"))
+        return {"ok": True, "tool": "move",
+                "result": {"status": "started", "eta_ms": 1600},
+                "duration_ms": 0, "timestamp": 0.0, "error": None}
+
+
+async def test_a_sequence_waits_for_the_legs_between_steps():
+    """2026-08-09, on the real robot: "two forward, two back, two forward" only
+    ever walked forward. The second step hit the motion lock and the
+    abandon-on-failure rule dropped the rest."""
+    order = []
+    mover = _SlowMotionDispatch(order)
+    llm = RecordingLLM([_reply({"do": [
+        {"tool": "move", "args": {"direction": "forward", "steps": 2}},
+        {"tool": "move", "args": {"direction": "backward", "steps": 2}},
+        {"tool": "move", "args": {"direction": "turn left", "steps": 1}}],
+        "face": "idle", "say": "Forward, back, then left."})])
+
+    waits = []
+
+    async def wait_motion(eta_ms):
+        waits.append(eta_ms)
+        mover.busy = False          # the legs stop
+
+    res = await run_turn(llm, {"move": mover}, CHOTU, list(MEMORY), None,
+                         wait_motion=wait_motion)
+    assert order == ["forward", "backward", "turn left"], "the whole sequence must run"
+    assert waits == [1600, 1600], "wait after every step but the last"
+    assert len(res["outcomes"]) == 3
+
+
+async def test_without_a_waiter_the_lock_still_stops_the_sequence():
+    """The wait is what fixes it -- proving the test can fail."""
+    order = []
+    llm = RecordingLLM([_reply({"do": [
+        {"tool": "move", "args": {"direction": "forward"}},
+        {"tool": "move", "args": {"direction": "backward"}}],
+        "face": "idle", "say": "x"})])
+    res = await run_turn(llm, {"move": _SlowMotionDispatch(order)}, CHOTU,
+                         list(MEMORY), None, wait_motion=None)
+    assert order == ["forward"] and len(res["outcomes"]) == 2
+
+
+async def test_a_motion_that_never_finishes_abandons_the_rest_and_says_so():
+    """The ETA is a guess and the real walk is slower. If the legs are still
+    going when the wait gives up, dispatching would only earn a lock rejection
+    -- stop, and report it, rather than half-running the sequence in silence."""
+    order = []
+    llm = RecordingLLM([_reply({"do": [
+        {"tool": "move", "args": {"direction": "forward"}},
+        {"tool": "move", "args": {"direction": "backward"}}],
+        "face": "idle", "say": "x"})])
+
+    async def never_finishes(eta_ms):
+        return False
+
+    res = await run_turn(llm, {"move": _SlowMotionDispatch(order)}, CHOTU,
+                         list(MEMORY), None, wait_motion=never_finishes)
+    assert order == ["forward"]
+    assert len(res["outcomes"]) == 1, "the second step must not be dispatched"
+    assert any("dropped" in r for r in res["replies"])

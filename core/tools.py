@@ -3,7 +3,22 @@
 import asyncio
 import json
 import os
+import re
+import struct
 import time
+
+# numpy is imported HERE, at module load, and NOT inside local_speak.
+#
+# 2026-08-09: importing it lazily inside `local_speak` blocked the event loop
+# thread on the first spoken line. A thread dump caught it dead in `import
+# numpy` at what was tools.py:417, with everything else frozen behind it -- the
+# console's TLS handshake, the battery monitor, the obstacle poller. The
+# symptom looked nothing like the cause: the console simply never answered and
+# the robot went quiet after one line.
+#
+# Any import inside a coroutine is a blocking call on the loop. Pay it at
+# startup, where blocking costs nothing.
+import numpy as np
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -412,10 +427,6 @@ async def local_speak(text: str, face_pi=None) -> dict:
     face_pi: PiClient instance — used for OLED animation on laptop-output mode only.
     Serialized via _tts_lock so concurrent callers queue rather than overlap.
     """
-    import re
-    import struct
-    import numpy as np
-
     speak_output = os.environ.get("PALIV_SPEAK_OUTPUT", "laptop")
     text_tts = re.sub(r"\bChotu\b", "Cho two", text, flags=re.IGNORECASE)
     text_tts = re.sub(r"\bRushi\b", "Roo-shi", text_tts, flags=re.IGNORECASE)

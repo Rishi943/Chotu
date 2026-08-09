@@ -201,9 +201,46 @@ def _usage_note(response) -> dict | None:
             "completion_tokens": u.get("completion_tokens")}
 
 
+# Keys whose value is a blob, never something to say. `sense{"what":"view"}`
+# returns a whole JPEG as base64: dumped into the conversation verbatim on
+# 2026-08-09 it took the prompt from 3,211 tokens to 10,037 against a 4,096
+# ceiling, and every turn after it failed with a 400 -- the robot went silent
+# mid-conversation and the cause was three turns back.
+_BLOB_KEYS = ("image_base64", "image", "frame", "jpeg", "png", "audio_base64")
+
+# Backstop for anything else that comes back fat. A result he has to speak is
+# a number or a short phrase; 600 characters is already generous.
+RESULT_MAX_CHARS = int(os.getenv("PALIV_RESULT_MAX_CHARS", "600"))
+
+
+def summarise_payload(payload):
+    """Replace blobs with a note of their size and cap the rest.
+
+    The model cannot say a JPEG. What it needs to know is that a picture was
+    taken, and anything small enough to be spoken aloud.
+    """
+    if isinstance(payload, dict):
+        out = {}
+        for k, v in payload.items():
+            if any(b in k.lower() for b in _BLOB_KEYS) and isinstance(v, (str, bytes)):
+                out[k] = f"<{len(v)} bytes, not shown>"
+            else:
+                out[k] = summarise_payload(v)
+        return out
+    if isinstance(payload, list):
+        return [summarise_payload(v) for v in payload[:10]]
+    if isinstance(payload, str) and len(payload) > RESULT_MAX_CHARS:
+        return payload[:RESULT_MAX_CHARS] + f"…[+{len(payload) - RESULT_MAX_CHARS} chars]"
+    return payload
+
+
 def result_line(tool: str, args: dict, outcome: dict) -> str:
     """One line naming what a tool returned, in the shape the prompt's examples
-    use, so the next turn can speak the real numbers."""
+    use, so the next turn can speak the real numbers.
+
+    Blobs are summarised out — see `summarise_payload`. Nothing that reaches
+    the conversation from a tool may be unbounded in size.
+    """
     if not isinstance(outcome, dict):
         return f"[result] {tool} {json.dumps(args)} -> {{}}"
     # The error wins when there is one: a dispatch that refuses a move still
@@ -214,15 +251,33 @@ def result_line(tool: str, args: dict, outcome: dict) -> str:
     if failed:
         body = json.dumps({"error": error or "failed"})
     else:
-        body = json.dumps(outcome.get("result") or {"ok": True})
-    return f"[result] {tool} {json.dumps(args)} -> {body}"
+        body = json.dumps(summarise_payload(outcome.get("result") or {"ok": True}))
+    line = f"[result] {tool} {json.dumps(args)} -> {body}"
+    if len(line) > RESULT_MAX_CHARS * 2:
+        line = line[:RESULT_MAX_CHARS * 2] + "…[truncated]"
+    return line
 
 
 # --- the turn --------------------------------------------------------------
 
+def _started_eta_ms(outcome) -> int | None:
+    """The ETA from a fire-and-forget motion ack, or None if nothing started.
+
+    `move` and `act` return immediately with {"status": "started", "eta_ms": N}
+    and run the servos in the background, so the NEXT step of a sequence must
+    wait for this to elapse or the motion lock refuses it.
+    """
+    if not isinstance(outcome, dict) or not outcome.get("ok"):
+        return None
+    result = outcome.get("result")
+    if isinstance(result, dict) and result.get("status") == "started":
+        return int(result.get("eta_ms") or 0)
+    return None
+
+
 async def run_turn(llm, dispatch: dict, chotu_md: str,
                    memory: list[dict], text: str | None,
-                   tools=None) -> dict:
+                   tools=None, wait_motion=None) -> dict:
     """One utterance in; one line, one face and up to `MAX_SEQUENCE` actions out.
 
     `memory` already includes the current user turn. `text` and `tools` are
@@ -264,7 +319,7 @@ async def run_turn(llm, dispatch: dict, chotu_md: str,
     # move needs none: the motion_done event already arrives on its own.
     replies: list[str] = []
 
-    for step in steps:
+    for index, step in enumerate(steps):
         tool, args = step["tool"], step["args"]
         outcome = await dispatch_tool(dispatch, tool, json.dumps(args))
         outcomes.append({"name": tool, "args": args, "result": outcome})
@@ -273,6 +328,27 @@ async def run_turn(llm, dispatch: dict, chotu_md: str,
             replies.append(result_line(tool, args, outcome))
         if not ok:
             break  # a refused or failed step ends the sequence
+
+        # WAIT for the servos before the next step. Motion dispatch returns an
+        # ack in milliseconds while the legs run for seconds, so firing the next
+        # step straight away hits the motion lock: on 2026-08-09 "two forward,
+        # two back, two forward" walked forward and then reported
+        # "motion in progress, ~1.6s remaining", and the abandon-on-failure rule
+        # dropped the rest. Only the first step ever ran.
+        #
+        # The unit tests could not catch this -- a faked dispatch returns
+        # instantly and the lock never engages. It took the real robot.
+        eta = _started_eta_ms(outcome)
+        if eta and wait_motion is not None and index < len(steps) - 1:
+            finished = await wait_motion(eta)
+            if finished is False:
+                # The legs never stopped. Dispatching now would only earn a
+                # motion-lock rejection, so abandon the rest and say so -- a
+                # silent half-sequence is worse than an admitted one.
+                replies.append(
+                    f"[result] {tool} {json.dumps(args)} -> "
+                    f'{{"error": "still moving; the rest of the sequence was dropped"}}')
+                break
 
     return {"new": new, "outcomes": outcomes, "line": line, "face": face,
             "steps": steps, "replies": replies,

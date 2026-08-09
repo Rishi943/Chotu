@@ -40,8 +40,15 @@ class PiClient:
             body["speed"] = speed
         return await self._post_slow("/play_sequence", "play_sequence", body)
 
-    async def do_trick(self, name: str, speed: int = 80) -> dict:
-        return await self._post_slow("/trick", "trick", {"name": name, "speed": speed})
+    # Default was 80. A push-up drives all twelve servos together and is the
+    # heaviest load the robot has; 40 is the only speed that whole-body load has
+    # ever been proven to survive on battery (Rushi, 2026-08-07: "perfect it
+    # works on 40 on battery"). At 80 it browned the Pi out on 2026-08-07 and
+    # again on 2026-08-09, mid-conversation, forcing a reboot. Lowered 08-09.
+    async def do_trick(self, name: str, speed: int = 40, reps: int = 1) -> dict:
+        return await self._post_slow(
+            "/trick", "trick", {"name": name, "speed": speed, "reps": reps},
+        )
 
     async def speak(self, text: str) -> dict:
         return await self._post("/speak", "speak", {"text": text})
@@ -83,6 +90,25 @@ class PiClient:
         if human:
             body["human"] = True
         return await self._post("/perception", "perception", body)
+
+    async def power(self, action: str) -> dict:
+        """Ask the bridge to shut down or reboot the Pi. A shutdown that works
+        drops the connection before the response arrives, so on this one call a
+        connection error is treated as success rather than pi_unreachable."""
+        try:
+            r = await self._default.post(
+                "/power", json={"action": action, "confirm": "chotu"}
+            )
+            return r.json()
+        except Exception:
+            return {
+                "ok": True,
+                "tool": "power",
+                "result": {"action": action},
+                "duration_ms": 0,
+                "timestamp": time.time(),
+                "error": None,
+            }
 
     # --- Internal helpers ---
 

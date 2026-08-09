@@ -47,8 +47,15 @@ TICK_INTERVAL = int(os.getenv("PALIV_TICK_INTERVAL", "5"))
 VOICE_ENABLED = os.getenv("PALIV_VOICE", "0") == "1"
 LOOP_FLOOR = float(os.getenv("PALIV_LOOP_FLOOR", "3"))   # min seconds between calls (was 2)
 PTT_ENABLED = os.getenv("PALIV_PTT", "0") == "1"   # GUI push-to-talk + hands-free button
-COMPACT_AT_TOKENS   = int(os.getenv("PALIV_COMPACT_AT_TOKENS", "10000"))   # est. memory tokens that trigger a trim
-COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "6000"))  # est. memory tokens retained after a trim
+# Memory trim thresholds. These MUST sit below the server's context window or
+# they never fire: llama-server runs at -c 4096 and CHOTU.md alone is ~1300
+# tokens, so memory has roughly 2700 to play with. The old defaults were 10000
+# and 6000 -- three times the whole window -- so on 2026-08-09 the conversation
+# grew past 4096, every call came back 400 exceed_context_size, and Chotu went
+# silent mid-conversation while still hearing everything.
+# Raising `-c` on llama-server is the other half of this; raise both together.
+COMPACT_AT_TOKENS   = int(os.getenv("PALIV_COMPACT_AT_TOKENS", "2200"))   # est. memory tokens that trigger a trim
+COMPACT_KEEP_TOKENS = int(os.getenv("PALIV_COMPACT_KEEP_TOKENS", "1200"))  # est. memory tokens retained after a trim
 # Per-tick camera capture. Default OFF: the five-tool set sees on demand via
 # `sense {"what":"view"}`, so we no longer flood the event stream with ~50 KB of
 # base64 every iteration. Set PALIV_CAPTURE_EACH_TICK=1 to restore the old view.
@@ -433,6 +440,23 @@ async def run_iteration() -> float:
 
     _fire_face("thinking")
 
+    async def wait_motion(eta_ms: int) -> bool:
+        """Block a sequence between steps until the legs actually stop.
+
+        Returns True if the motion finished, False if it outlasted the cap.
+
+        The cap is 30 s, matching `PiClient._slow`'s timeout, and NOT a multiple
+        of the ETA. The ETA is a guess — 800 ms per step — and the real walk is
+        slower: on 2026-08-09 a two-step move outlasted an `eta*2 + 1s` cap, so
+        the next step was dispatched anyway and hit the motion lock at
+        "~0.0s remaining". The lock is released by the Pi call returning, so
+        that is the only thing worth waiting on.
+        """
+        deadline = time.monotonic() + max(30.0, (eta_ms / 1000.0) * 3)
+        while motion_runner.busy and time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+        return not motion_runner.busy
+
     try:
         res = await run_turn(
             _BrainLLMWrapper(llm_client),
@@ -441,6 +465,7 @@ async def run_iteration() -> float:
             memory,
             text,
             tools=TOOL_SCHEMAS,
+            wait_motion=wait_motion,
         )
     except Exception as e:
         print(f"  LLM error: {e}")
